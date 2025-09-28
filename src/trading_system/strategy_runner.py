@@ -15,7 +15,7 @@ import pandas as pd
 from .config.config_loader import ConfigLoader
 from .data.yfinance_provider import YFinanceProvider
 from .backtest.standard_backtest import StandardBacktest
-from .strategies import DualMomentumStrategy
+from .strategies import DualMomentumStrategy, FamaFrench5Strategy
 from .utils.wandb_logger import WandBLogger
 
 logger = logging.getLogger(__name__)
@@ -73,6 +73,11 @@ class StrategyRunner:
             if strategy_config.get('type') == 'DualMomentumStrategy':
                 self.strategy = DualMomentumStrategy(
                     name=strategy_config.get('name', 'DualMomentum'),
+                    **strategy_params
+                )
+            elif strategy_config.get('type') == 'FamaFrench5Strategy':
+                self.strategy = FamaFrench5Strategy(
+                    name=strategy_config.get('name', 'FamaFrench5'),
                     **strategy_params
                 )
             else:
@@ -242,10 +247,17 @@ class StrategyRunner:
 
         logger.info(f"Valid symbols: {valid_symbols}")
 
-        # Fetch price data
+        # Fetch price data with additional historical data for momentum calculations
+        # Add lookback buffer based on strategy requirements
+        lookback_buffer = getattr(self.strategy, 'lookback_days', 252)
+        buffer_start_date = start_date - pd.Timedelta(days=lookback_buffer)
+
+        logger.info(f"Fetching data from {buffer_start_date} to {end_date} "
+                   f"(includes {lookback_buffer} days lookback buffer)")
+
         price_data = self.data_provider.get_historical_data(
             symbols=valid_symbols,
-            start_date=start_date,
+            start_date=buffer_start_date,
             end_date=end_date
         )
 

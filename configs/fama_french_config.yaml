@@ -1,0 +1,128 @@
+# Fama/French 5-Factor Strategy Configuration
+# Configuration for the Fama/French 5-factor model implementation
+
+strategy:
+  name: "FamaFrench5"
+  type: "FamaFrench5Strategy"
+
+  # Core strategy parameters
+  lookback_days: 252          # 1 year factor calculation period
+  top_n_assets: 5             # Number of top assets to select
+  min_factor_score: 0.1       # Minimum factor score for asset selection
+  max_portfolio_volatility: 0.20  # Maximum allowed portfolio volatility (20%)
+  rebalance_frequency: "monthly"  # Rebalancing frequency
+  risk_free_rate: 0.02        # Annual risk-free rate (2%)
+
+  # Factor weights (must sum to 1.0)
+  factor_weights:
+    MKT: 0.30    # Market factor (30%)
+    SMB: 0.15    # Size factor (15%)
+    HML: 0.20    # Value factor (20%)
+    RMW: 0.20    # Profitability factor (20%)
+    CMA: 0.15    # Investment factor (15%)
+
+# Asset universe configuration
+universe:
+  # US Equities
+  equities:
+    - "SPY"    # S&P 500
+    - "QQQ"    # Nasdaq 100
+    - "IWM"    # Russell 2000
+    - "DIA"    # Dow Jones
+
+  # International
+  international:
+    - "EFA"    # MSCI EAFE
+    - "EEM"    # MSCI Emerging Markets
+    - "VEA"    # Developed Markets ex-US
+
+  # Fixed Income
+  fixed_income:
+    - "AGG"    # Aggregate Bond ETF
+    - "LQD"    # Investment Grade Corporate Bonds
+    - "TLT"    # Long-term Treasury
+
+  # Sectors
+  sectors:
+    - "XLK"    # Technology
+    - "XLF"    # Financials
+    - "XLV"    # Health Care
+    - "XLE"    # Energy
+    - "XLP"    # Consumer Staples
+
+  # All assets combined
+  all_assets:
+    - "SPY"
+    - "QQQ"
+    - "IWM"
+    - "DIA"
+    - "EFA"
+    - "EEM"
+    - "VEA"
+    - "AGG"
+    - "LQD"
+    - "TLT"
+    - "XLK"
+    - "XLF"
+    - "XLV"
+    - "XLE"
+    - "XLP"
+
+# Backtest configuration
+backtest:
+  initial_capital: 1000000    # $1M initial capital
+  transaction_cost: 0.001     # 0.1% transaction cost
+  benchmark_symbol: "SPY"     # Benchmark for comparison
+
+  # Date range
+  start_date: "2018-01-01"
+  end_date: "2024-12-31"
+
+# Experiment configuration
+experiment:
+  project_name: "bloomberg-competition"
+  tags: ["fama-french-5", "factor-model", "quantitative"]
+  group: "factor-strategies"
+
+# Data configuration
+data:
+  provider: "yfinance"
+  retry_attempts: 3
+  retry_delay: 1.0
+  timeout: 30
+
+# Performance metrics to calculate
+performance:
+  calculate_all: true
+  specific_metrics:
+    - "total_return"
+    - "annualized_return"
+    - "volatility"
+    - "sharpe_ratio"
+    - "max_drawdown"
+    - "alpha"
+    - "beta"
+    - "information_ratio"
+    - "win_rate"
+    - "factor_exposures"
+
+# Risk management
+risk_management:
+  enable_volatility_targeting: true
+  max_portfolio_volatility: 0.20    # 20% max volatility
+  stop_loss_threshold: 0.15        # 15% stop loss
+  factor_constraints: true
+
+# Logging configuration
+logging:
+  level: "INFO"
+  save_to_file: true
+  log_file: "fama_french_strategy.log"
+
+# Output configuration
+output:
+  save_results: true
+  results_path: "./results/"
+  save_charts: true
+  charts_format: "html"
+  save_factor_analysis: true

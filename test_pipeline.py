@@ -278,6 +278,9 @@ def test_complete_pipeline():
             runner.config['backtest']['end_date'] = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
             runner.config['backtest']['start_date'] = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
 
+            # Use shorter lookback period for testing
+            runner.config['strategy']['lookback_days'] = 63  # 3 months instead of 1 year
+
             # Run strategy
             with runner:
                 results = runner.run_strategy(experiment_name="pipeline_test")

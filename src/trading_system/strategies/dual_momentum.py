@@ -185,7 +185,7 @@ class DualMomentumStrategy(BaseStrategy):
 
             if len(data_up_to_date) < self.lookback_days:
                 logger.debug(f"Insufficient data for momentum calculation: "
-                           f"only {len(data_up_to_date)} days available")
+                           f"only {len(data_up_to_date)} days available, need {self.lookback_days}")
                 return None
 
             # Calculate total return over lookback period
@@ -197,6 +197,8 @@ class DualMomentumStrategy(BaseStrategy):
                 return None
 
             momentum_score = (end_price - start_price) / start_price
+
+            logger.debug(f"Momentum for {date}: {start_price:.2f} -> {end_price:.2f} = {momentum_score:.4f}")
             return momentum_score
 
         except Exception as e:
