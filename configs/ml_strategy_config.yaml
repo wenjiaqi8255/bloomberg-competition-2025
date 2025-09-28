@@ -1,0 +1,212 @@
+# ML Strategy Configuration
+# This file defines ML strategy parameters that can be modified by team members
+
+strategy:
+  name: "MLStrategy"
+  type: "MLStrategy"
+
+  # Core ML strategy parameters
+  lookback_days: 252              # 1 year lookback for feature calculation
+  prediction_horizon: 20           # 20 trading days (~1 month) prediction horizon
+  target_type: "returns"           # Target type: "returns" or "direction"
+  model_type: "xgboost"            # Model type: "xgboost", "lightgbm", or "random_forest"
+
+  # Feature engineering parameters
+  feature_engineering:
+    lookback_periods: [10, 20, 50, 100, 252]
+    momentum_periods: [1, 3, 6, 12]
+    volatility_windows: [10, 20, 50]
+    include_technical: true
+    include_theoretical: true
+    benchmark_symbol: "SPY"
+    feature_selection_method: "importance"  # "importance", "univariate", or "none"
+    max_features: 50                       # Maximum number of features to select
+
+  # Model training parameters
+  training:
+    retrain_frequency: "monthly"     # Retraining frequency
+    cv_folds: 5                       # Number of cross-validation folds
+    validation_method: "time_series"  # "time_series" or "standard"
+    purge_period: 21                  # Days to purge after training (avoid leakage)
+    embargo_period: 5                 # Days to embargo before including new data
+
+  # Hyperparameter optimization
+  optimization:
+    use_optuna: true                 # Enable Optuna optimization
+    optuna_trials: 50                # Number of optimization trials
+    optuna_direction: "maximize"     # Optimization direction
+    study_name: "ml_strategy_optimization"
+
+  # Risk management
+  max_position_size: 0.20           # Maximum position size (20%)
+  min_position_size: 0.05           # Minimum position size (5%)
+  max_positions: 10                # Maximum number of positions
+  cash_buffer: 0.10                # 10% cash buffer
+  rebalance_frequency: "monthly"    # Rebalancing frequency
+
+# Asset universe configuration
+universe:
+  # US Equities
+  equities:
+    - "SPY"    # S&P 500
+    - "QQQ"    # Nasdaq 100
+    - "IWM"    # Russell 2000
+    - "DIA"    # Dow Jones
+    - "VTI"    # Total Stock Market
+
+  # International
+  international:
+    - "EFA"    # MSCI EAFE
+    - "EEM"    # MSCI Emerging Markets
+    - "VEA"    # Developed Markets ex-US
+
+  # Fixed Income
+  fixed_income:
+    - "AGG"    # Aggregate Bond ETF
+    - "LQD"    # Investment Grade Corporate Bonds
+    - "SHY"    # Short-term Treasury (cash equivalent)
+
+  # Sectors
+  sectors:
+    - "XLK"    # Technology
+    - "XLF"    # Financials
+    - "XLV"    # Health Care
+    - "XLE"    # Energy
+    - "XLP"    # Consumer Staples
+    - "XLI"    # Industrials
+    - "XLU"    # Utilities
+    - "XLC"    # Communication Services
+
+  # All assets combined
+  all_assets:
+    - "SPY"
+    - "QQQ"
+    - "IWM"
+    - "DIA"
+    - "VTI"
+    - "EFA"
+    - "EEM"
+    - "VEA"
+    - "AGG"
+    - "LQD"
+    - "SHY"
+    - "XLK"
+    - "XLF"
+    - "XLV"
+    - "XLE"
+    - "XLP"
+    - "XLI"
+    - "XLU"
+    - "XLC"
+
+# Backtest configuration
+backtest:
+  initial_capital: 1000000    # $1M initial capital
+  transaction_cost: 0.001     # 0.1% transaction cost
+  benchmark_symbol: "SPY"     # Benchmark for comparison
+
+  # Date range
+  start_date: "2018-01-01"
+  end_date: "2024-12-31"
+
+# Experiment configuration
+experiment:
+  project_name: "bloomberg-competition"
+  tags: ["ml-strategy", "machine-learning", "predictive-modeling"]
+  group: "ml-strategies"
+  notes: "ML strategy with technical indicators and hyperparameter optimization"
+
+# Data configuration
+data:
+  provider: "yfinance"
+  retry_attempts: 3
+  retry_delay: 1.0
+  timeout: 30
+
+  # Feature data requirements
+  min_data_points: 252         # Minimum 1 year of data for feature calculation
+  allow_missing_data: false     # Whether to allow missing data in features
+  fill_method: "forward_fill"   # Method to fill missing data
+
+# Model persistence
+model:
+  save_model: true              # Save trained model
+  model_path: "./models/"       # Path to save models
+  model_versioning: true        # Enable model versioning
+  load_best_model: true         # Load best performing model
+
+# Performance metrics to calculate
+performance:
+  calculate_all: true
+  specific_metrics:
+    - "total_return"
+    - "annualized_return"
+    - "volatility"
+    - "sharpe_ratio"
+    - "max_drawdown"
+    - "alpha"
+    - "beta"
+    - "information_ratio"
+    - "win_rate"
+    - "prediction_accuracy"
+    - "feature_importance"
+
+# Risk management
+risk_management:
+  enable_volatility_targeting: true
+  max_portfolio_volatility: 0.15    # 15% max volatility
+  stop_loss_threshold: 0.15        # 15% stop loss
+  drawdown_threshold: 0.20          # 20% maximum drawdown
+
+  # Position sizing
+  position_sizing_method: "equal_weight"  # "equal_weight", "risk_parity", "kelly_criterion"
+  risk_contribution_target: 0.10          # 10% risk contribution per position
+
+# Feature importance and interpretability
+interpretability:
+  calculate_feature_importance: true
+  plot_feature_importance: true
+  save_feature_plots: true
+  top_n_features: 20                # Show top 20 features
+  correlation_threshold: 0.8       # Remove highly correlated features
+
+# Logging configuration
+logging:
+  level: "INFO"
+  save_to_file: true
+  log_file: "ml_strategy_run.log"
+
+  # ML-specific logging
+  log_feature_stats: true
+  log_training_progress: true
+  log_optimization_results: true
+
+# Output configuration
+output:
+  save_results: true
+  results_path: "./results/"
+  save_charts: true
+  charts_format: "html"
+
+  # ML-specific outputs
+  save_feature_importance: true
+  save_model_predictions: true
+  save_validation_results: true
+  save_optimization_history: true
+
+# Cross-validation configuration
+validation:
+  method: "time_series"           # Validation method
+  cv_folds: 5                     # Number of CV folds
+  test_size: 0.2                  # Test set size
+  scoring_metric: "neg_mean_squared_error"  # Scoring metric
+
+  # Time series specific
+  min_train_size: 252             # Minimum training size
+  purge_period: 21                 # Purge period to avoid leakage
+  embargo_period: 5                # Embargo period for realistic evaluation
+
+  # Early stopping
+  early_stopping: true
+  early_stopping_patience: 10
+  early_stopping_metric: "val_loss"

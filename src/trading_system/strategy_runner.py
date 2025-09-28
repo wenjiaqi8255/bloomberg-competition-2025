@@ -15,7 +15,7 @@ import pandas as pd
 from .config.config_loader import ConfigLoader
 from .data.yfinance_provider import YFinanceProvider
 from .backtest.standard_backtest import StandardBacktest
-from .strategies import DualMomentumStrategy, FamaFrench5Strategy
+from .strategies import DualMomentumStrategy, FamaFrench5Strategy, MLStrategy
 from .utils.wandb_logger import WandBLogger
 
 logger = logging.getLogger(__name__)
@@ -78,6 +78,11 @@ class StrategyRunner:
             elif strategy_config.get('type') == 'FamaFrench5Strategy':
                 self.strategy = FamaFrench5Strategy(
                     name=strategy_config.get('name', 'FamaFrench5'),
+                    **strategy_params
+                )
+            elif strategy_config.get('type') == 'MLStrategy':
+                self.strategy = MLStrategy(
+                    name=strategy_config.get('name', 'MLStrategy'),
                     **strategy_params
                 )
             else:
