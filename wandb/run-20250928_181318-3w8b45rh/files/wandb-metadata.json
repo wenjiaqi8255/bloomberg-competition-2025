@@ -1,0 +1,33 @@
+{
+  "os":  "macOS-15.6.1-arm64-arm-64bit",
+  "python":  "CPython 3.11.9",
+  "startedAt":  "2025-09-28T16:13:18.174607Z",
+  "program":  "/Users/wenjiaqi/Downloads/bloomberg-competition/test_pipeline.py",
+  "codePath":  "test_pipeline.py",
+  "codePathLocal":  "test_pipeline.py",
+  "email":  "aries10011@outlook.com",
+  "root":  "/Users/wenjiaqi/Downloads/bloomberg-competition",
+  "host":  "18893857-82b1-4774-95e1-de88b3020bba.fritz.box",
+  "executable":  "/Users/wenjiaqi/Library/Caches/pypoetry/virtualenvs/bloomberg-competition-evpOwJfL-py3.11/bin/python",
+  "cpu_count":  8,
+  "cpu_count_logical":  8,
+  "disk":  {
+    "/":  {
+      "total":  "494384795648",
+      "used":  "452915064832"
+    }
+  },
+  "memory":  {
+    "total":  "17179869184"
+  },
+  "apple":  {
+    "name":  "Apple M1 Pro",
+    "ecpuCores":  2,
+    "pcpuCores":  6,
+    "gpuCores":  14,
+    "memoryGb":  16,
+    "swapTotalBytes":  "19327352832",
+    "ramTotalBytes":  "17179869184"
+  },
+  "writerId":  "14onkzfka5pf22imsxw8k3xg3k8iyswq"
+}

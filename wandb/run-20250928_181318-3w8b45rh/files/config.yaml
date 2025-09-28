@@ -1,0 +1,142 @@
+_wandb:
+    value:
+        cli_version: 0.22.0
+        e:
+            14onkzfka5pf22imsxw8k3xg3k8iyswq:
+                apple:
+                    ecpuCores: 2
+                    gpuCores: 14
+                    memoryGb: 16
+                    name: Apple M1 Pro
+                    pcpuCores: 6
+                    ramTotalBytes: "17179869184"
+                    swapTotalBytes: "19327352832"
+                codePath: test_pipeline.py
+                codePathLocal: test_pipeline.py
+                cpu_count: 8
+                cpu_count_logical: 8
+                disk:
+                    /:
+                        total: "494384795648"
+                        used: "452915064832"
+                email: aries10011@outlook.com
+                executable: /Users/wenjiaqi/Library/Caches/pypoetry/virtualenvs/bloomberg-competition-evpOwJfL-py3.11/bin/python
+                host: 18893857-82b1-4774-95e1-de88b3020bba.fritz.box
+                memory:
+                    total: "17179869184"
+                os: macOS-15.6.1-arm64-arm-64bit
+                program: /Users/wenjiaqi/Downloads/bloomberg-competition/test_pipeline.py
+                python: CPython 3.11.9
+                root: /Users/wenjiaqi/Downloads/bloomberg-competition
+                startedAt: "2025-09-28T16:13:18.174607Z"
+                writerId: 14onkzfka5pf22imsxw8k3xg3k8iyswq
+        m: []
+        python_version: 3.11.9
+        t:
+            "3":
+                - 2
+                - 13
+                - 15
+                - 16
+            "4": 3.11.9
+            "5": 0.22.0
+            "12": 0.22.0
+            "13": darwin-arm64
+backtest:
+    value:
+        benchmark_symbol: SPY
+        end_date: "2025-09-27"
+        initial_capital: 1000000
+        start_date: "2025-06-30"
+        transaction_cost: 0.001
+data:
+    value:
+        provider: yfinance
+        retry_attempts: 3
+        retry_delay: 1
+        timeout: 30
+experiment:
+    value:
+        group: momentum-strategies
+        project_name: bloomberg-competition
+        tags:
+            - dual-momentum
+            - baseline
+            - monthly-rebalance
+logging:
+    value:
+        level: INFO
+        log_file: strategy_run.log
+        save_to_file: true
+output:
+    value:
+        charts_format: html
+        results_path: ./results/
+        save_charts: true
+        save_results: true
+performance:
+    value:
+        calculate_all: true
+        specific_metrics:
+            - total_return
+            - annualized_return
+            - volatility
+            - sharpe_ratio
+            - max_drawdown
+            - alpha
+            - beta
+            - information_ratio
+            - win_rate
+risk_management:
+    value:
+        enable_volatility_targeting: false
+        max_portfolio_volatility: 0.15
+        stop_loss_threshold: 0.1
+strategy:
+    value:
+        cash_ticker: SHY
+        include_cash_in_universe: true
+        lookback_days: 252
+        max_position_size: 0.25
+        minimum_positive_assets: 3
+        name: DualMomentum
+        rebalance_frequency: monthly
+        top_n_assets: 5
+        type: DualMomentumStrategy
+universe:
+    value:
+        all_assets:
+            - SPY
+            - QQQ
+            - IWM
+            - DIA
+            - EFA
+            - EEM
+            - VEA
+            - AGG
+            - LQD
+            - TLT
+            - XLK
+            - XLF
+            - XLV
+            - XLE
+            - XLP
+        equities:
+            - SPY
+            - QQQ
+            - IWM
+            - DIA
+        fixed_income:
+            - AGG
+            - LQD
+            - TLT
+        international:
+            - EFA
+            - EEM
+            - VEA
+        sectors:
+            - XLK
+            - XLF
+            - XLV
+            - XLE
+            - XLP

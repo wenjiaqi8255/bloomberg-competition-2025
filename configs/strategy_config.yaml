@@ -1,0 +1,122 @@
+# Dual Momentum Strategy Configuration
+# This file defines strategy parameters that can be modified by team members
+
+strategy:
+  name: "DualMomentum"
+  type: "DualMomentumStrategy"
+
+  # Core strategy parameters
+  lookback_days: 252          # 1 year momentum lookback
+  top_n_assets: 5             # Number of top assets to select
+  minimum_positive_assets: 3  # Minimum assets with positive momentum to stay invested
+
+  # Cash management
+  cash_ticker: "SHY"          # Short-term Treasury ETF for cash position
+  include_cash_in_universe: true  # Include cash in asset universe
+
+  # Risk management
+  max_position_size: 0.25     # Maximum position size (25%)
+  rebalance_frequency: "monthly"  # Rebalancing frequency
+
+# Asset universe configuration
+universe:
+  # US Equities
+  equities:
+    - "SPY"    # S&P 500
+    - "QQQ"    # Nasdaq 100
+    - "IWM"    # Russell 2000
+    - "DIA"    # Dow Jones
+
+  # International
+  international:
+    - "EFA"    # MSCI EAFE
+    - "EEM"    # MSCI Emerging Markets
+    - "VEA"    # Developed Markets ex-US
+
+  # Fixed Income
+  fixed_income:
+    - "AGG"    # Aggregate Bond ETF
+    - "LQD"    # Investment Grade Corporate Bonds
+    - "TLT"    # Long-term Treasury
+
+  # Sectors
+  sectors:
+    - "XLK"    # Technology
+    - "XLF"    # Financials
+    - "XLV"    # Health Care
+    - "XLE"    # Energy
+    - "XLP"    # Consumer Staples
+
+  # All assets combined
+  all_assets:
+    - "SPY"
+    - "QQQ"
+    - "IWM"
+    - "DIA"
+    - "EFA"
+    - "EEM"
+    - "VEA"
+    - "AGG"
+    - "LQD"
+    - "TLT"
+    - "XLK"
+    - "XLF"
+    - "XLV"
+    - "XLE"
+    - "XLP"
+
+# Backtest configuration
+backtest:
+  initial_capital: 1000000    # $1M initial capital
+  transaction_cost: 0.001     # 0.1% transaction cost
+  benchmark_symbol: "SPY"     # Benchmark for comparison
+
+  # Date range
+  start_date: "2018-01-01"
+  end_date: "2024-12-31"
+
+# Experiment configuration
+experiment:
+  project_name: "bloomberg-competition"
+  tags: ["dual-momentum", "baseline", "monthly-rebalance"]
+  group: "momentum-strategies"
+
+# Data configuration
+data:
+  provider: "yfinance"
+  retry_attempts: 3
+  retry_delay: 1.0
+  timeout: 30
+
+# Performance metrics to calculate
+performance:
+  calculate_all: true
+  specific_metrics:
+    - "total_return"
+    - "annualized_return"
+    - "volatility"
+    - "sharpe_ratio"
+    - "max_drawdown"
+    - "alpha"
+    - "beta"
+    - "information_ratio"
+    - "win_rate"
+
+# Risk management
+risk_management:
+  enable_volatility_targeting: false
+  max_portfolio_volatility: 0.15    # 15% max volatility
+  stop_loss_threshold: 0.10        # 10% stop loss
+
+# Logging configuration
+logging:
+  level: "INFO"
+  save_to_file: true
+  log_file: "strategy_run.log"
+
+# Output configuration
+output:
+  save_results: true
+  results_path: "./results/"
+  save_charts: true
+  charts_format: "html"

@@ -1,0 +1,166 @@
+{
+  "experiment_name": "pipeline_test",
+  "config": {
+    "strategy": {
+      "name": "DualMomentum",
+      "type": "DualMomentumStrategy",
+      "lookback_days": 252,
+      "top_n_assets": 5,
+      "minimum_positive_assets": 3,
+      "cash_ticker": "SHY",
+      "include_cash_in_universe": true,
+      "max_position_size": 0.25,
+      "rebalance_frequency": "monthly"
+    },
+    "universe": {
+      "equities": [
+        "SPY",
+        "QQQ",
+        "IWM",
+        "DIA"
+      ],
+      "international": [
+        "EFA",
+        "EEM",
+        "VEA"
+      ],
+      "fixed_income": [
+        "AGG",
+        "LQD",
+        "TLT"
+      ],
+      "sectors": [
+        "XLK",
+        "XLF",
+        "XLV",
+        "XLE",
+        "XLP"
+      ],
+      "all_assets": [
+        "SPY",
+        "QQQ",
+        "IWM",
+        "DIA",
+        "EFA",
+        "EEM",
+        "VEA",
+        "AGG",
+        "LQD",
+        "TLT",
+        "XLK",
+        "XLF",
+        "XLV",
+        "XLE",
+        "XLP"
+      ]
+    },
+    "backtest": {
+      "initial_capital": 1000000,
+      "transaction_cost": 0.001,
+      "benchmark_symbol": "SPY",
+      "start_date": "2025-06-30",
+      "end_date": "2025-09-27"
+    },
+    "experiment": {
+      "project_name": "bloomberg-competition",
+      "tags": [
+        "dual-momentum",
+        "baseline",
+        "monthly-rebalance"
+      ],
+      "group": "momentum-strategies"
+    },
+    "data": {
+      "provider": "yfinance",
+      "retry_attempts": 3,
+      "retry_delay": 1.0,
+      "timeout": 30
+    },
+    "performance": {
+      "calculate_all": true,
+      "specific_metrics": [
+        "total_return",
+        "annualized_return",
+        "volatility",
+        "sharpe_ratio",
+        "max_drawdown",
+        "alpha",
+        "beta",
+        "information_ratio",
+        "win_rate"
+      ]
+    },
+    "risk_management": {
+      "enable_volatility_targeting": false,
+      "max_portfolio_volatility": 0.15,
+      "stop_loss_threshold": 0.1
+    },
+    "logging": {
+      "level": "INFO",
+      "save_to_file": true,
+      "log_file": "strategy_run.log"
+    },
+    "output": {
+      "save_results": true,
+      "results_path": "./results/",
+      "save_charts": true,
+      "charts_format": "html"
+    }
+  },
+  "data_statistics": {
+    "num_symbols": 15,
+    "date_range_start": "2025-06-30T00:00:00",
+    "date_range_end": "2025-09-26T00:00:00",
+    "total_data_points": 945,
+    "avg_data_points_per_symbol": 63.0
+  },
+  "strategy_signals": "           SPY QQQ IWM DIA EFA EEM VEA  ... LQD TLT XLK XLF XLV XLE XLP\n2025-07-01   0   0   0   0   0   0   0  ...   0   0   0   0   0   0   0\n2025-08-01   0   0   0   0   0   0   0  ...   0   0   0   0   0   0   0\n2025-09-01   0   0   0   0   0   0   0  ...   0   0   0   0   0   0   0\n\n[3 rows x 15 columns]",
+  "backtest_results": {
+    "portfolio_history": "            portfolio_value  ...  trades\ndate                         ...        \n2025-07-01        1000000.0  ...      []\n2025-08-01        1000000.0  ...      []\n2025-09-01        1000000.0  ...      []\n\n[3 rows x 4 columns]",
+    "performance_metrics": {
+      "alpha": 4.130381627112941,
+      "beta": NaN,
+      "information_ratio": NaN,
+      "tracking_error": NaN,
+      "total_return": 0.0,
+      "annualized_return": 0.0,
+      "volatility": 0.0,
+      "sharpe_ratio": 0,
+      "max_drawdown": 0.0,
+      "calmar_ratio": 0,
+      "win_rate": 0.0,
+      "profit_factor": Infinity
+    },
+    "trades": [],
+    "initial_capital": 1000000,
+    "final_value": 1000000.0,
+    "total_return": 0.0,
+    "annualized_return": 0.0,
+    "sharpe_ratio": 0,
+    "max_drawdown": 0.0
+  },
+  "performance_metrics": {
+    "alpha": 4.130381627112941,
+    "beta": NaN,
+    "information_ratio": NaN,
+    "tracking_error": NaN,
+    "total_return": 0.0,
+    "annualized_return": 0.0,
+    "volatility": 0.0,
+    "sharpe_ratio": 0,
+    "max_drawdown": 0.0,
+    "calmar_ratio": 0,
+    "win_rate": 0.0,
+    "profit_factor": Infinity
+  },
+  "risk_metrics": {},
+  "strategy_metrics": {
+    "avg_positions_held": 0.0,
+    "max_positions_held": "0",
+    "min_positions_held": "0",
+    "avg_cash_allocation": 0.0,
+    "max_cash_allocation": "0",
+    "return_to_risk_ratio": 0
+  },
+  "execution_timestamp": "2025-09-28T18:13:36.521984"
+}
