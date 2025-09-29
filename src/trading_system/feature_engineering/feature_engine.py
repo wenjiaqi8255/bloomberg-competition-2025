@@ -10,6 +10,7 @@ This module provides comprehensive feature engineering capabilities:
 """
 
 import logging
+import warnings
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -20,6 +21,10 @@ from ta import add_all_ta_features
 from ta.momentum import RSIIndicator, StochasticOscillator
 from ta.trend import MACD, ADXIndicator
 from ta.volatility import BollingerBands, AverageTrueRange
+
+# Suppress specific warnings
+warnings.filterwarnings('ignore', category=FutureWarning)
+warnings.filterwarnings('ignore', category=pd.errors.SettingWithCopyWarning)
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +50,8 @@ class FeatureEngine:
                  volatility_windows: List[int] = None,
                  include_technical: bool = True,
                  include_theoretical: bool = True,
-                 benchmark_symbol: str = 'SPY'):
+                 benchmark_symbol: str = 'SPY',
+                 feature_lag: int = 1):
         """
         Initialize feature engine.
 
@@ -56,6 +62,7 @@ class FeatureEngine:
             include_technical: Whether to include technical indicators
             include_theoretical: Whether to include theoretical features
             benchmark_symbol: Symbol for relative strength calculations
+            feature_lag: Number of days to lag features to prevent look-ahead bias (default: 1)
         """
         self.lookback_periods = lookback_periods or [20, 50, 200]
         self.momentum_periods = momentum_periods or [21, 63, 126, 252]  # 1, 3, 6, 12 months
@@ -63,6 +70,7 @@ class FeatureEngine:
         self.include_technical = include_technical
         self.include_theoretical = include_theoretical
         self.benchmark_symbol = benchmark_symbol
+        self.feature_lag = feature_lag
 
         # Feature cache for performance
         self.feature_cache = {}
@@ -151,6 +159,13 @@ class FeatureEngine:
         # 6. Relative Strength Features (if benchmark data available)
         if benchmark_data is not None and symbol != self.benchmark_symbol:
             features = pd.concat([features, self._compute_relative_features(data, benchmark_data, symbol)], axis=1)
+
+        # Handle duplicate columns
+        features = self._handle_duplicate_columns(features, symbol)
+
+        # Apply feature lag to prevent look-ahead bias
+        if self.feature_lag > 0:
+            features = features.shift(self.feature_lag)
 
         # Clean up infinite values and NaN
         features = features.replace([np.inf, -np.inf], np.nan)
@@ -247,7 +262,7 @@ class FeatureEngine:
             volume_col = 'Volume' if 'Volume' in data.columns else 'volume'
 
             ta_data = add_all_ta_features(
-                df=data,
+                df=data.copy(),
                 open=open_col,
                 high=high_col,
                 low=low_col,
@@ -346,10 +361,16 @@ class FeatureEngine:
         volatility = pd.Series(index=returns.index, dtype=float)
 
         # Initialize with historical volatility
-        volatility.iloc[20] = returns.iloc[:20].std()
+        if len(returns) >= 20:
+            volatility.iloc[20] = returns.iloc[:20].std()
+        else:
+            volatility.iloc[0] = returns.std() if len(returns) > 1 else 0.02
 
-        for i in range(21, len(returns)):
-            if pd.isna(returns.iloc[i-1]) or pd.isna(volatility.iloc[i-1]):
+        for i in range(1, len(returns)):
+            if i < 20:
+                # Use simple historical volatility for first 20 periods
+                volatility.iloc[i] = returns.iloc[:i+1].std() if len(returns.iloc[:i+1]) > 1 else 0.02
+            elif pd.isna(returns.iloc[i-1]) or pd.isna(volatility.iloc[i-1]):
                 volatility.iloc[i] = volatility.iloc[i-1] if i > 0 else 0.02
             else:
                 # GARCH(1,1) formula
@@ -471,12 +492,29 @@ class FeatureEngine:
             List of selected feature names
         """
         try:
-            # Combine all features for selection
-            all_features = pd.concat(features.values(), axis=0)
+            # Combine all features for selection, handling duplicate columns
+            all_features_list = []
+            for symbol, feature_df in features.items():
+                if feature_df is not None and len(feature_df) > 0:
+                    # Add symbol prefix to avoid duplicate column names
+                    prefixed_df = feature_df.copy()
+                    prefixed_df.columns = [f"{symbol}_{col}" for col in prefixed_df.columns]
+                    all_features_list.append(prefixed_df)
+
+            if not all_features_list:
+                logger.warning("No valid features for selection")
+                return []
+
+            all_features = pd.concat(all_features_list, axis=0)
             all_features = all_features.dropna()
 
             if len(all_features) == 0 or len(target) == 0:
-                return list(all_features.columns)[:max_features]
+                # Return original feature names without prefix
+                if features:
+                    valid_features = [f for f in features.values() if f is not None and len(f) > 0]
+                    if valid_features:
+                        return list(valid_features[0].columns)[:max_features]
+                return []
 
             # Align features with target
             aligned_features, aligned_target = all_features.align(target, join='inner', axis=0)
@@ -485,7 +523,7 @@ class FeatureEngine:
                 from sklearn.feature_selection import SelectKBest, f_regression
                 selector = SelectKBest(score_func=f_regression, k=max_features)
                 selector.fit(aligned_features, aligned_target)
-                selected = aligned_features.columns[selector.get_support()].tolist()
+                selected_with_prefix = aligned_features.columns[selector.get_support()].tolist()
 
             elif method == 'importance':
                 from sklearn.ensemble import RandomForestRegressor
@@ -495,10 +533,24 @@ class FeatureEngine:
                     'feature': aligned_features.columns,
                     'importance': rf.feature_importances_
                 }).sort_values('importance', ascending=False)
-                selected = importance_df.head(max_features)['feature'].tolist()
+                selected_with_prefix = importance_df.head(max_features)['feature'].tolist()
 
             else:
                 raise ValueError(f"Unknown feature selection method: {method}")
+
+            # Remove symbol prefixes from selected features
+            selected = []
+            for feat in selected_with_prefix:
+                # Remove symbol prefix (format: "symbol_featurename")
+                if '_' in feat:
+                    # Find the first underscore and remove the symbol part
+                    parts = feat.split('_', 1)
+                    if len(parts) == 2:
+                        selected.append(parts[1])
+                    else:
+                        selected.append(feat)
+                else:
+                    selected.append(feat)
 
             logger.info(f"Selected {len(selected)} features using {method} method")
             return selected
@@ -528,3 +580,28 @@ class FeatureEngine:
                 'relative_features'
             ]
         }
+
+    def _handle_duplicate_columns(self, features: pd.DataFrame, symbol: str) -> pd.DataFrame:
+        """Handle duplicate column names in features DataFrame."""
+        # Check for duplicate columns
+        if features.columns.duplicated().any():
+            duplicate_cols = features.columns[features.columns.duplicated()].tolist()
+            logger.warning(f"Duplicate columns found for {symbol}: {duplicate_cols}")
+
+            # Create unique column names
+            new_columns = []
+            col_counts = {}
+
+            for col in features.columns:
+                if col in col_counts:
+                    col_counts[col] += 1
+                    new_col = f"{col}_{col_counts[col]}"
+                else:
+                    col_counts[col] = 0
+                    new_col = col
+                new_columns.append(new_col)
+
+            features.columns = new_columns
+            logger.info(f"Renamed duplicate columns for {symbol}")
+
+        return features

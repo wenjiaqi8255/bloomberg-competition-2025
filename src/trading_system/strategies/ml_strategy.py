@@ -21,6 +21,7 @@ import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import TimeSeriesSplit
+from ..validation.time_series_validation import PurgedTimeSeriesSplit
 from sklearn.preprocessing import RobustScaler
 import xgboost as xgb
 import lightgbm as lgb
@@ -64,9 +65,14 @@ class MLStrategy(BaseStrategy):
                  train_test_split: float = 0.8,
                  cv_folds: int = 5,
                  min_train_samples: int = 500,
+                 # Time series validation parameters
+                 purge_period: int = 5,
+                 embargo_period: int = 2,
                  # Feature parameters
                  max_features: int = 50,
                  feature_selection_method: str = "importance",
+                 # Feature timing parameters
+                 feature_lag: int = 1,
                  # Portfolio parameters
                  top_n_assets: int = 5,
                  min_prediction_score: float = 0.1,
@@ -115,9 +121,14 @@ class MLStrategy(BaseStrategy):
         self.cv_folds = cv_folds
         self.min_train_samples = min_train_samples
 
+        # Time series validation parameters
+        self.purge_period = purge_period
+        self.embargo_period = embargo_period
+
         # Feature parameters
         self.max_features = max_features
         self.feature_selection_method = feature_selection_method
+        self.feature_lag = feature_lag
 
         # Portfolio parameters
         self.top_n_assets = top_n_assets
@@ -139,7 +150,8 @@ class MLStrategy(BaseStrategy):
             momentum_periods=self.feature_periods,
             volatility_windows=[20, 60],
             include_technical=True,
-            include_theoretical=True
+            include_theoretical=True,
+            feature_lag=self.feature_lag
         )
 
         # Model storage
@@ -345,12 +357,14 @@ class MLStrategy(BaseStrategy):
         for symbol, data in price_data.items():
             try:
                 if self.target_type == "returns":
-                    # Future returns
-                    future_returns = data['Close'].pct_change(horizon).shift(-horizon)
+                    # Future returns - align with lagged features
+                    # Features at t-1 predict returns from t to t+horizon
+                    future_returns = data['Close'].pct_change(horizon).shift(-(horizon-1))
                     targets[symbol] = future_returns
                 elif self.target_type == "direction":
                     # Return direction (binary classification)
-                    future_returns = data['Close'].pct_change(horizon).shift(-horizon)
+                    # Features at t-1 predict direction from t to t+horizon
+                    future_returns = data['Close'].pct_change(horizon).shift(-(horizon-1))
                     targets[symbol] = (future_returns > 0).astype(int)
                 else:
                     raise ValueError(f"Unknown target type: {self.target_type}")
@@ -477,8 +491,12 @@ class MLStrategy(BaseStrategy):
                     }
                     model = RandomForestRegressor(**params)
 
-                # Time series cross-validation
-                tscv = TimeSeriesSplit(n_splits=self.cv_folds)
+                # Time series cross-validation with purge and embargo
+                tscv = PurgedTimeSeriesSplit(
+                    n_splits=self.cv_folds,
+                    purge_period=self.purge_period,
+                    embargo_period=self.embargo_period
+                )
                 scores = []
 
                 for train_idx, val_idx in tscv.split(X):
