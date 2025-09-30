@@ -4,9 +4,15 @@ Base strategy interface for all trading strategies.
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Any
 
 import pandas as pd
+
+# Import types for orchestration compatibility
+# Use TYPE_CHECKING to avoid circular imports
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from ..types.signals import TradingSignal
 
 
 class BaseStrategy(ABC):
@@ -138,3 +144,40 @@ class BaseStrategy(ABC):
 
     def __repr__(self):
         return f"{self.__class__.__name__}(name='{self.name}', **{self.parameters})"
+
+
+class Strategy:
+    """Strategy interface for orchestration components."""
+
+    def __init__(self, name: str, **kwargs):
+        self.name = name
+        self.parameters = kwargs
+
+    def generate_signals(self, date: datetime) -> List['TradingSignal']:
+        """Generate trading signals for a given date."""
+        raise NotImplementedError("Subclasses must implement generate_signals")
+
+    def get_strategy_name(self) -> str:
+        """Get strategy name."""
+        return self.name
+
+
+class LegacyBaseStrategy:
+    """
+    Legacy BaseStrategy class for backward compatibility.
+
+    This class replicates the interface that was previously in data_types.py
+    and is used by strategies like SatelliteStrategy and CoreFFMLStrategy.
+    """
+
+    def __init__(self, config: Dict[str, Any] = None, backtest_config: Dict[str, Any] = None):
+        self.config = config or {}
+        self.backtest_config = backtest_config or {}
+
+    def generate_signals(self, market_data: Dict[str, Any]) -> Dict[str, float]:
+        """Generate trading signals. Override in subclasses."""
+        raise NotImplementedError("Subclasses must implement generate_signals")
+
+    def get_name(self) -> str:
+        """Get strategy name."""
+        return self.__class__.__name__

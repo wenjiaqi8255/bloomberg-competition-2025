@@ -19,7 +19,8 @@ from typing import Dict, List, Optional, Tuple, Union
 from enum import Enum
 import yfinance as yf
 
-from ..types.data_types import DataSource, DataValidationError
+from ..types.enums import DataSource
+from ..utils.validation import DataValidationError
 from .yfinance_provider import YFinanceProvider
 
 logger = logging.getLogger(__name__)

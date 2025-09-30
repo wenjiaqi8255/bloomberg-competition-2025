@@ -1,0 +1,238 @@
+"""
+Core Data Types for Feature Engineering.
+
+This module defines all data types and interfaces for the simplified
+feature engineering system.
+"""
+
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Union, Any
+from enum import Enum
+import pandas as pd
+import numpy as np
+from datetime import datetime
+
+
+# ============================================================================
+# Core Data Types
+# ============================================================================
+
+class FeatureType(Enum):
+    """Feature type enumeration - simplified."""
+    MOMENTUM = "momentum"
+    VOLATILITY = "volatility"
+    VOLUME = "volume"
+    TECHNICAL = "technical"
+    LIQUIDITY = "liquidity"
+    MEAN_REVERSION = "mean_reversion"
+    TREND = "trend"
+
+
+@dataclass
+class FeatureConfig:
+    """Simplified configuration for feature engineering."""
+
+    # Time periods
+    momentum_periods: List[int] = None
+    volatility_windows: List[int] = None
+    lookback_periods: List[int] = None
+
+    # Feature selection
+    enabled_features: List[FeatureType] = None
+    include_technical: bool = True
+    include_theoretical: bool = False
+
+    # Validation parameters
+    min_ic_threshold: float = 0.03
+    min_significance: float = 0.05
+    feature_lag: int = 1
+
+    # Normalization
+    normalize_features: bool = True
+    normalization_method: str = "robust"
+
+    # Feature selection
+    max_features: int = 50
+
+    def __post_init__(self):
+        """Initialize default values."""
+        if self.momentum_periods is None:
+            self.momentum_periods = [21, 63, 126, 252]  # 1, 3, 6, 12 months
+
+        if self.volatility_windows is None:
+            self.volatility_windows = [20, 60]
+
+        if self.lookback_periods is None:
+            self.lookback_periods = [20, 50, 200]
+
+        if self.enabled_features is None:
+            self.enabled_features = [
+                FeatureType.MOMENTUM,
+                FeatureType.VOLATILITY,
+                FeatureType.TECHNICAL,
+                FeatureType.VOLUME
+            ]
+
+
+@dataclass
+class FeatureMetrics:
+    """Feature performance metrics - simplified."""
+
+    feature_name: str
+    information_coefficient: float
+    ic_p_value: float
+    positive_ic_ratio: float
+    feature_stability: float
+    economic_significance: float
+
+    # Statistical properties
+    mean_value: float
+    std_value: float
+    skewness: float
+    kurtosis: float
+
+    # Validation results
+    is_significant: bool
+    is_economically_meaningful: bool
+    recommendation: str  # "ACCEPT", "MARGINAL", "REJECT"
+
+
+@dataclass
+class FeatureResult:
+    """Unified result object for feature engineering."""
+
+    # Core data
+    features: pd.DataFrame  # Combined features for all symbols
+    metrics: Dict[str, FeatureMetrics]  # Feature validation metrics
+
+    # Metadata
+    config: FeatureConfig
+    symbols: List[str]
+    feature_names: List[str]
+    accepted_features: List[str]
+
+    # Performance summary
+    total_features: int
+    accepted_count: int
+    acceptance_rate: float
+
+    @property
+    def summary(self) -> Dict[str, Any]:
+        """Get summary statistics."""
+        return {
+            'total_features': self.total_features,
+            'accepted_count': self.accepted_count,
+            'acceptance_rate': self.acceptance_rate,
+            'symbols_count': len(self.symbols),
+            'average_ic': np.mean([m.information_coefficient for m in self.metrics.values()]),
+            'significant_features': sum(1 for m in self.metrics.values() if m.is_significant),
+            'economically_meaningful': sum(1 for m in self.metrics.values() if m.is_economically_meaningful)
+        }
+
+
+# ============================================================================
+# Input/Output Data Types
+# ============================================================================
+
+# Input data types
+PriceData = Dict[str, pd.DataFrame]  # Symbol -> OHLCV DataFrame
+ForwardReturns = Dict[str, pd.Series]  # Symbol -> forward returns
+FeatureData = pd.DataFrame  # Combined feature DataFrame
+ValidationData = Dict[str, FeatureMetrics]  # Feature validation metrics
+
+
+# ============================================================================
+# Simplified Interface
+# ============================================================================
+
+class IFeatureEngine:
+    """Simplified feature engineering interface."""
+
+    def compute_features(self,
+                        price_data: PriceData,
+                        forward_returns: Optional[ForwardReturns] = None,
+                        config: Optional[FeatureConfig] = None) -> FeatureResult:
+        """
+        Compute features for all symbols.
+
+        Args:
+            price_data: Dictionary of price DataFrames by symbol
+            forward_returns: Optional forward returns for validation
+            config: Optional configuration, uses defaults if None
+
+        Returns:
+            FeatureResult object with features and metrics
+        """
+        raise NotImplementedError
+
+    def get_feature_names(self) -> List[str]:
+        """Get list of feature names this engine generates."""
+        raise NotImplementedError
+
+    def get_config(self) -> FeatureConfig:
+        """Get current configuration."""
+        raise NotImplementedError
+
+
+# ============================================================================
+# Utility Functions
+# ============================================================================
+
+def create_default_config() -> FeatureConfig:
+    """Create default feature configuration."""
+    return FeatureConfig()
+
+
+def validate_price_data(price_data: PriceData) -> bool:
+    """Validate price data format and structure."""
+    if not isinstance(price_data, dict):
+        return False
+
+    for symbol, df in price_data.items():
+        if not isinstance(df, pd.DataFrame):
+            return False
+        required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+        if not all(col in df.columns for col in required_columns):
+            return False
+        if len(df) < 60:  # Minimum data requirement
+            return False
+
+    return True
+
+
+def align_data(price_data: PriceData,
+               forward_returns: Optional[ForwardReturns] = None) -> tuple:
+    """Align price data and forward returns by date."""
+    # Find common date range across all symbols
+    common_dates = None
+    for symbol, df in price_data.items():
+        if common_dates is None:
+            common_dates = df.index
+        else:
+            common_dates = common_dates.intersection(df.index)
+
+    # Filter price data to common dates
+    aligned_price_data = {}
+    for symbol, df in price_data.items():
+        aligned_price_data[symbol] = df.loc[common_dates]
+
+    # Align forward returns if provided
+    aligned_forward_returns = None
+    if forward_returns:
+        aligned_forward_returns = {}
+        for symbol, series in forward_returns.items():
+            if symbol in aligned_price_data:
+                aligned_forward_returns[symbol] = series.loc[common_dates]
+
+    return aligned_price_data, aligned_forward_returns
+
+
+# ============================================================================
+# Type Aliases for Common Usage
+# ============================================================================
+
+# Commonly used types
+Config = FeatureConfig
+Metrics = FeatureMetrics
+Result = FeatureResult
+Engine = IFeatureEngine

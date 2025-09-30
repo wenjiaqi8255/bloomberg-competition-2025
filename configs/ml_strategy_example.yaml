@@ -1,0 +1,199 @@
+# Machine Learning Strategy Configuration Example
+
+# Backtest Configuration
+backtest:
+  name: "ml_backtest"
+  initial_capital: 1000000
+  start_date: "2023-01-01"
+  end_date: "2023-12-31"
+  symbols: ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA", "NVDA", "JPM", "JNJ", "V"]
+  benchmark_symbol: "SPY"
+
+  # Transaction costs
+  commission_rate: 0.001
+  spread_rate: 0.0005
+  slippage_rate: 0.0002
+  short_borrow_rate: 0.02
+
+  # Trading parameters
+  rebalance_frequency: "weekly"
+  position_limit: 0.08
+  rebalance_threshold: 0.02
+
+  # Risk management
+  max_drawdown_limit: 0.25
+  volatility_limit: 0.35
+  enable_stop_loss: true
+  stop_loss_threshold: -0.08
+
+  # Performance calculation
+  risk_free_rate: 0.02
+
+  # Advanced options
+  enable_short_selling: true
+  enable_leverage: false
+  max_leverage: 1.0
+
+  # Output and logging
+  save_results: true
+  output_directory: "results"
+  log_level: "INFO"
+
+# ML Strategy Configuration
+strategy:
+  name: "ml_residual_strategy"
+  strategy_type: "ml"
+  universe: ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA", "NVDA", "JPM", "JNJ", "V"]
+  lookback_period: 504
+
+  # Signal generation
+  signal_threshold: 0.3
+  enable_short_signals: true
+
+  # Position sizing
+  allocation_method: "volatility_scaled"
+  max_positions: 15
+  min_position_weight: 0.02
+
+  # Risk management
+  stop_loss_enabled: true
+  stop_loss_threshold: -0.08
+  position_size_limit: 0.12
+
+  # ML-specific parameters
+  parameters:
+    # Model configuration
+    model_type: "xgboost"
+    ensemble_method: "bagging"
+    n_estimators: 100
+    learning_rate: 0.1
+    max_depth: 6
+
+    # Feature engineering
+    feature_types: ["technical", "price", "volume", "momentum", "volatility"]
+    lookback_windows: [5, 10, 20, 50, 120]
+    target_horizon: 5
+    rolling_windows: [20, 60, 120, 252]
+
+    # Training parameters
+    train_test_split: 0.8
+    validation_split: 0.15
+    cross_validation_folds: 5
+    time_series_cv: true
+    purge_period: 5
+
+    # Feature selection
+    feature_selection_method: "recursive"
+    max_features: 50
+    feature_importance_threshold: 0.01
+
+    # Model evaluation
+    evaluation_metrics: ["sharpe", "accuracy", "precision", "recall", "f1"]
+    backtest_validation: true
+    out_of_sample_validation: true
+
+    # Residual modeling (Fama-French)
+    use_ff5_factors: true
+    residual_modeling: true
+    factor_lookback: 252
+    residual_smoothing: true
+
+    # Signal generation
+    prediction_threshold: 0.5
+    confidence_threshold: 0.6
+    position_scaling: true
+    risk_adjusted_scaling: true
+
+    # Model monitoring
+    model_degradation_threshold: 0.1
+    retraining_frequency: 30
+    performance_monitoring: true
+
+    # Data quality
+    data_validation: true
+    outlier_detection: true
+    missing_data_handling: "forward_fill"
+
+    # Hyperparameter tuning
+    hyperparameter_tuning: true
+    tuning_method: "bayesian"
+    tuning_trials: 50
+
+  # Feature engineering
+  enable_features: true
+  feature_config:
+    # Technical indicators
+    rsi_periods: [14, 30]
+    macd_periods: [12, 26, 9]
+    bollinger_bands:
+      period: 20
+      std_dev: 2.0
+
+    # Price features
+    returns_periods: [1, 5, 10, 20]
+    volatility_periods: [10, 20, 60]
+    momentum_periods: [5, 10, 20, 50]
+
+    # Volume features
+    volume_ma_periods: [10, 20, 50]
+    volume_ratio_threshold: 1.5
+
+    # Pattern features
+    support_resistance:
+      lookback: 252
+      min_touches: 3
+
+    # Cross-sectional features
+    sector_features: true
+    ranking_features: true
+    z_score_features: true
+
+# System Configuration
+system:
+  name: "ml_system"
+  core_weight: 0.60
+  satellite_weight: 0.40
+  max_positions: 25
+  rebalance_frequency: 7
+  risk_budget: 0.18
+  volatility_target: 0.15
+
+  # Advanced parameters
+  min_correlation_threshold: 0.6
+  max_sector_allocation: 0.20
+  ips_compliance_required: true
+
+  # Backtest parameters
+  start_date: "2023-01-01"
+  end_date: "2023-12-31"
+  initial_capital: 1000000
+  transaction_costs: 0.0012
+  slippage: 0.0006
+
+  # System constraints
+  max_leverage: 1.2
+  enable_short_selling: true
+  emergency_stop_loss: -0.15
+
+  # Monitoring and reporting
+  enable_monitoring: true
+  monitoring_frequency: "daily"
+  report_frequency: "weekly"
+
+  # Strategy orchestration
+  strategy_allocation_method: "dynamic"
+  enable_strategy_rotation: true
+  rotation_frequency: 60
+
+  # Risk management overrides
+  override_strategy_risk_params: true
+  systemwide_position_limit: 0.08
+
+  # Sector limits
+  systemwide_sector_limits:
+    Technology: 0.35
+    Healthcare: 0.15
+    Finance: 0.15
+    Consumer: 0.20
+    Industrial: 0.10
+    Other: 0.05

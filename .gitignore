@@ -217,3 +217,10 @@ __marimo__/
 
 ignore/
 wandb/
+results/
+*.md
+tree.txt
+*.poetrylock
+.DS_Store
+*.pkl
+.clauderc

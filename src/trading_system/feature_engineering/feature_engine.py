@@ -1,607 +1,321 @@
 """
-Feature Engine for ML-based trading strategies.
+Simplified Feature Engine - Core Implementation.
 
-This module provides comprehensive feature engineering capabilities:
-- Technical indicators (RSI, MACD, Bollinger Bands, etc.)
-- Momentum features at multiple time horizons
-- Volatility measures and risk metrics
-- Theoretical features (Hurst exponent)
-- Feature normalization and selection
+This is the new core feature engineering implementation that replaces
+the complex orchestration system with a simple, clean interface.
 """
 
 import logging
 import warnings
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple, Union
-
+from typing import Dict, List, Optional, Any
 import numpy as np
 import pandas as pd
-from scipy import stats
-from ta import add_all_ta_features
-from ta.momentum import RSIIndicator, StochasticOscillator
-from ta.trend import MACD, ADXIndicator
-from ta.volatility import BollingerBands, AverageTrueRange
+from datetime import datetime
 
-# Suppress specific warnings
-warnings.filterwarnings('ignore', category=FutureWarning)
-warnings.filterwarnings('ignore', category=pd.errors.SettingWithCopyWarning)
+from .models.data_types import (
+    IFeatureEngine, FeatureConfig, FeatureResult, FeatureMetrics,
+    PriceData, ForwardReturns, FeatureData, ValidationData,
+    FeatureType, validate_price_data, align_data, create_default_config
+)
+from .utils.technical_features import TechnicalIndicatorCalculator
+from .utils.validation import FeatureValidator
 
+warnings.filterwarnings('ignore')
 logger = logging.getLogger(__name__)
 
 
-class FeatureEngine:
+class FeatureEngine(IFeatureEngine):
     """
-    Feature engineering engine for ML trading strategies.
+    Simplified feature engineering engine.
 
-    Features computed:
-    1. Momentum Features: Returns at multiple horizons (1, 3, 6, 12 months)
-    2. Technical Indicators: RSI, MACD, Bollinger Bands, ADX, etc.
-    3. Volatility Features: Historical volatility, ATR, GARCH-like measures
-    4. Theoretical Features: Hurst exponent for trend persistence
-    5. Relative Strength: Performance relative to benchmark
-    6. Volume Features: Volume trends and anomalies
-
-    All features are designed to avoid look-ahead bias.
+    This engine provides a clean, unified interface for computing
+    technical features with validation.
     """
 
-    def __init__(self,
-                 lookback_periods: List[int] = None,
-                 momentum_periods: List[int] = None,
-                 volatility_windows: List[int] = None,
-                 include_technical: bool = True,
-                 include_theoretical: bool = True,
-                 benchmark_symbol: str = 'SPY',
-                 feature_lag: int = 1):
+    def __init__(self, config: Optional[FeatureConfig] = None):
         """
         Initialize feature engine.
 
         Args:
-            lookback_periods: List of lookback periods for features (default: [20, 50, 200])
-            momentum_periods: List of periods for momentum calculations (default: [21, 63, 126, 252])
-            volatility_windows: List of windows for volatility calculations (default: [20, 60])
-            include_technical: Whether to include technical indicators
-            include_theoretical: Whether to include theoretical features
-            benchmark_symbol: Symbol for relative strength calculations
-            feature_lag: Number of days to lag features to prevent look-ahead bias (default: 1)
+            config: Optional configuration, uses defaults if None
         """
-        self.lookback_periods = lookback_periods or [20, 50, 200]
-        self.momentum_periods = momentum_periods or [21, 63, 126, 252]  # 1, 3, 6, 12 months
-        self.volatility_windows = volatility_windows or [20, 60]
-        self.include_technical = include_technical
-        self.include_theoretical = include_theoretical
-        self.benchmark_symbol = benchmark_symbol
-        self.feature_lag = feature_lag
+        self.config = config or create_default_config()
+        self.validator = FeatureValidator(
+            min_ic_threshold=self.config.min_ic_threshold,
+            min_significance=self.config.min_significance
+        )
+        self.technical_calculator = TechnicalIndicatorCalculator()
 
-        # Feature cache for performance
-        self.feature_cache = {}
+        # Cache for performance
+        self._feature_names_cache: Optional[List[str]] = None
+        self._last_result: Optional[FeatureResult] = None
 
-    def compute_features(self, price_data: Dict[str, pd.DataFrame],
-                        start_date: datetime = None,
-                        end_date: datetime = None,
-                        benchmark_data: pd.DataFrame = None) -> Dict[str, pd.DataFrame]:
+        logger.info(f"Initialized FeatureEngine with {len(self.config.enabled_features)} feature types")
+
+    def compute_features(self,
+                        price_data: PriceData,
+                        forward_returns: Optional[ForwardReturns] = None,
+                        config: Optional[FeatureConfig] = None) -> FeatureResult:
         """
-        Compute features for all symbols in the universe.
+        Compute features for all symbols.
 
         Args:
-            price_data: Dictionary of price DataFrames for each symbol
-            start_date: Start date for feature computation
-            end_date: End date for feature computation
-            benchmark_data: Benchmark price data for relative calculations
+            price_data: Dictionary of price DataFrames by symbol
+            forward_returns: Optional forward returns for validation
+            config: Optional configuration override
 
         Returns:
-            Dictionary of feature DataFrames for each symbol
+            FeatureResult object with features and metrics
         """
-        logger.info(f"Computing features for {len(price_data)} symbols")
+        # Update config if provided
+        if config:
+            self.config = config
+            self.validator = FeatureValidator(
+                min_ic_threshold=self.config.min_ic_threshold,
+                min_significance=self.config.min_significance
+            )
 
-        feature_dfs = {}
+        # Validate input data
+        if not validate_price_data(price_data):
+            raise ValueError("Invalid price data format")
 
-        for symbol, data in price_data.items():
+        # Align data
+        aligned_price_data, aligned_forward_returns = align_data(price_data, forward_returns)
+
+        logger.info(f"Computing features for {len(aligned_price_data)} symbols")
+
+        # Compute features for each symbol
+        all_features = {}
+        for symbol, data in aligned_price_data.items():
             try:
-                features = self._compute_symbol_features(
-                    data, symbol, start_date, end_date, benchmark_data
-                )
-                feature_dfs[symbol] = features
-                logger.debug(f"Computed {len(features.columns)} features for {symbol}")
-
+                symbol_features = self._compute_symbol_features(data, symbol)
+                all_features[symbol] = symbol_features
+                logger.debug(f"Computed {len(symbol_features.columns)} features for {symbol}")
             except Exception as e:
                 logger.error(f"Failed to compute features for {symbol}: {e}")
                 continue
 
-        logger.info(f"Successfully computed features for {len(feature_dfs)} symbols")
-        return feature_dfs
+        # Combine features across symbols
+        combined_features = self._combine_features(all_features)
 
-    def _compute_symbol_features(self, data: pd.DataFrame, symbol: str,
-                                start_date: datetime = None,
-                                end_date: datetime = None,
-                                benchmark_data: pd.DataFrame = None) -> pd.DataFrame:
-        """
-        Compute features for a single symbol.
-
-        Args:
-            data: Price DataFrame for the symbol
-            symbol: Symbol name
-            start_date: Start date for computation
-            end_date: End date for computation
-            benchmark_data: Benchmark price data
-
-        Returns:
-            DataFrame with all features for the symbol
-        """
-        # Filter data by date range
-        if start_date or end_date:
-            mask = pd.Series(True, index=data.index)
-            if start_date:
-                mask = mask & (data.index >= start_date)
-            if end_date:
-                mask = mask & (data.index <= end_date)
-            data = data[mask].copy()
-
-        # Initialize features DataFrame
-        features = pd.DataFrame(index=data.index)
-
-        # 1. Basic Price Features
-        features = pd.concat([features, self._compute_price_features(data)], axis=1)
-
-        # 2. Momentum Features
-        features = pd.concat([features, self._compute_momentum_features(data)], axis=1)
-
-        # 3. Volatility Features
-        features = pd.concat([features, self._compute_volatility_features(data)], axis=1)
-
-        # 4. Technical Indicators
-        if self.include_technical:
-            features = pd.concat([features, self._compute_technical_indicators(data)], axis=1)
-
-        # 5. Theoretical Features
-        if self.include_theoretical:
-            features = pd.concat([features, self._compute_theoretical_features(data)], axis=1)
-
-        # 6. Relative Strength Features (if benchmark data available)
-        if benchmark_data is not None and symbol != self.benchmark_symbol:
-            features = pd.concat([features, self._compute_relative_features(data, benchmark_data, symbol)], axis=1)
-
-        # Handle duplicate columns
-        features = self._handle_duplicate_columns(features, symbol)
-
-        # Apply feature lag to prevent look-ahead bias
-        if self.feature_lag > 0:
-            features = features.shift(self.feature_lag)
-
-        # Clean up infinite values and NaN
-        features = features.replace([np.inf, -np.inf], np.nan)
-        features = features.ffill().bfill().fillna(0)
-
-        return features
-
-    def _compute_price_features(self, data: pd.DataFrame) -> pd.DataFrame:
-        """Compute basic price-based features."""
-        features = pd.DataFrame(index=data.index)
-
-        # Price levels
-        features['price'] = data['Close']
-        features['price_sma_20'] = data['Close'].rolling(20).mean()
-        features['price_sma_50'] = data['Close'].rolling(50).mean()
-        features['price_sma_200'] = data['Close'].rolling(200).mean()
-
-        # Price position relative to moving averages
-        features['price_above_sma20'] = (data['Close'] > features['price_sma_20']).astype(int)
-        features['price_above_sma50'] = (data['Close'] > features['price_sma_50']).astype(int)
-        features['price_above_sma200'] = (data['Close'] > features['price_sma_200']).astype(int)
-
-        # Price acceleration (second derivative)
-        returns = data['Close'].pct_change()
-        features['price_acceleration'] = returns.diff()
-
-        return features
-
-    def _compute_momentum_features(self, data: pd.DataFrame) -> pd.DataFrame:
-        """Compute momentum features at multiple time horizons."""
-        features = pd.DataFrame(index=data.index)
-
-        for period in self.momentum_periods:
-            # Raw returns
-            features[f'return_{period}d'] = data['Close'].pct_change(period)
-
-            # Log returns
-            features[f'log_return_{period}d'] = np.log(data['Close'] / data['Close'].shift(period))
-
-            # Risk-adjusted momentum (returns divided by volatility)
-            volatility = data['Close'].pct_change().rolling(period).std()
-            features[f'risk_adj_momentum_{period}d'] = features[f'return_{period}d'] / (volatility + 1e-8)
-
-            # Momentum rank (percentile of current momentum vs history)
-            momentum_window = min(period * 2, 252)
-            features[f'momentum_rank_{period}d'] = features[f'return_{period}d'].rolling(momentum_window).rank(pct=True)
-
-        # Momentum divergence (short-term vs long-term)
-        if len(self.momentum_periods) >= 2:
-            short_period = min(self.momentum_periods)
-            long_period = max(self.momentum_periods)
-            features['momentum_divergence'] = features[f'return_{short_period}d'] - features[f'return_{long_period}d']
-
-        return features
-
-    def _compute_volatility_features(self, data: pd.DataFrame) -> pd.DataFrame:
-        """Compute volatility and risk features."""
-        features = pd.DataFrame(index=data.index)
-
-        returns = data['Close'].pct_change()
-
-        for window in self.volatility_windows:
-            # Historical volatility
-            features[f'volatility_{window}d'] = returns.rolling(window).std() * np.sqrt(252)
-
-            # Volatility of volatility (vol clustering)
-            features[f'vol_of_vol_{window}d'] = features[f'volatility_{window}d'].rolling(window).std()
-
-            # Volatility rank (relative to recent history)
-            vol_window = min(window * 3, 252)
-            features[f'volatility_rank_{window}d'] = features[f'volatility_{window}d'].rolling(vol_window).rank(pct=True)
-
-        # High-Low volatility
-        features['hl_volatility_20d'] = ((data['High'] - data['Low']) / data['Close']).rolling(20).mean() * np.sqrt(252)
-
-        # Parkinson's volatility estimator
-        features['parkinson_vol_20d'] = np.sqrt((1 / (4 * np.log(2))) *
-                                              (np.log(data['High'] / data['Low'])**2).rolling(20).mean()) * np.sqrt(252)
-
-        # GARCH-like volatility (simplified)
-        features['garch_like_vol'] = self._compute_garch_volatility(returns)
-
-        return features
-
-    def _compute_technical_indicators(self, data: pd.DataFrame) -> pd.DataFrame:
-        """Compute technical indicators using ta library."""
-        try:
-            # Use ta library to add all technical indicators
-            # Handle both lowercase and uppercase column names
-            open_col = 'Open' if 'Open' in data.columns else 'open'
-            high_col = 'High' if 'High' in data.columns else 'high'
-            low_col = 'Low' if 'Low' in data.columns else 'low'
-            close_col = 'Close' if 'Close' in data.columns else 'close'
-            volume_col = 'Volume' if 'Volume' in data.columns else 'volume'
-
-            ta_data = add_all_ta_features(
-                df=data.copy(),
-                open=open_col,
-                high=high_col,
-                low=low_col,
-                close=close_col,
-                volume=volume_col,
-                fillna=False
+        # Validate features if forward returns provided
+        metrics = {}
+        if aligned_forward_returns:
+            logger.info("Validating features...")
+            metrics = self.validator.validate_features(
+                combined_features, aligned_forward_returns
             )
 
-            # Select relevant indicators to avoid dimensionality explosion
-            relevant_indicators = [
-                # Momentum indicators
-                'momentum_rsi', 'momentum_stoch', 'momentum_stoch_signal',
-                'momentum_williams_r', 'momentum_uo', 'momentum_mfi',
+        # Get accepted features
+        accepted_features = [
+            name for name, metric in metrics.items()
+            if metric.recommendation in ["ACCEPT", "MARGINAL"]
+        ]
 
-                # Trend indicators
-                'trend_macd', 'trend_macd_signal', 'trend_macd_diff',
-                'trend_ema_fast', 'trend_ema_slow', 'trend_adx',
-                'trend_cci', 'trend_dpo', 'trend_ichimoku_conv',
+        # Create result object
+        result = FeatureResult(
+            features=combined_features,
+            metrics=metrics,
+            config=self.config,
+            symbols=list(aligned_price_data.keys()),
+            feature_names=list(combined_features.columns),
+            accepted_features=accepted_features,
+            total_features=len(combined_features.columns),
+            accepted_count=len(accepted_features),
+            acceptance_rate=len(accepted_features) / max(1, len(combined_features.columns))
+        )
 
-                # Volatility indicators
-                'volatility_bbh', 'volatility_bbl', 'volatility_bbm',
-                'volatility_bbhi', 'volatility_bbli', 'volatility_kcc',
-                'volatility_kch', 'volatility_kcl', 'volatility_kcm',
-                'volatility_dch', 'volatility_dcl', 'volatility_dcm',
-                'volatility_atr',
+        # Cache result
+        self._last_result = result
+        self._feature_names_cache = list(combined_features.columns)
 
-                # Volume indicators
-                'volume_adi', 'volume_vpt', 'volume_fi',
-                'volume_em', 'volume_sma_em', 'volume_vwap',
+        logger.info(f"Feature computation completed: {len(combined_features.columns)} total, "
+                   f"{len(accepted_features)} accepted ({result.acceptance_rate:.1%})")
 
-                # Other
-                'others_dr', 'others_cr'
-            ]
+        return result
 
-            # Filter columns that exist in the data
-            available_indicators = [col for col in relevant_indicators if col in ta_data.columns]
-
-            return ta_data[available_indicators].copy()
-
-        except Exception as e:
-            logger.warning(f"Failed to compute technical indicators: {e}")
-            return pd.DataFrame(index=data.index)
-
-    def _compute_theoretical_features(self, data: pd.DataFrame) -> pd.DataFrame:
-        """Compute theoretical features like Hurst exponent."""
+    def _compute_symbol_features(self, data: pd.DataFrame, symbol: str) -> pd.DataFrame:
+        """Compute features for a single symbol."""
         features = pd.DataFrame(index=data.index)
 
-        # Hurst exponent for trend persistence
-        features['hurst_126d'] = self._compute_rolling_hurst(data['Close'], window=126)
-        features['hurst_63d'] = self._compute_rolling_hurst(data['Close'], window=63)
-
-        # Autocorrelation features
-        returns = data['Close'].pct_change().dropna()
-        for lag in [1, 5, 10]:
-            features[f'autocorr_lag_{lag}'] = returns.rolling(60).apply(lambda x: x.autocorr(lag=lag))
-
-        # Skewness and kurtosis of returns
-        features['returns_skew_20d'] = returns.rolling(20).skew()
-        features['returns_kurt_20d'] = returns.rolling(20).kurt()
-
-        return features
-
-    def _compute_relative_features(self, data: pd.DataFrame, benchmark_data: pd.DataFrame, symbol: str) -> pd.DataFrame:
-        """Compute relative strength features against benchmark."""
-        features = pd.DataFrame(index=data.index)
-
-        # Align data with benchmark
-        aligned_data, aligned_benchmark = data.align(benchmark_data, join='inner', axis=0)
-
-        if len(aligned_data) == 0:
-            logger.warning(f"No overlapping data between {symbol} and benchmark")
-            return features
-
-        # Relative returns
-        symbol_returns = aligned_data['Close'].pct_change()
-        benchmark_returns = aligned_benchmark['Close'].pct_change()
-
-        features['relative_return_20d'] = (1 + symbol_returns.rolling(20).mean()) / (1 + benchmark_returns.rolling(20).mean()) - 1
-        features['relative_return_60d'] = (1 + symbol_returns.rolling(60).mean()) / (1 + benchmark_returns.rolling(60).mean()) - 1
-
-        # Beta calculation
-        features['beta_60d'] = self._compute_rolling_beta(symbol_returns, benchmark_returns, window=60)
-
-        # Alpha calculation (CAPM alpha)
-        risk_free_rate = 0.02 / 252  # Daily risk-free rate
-        features['alpha_60d'] = features['relative_return_60d'] - risk_free_rate * 60
-
-        # Tracking error
-        features['tracking_error_60d'] = (symbol_returns - benchmark_returns).rolling(60).std() * np.sqrt(252)
-
-        return features
-
-    def _compute_garch_volatility(self, returns: pd.Series, omega: float = 0.1,
-                                 alpha: float = 0.1, beta: float = 0.85) -> pd.Series:
-        """Compute simplified GARCH volatility."""
-        volatility = pd.Series(index=returns.index, dtype=float)
-
-        # Initialize with historical volatility
-        if len(returns) >= 20:
-            volatility.iloc[20] = returns.iloc[:20].std()
-        else:
-            volatility.iloc[0] = returns.std() if len(returns) > 1 else 0.02
-
-        for i in range(1, len(returns)):
-            if i < 20:
-                # Use simple historical volatility for first 20 periods
-                volatility.iloc[i] = returns.iloc[:i+1].std() if len(returns.iloc[:i+1]) > 1 else 0.02
-            elif pd.isna(returns.iloc[i-1]) or pd.isna(volatility.iloc[i-1]):
-                volatility.iloc[i] = volatility.iloc[i-1] if i > 0 else 0.02
-            else:
-                # GARCH(1,1) formula
-                volatility.iloc[i] = np.sqrt(
-                    omega + alpha * returns.iloc[i-1]**2 + beta * volatility.iloc[i-1]**2
-                )
-
-        return volatility * np.sqrt(252)  # Annualize
-
-    def _compute_rolling_hurst(self, price_series: pd.Series, window: int = 126) -> pd.Series:
-        """Compute rolling Hurst exponent."""
-        hurst_values = pd.Series(index=price_series.index, dtype=float)
-
-        for i in range(window, len(price_series)):
-            subset = price_series.iloc[i-window:i]
-            hurst_values.iloc[i] = self._calculate_hurst_exponent(subset.dropna())
-
-        return hurst_values
-
-    def _calculate_hurst_exponent(self, price_series: pd.Series) -> float:
-        """Calculate Hurst exponent for a price series."""
-        try:
-            # Calculate price differences
-            lags = range(2, min(20, len(price_series) // 4))
-
-            tau = []
-            for lag in lags:
-                # Calculate range and standard deviation
-                diff = price_series.diff(lag).dropna()
-                if len(diff) == 0:
-                    continue
-
-                range_val = diff.max() - diff.min()
-                std_val = diff.std()
-
-                if std_val > 0:
-                    tau.append(np.log(range_val / std_val))
-
-            if len(tau) < 3:
-                return 0.5  # Random walk
-
-            # Linear regression to find Hurst exponent
-            x = np.log(lags[:len(tau)])
-            y = np.array(tau)
-
-            slope, _, _, _, _ = stats.linregress(x, y)
-            return slope
-
-        except Exception as e:
-            logger.debug(f"Failed to calculate Hurst exponent: {e}")
-            return 0.5  # Default to random walk
-
-    def _compute_rolling_beta(self, asset_returns: pd.Series,
-                            benchmark_returns: pd.Series, window: int = 60) -> pd.Series:
-        """Compute rolling beta against benchmark."""
-        covariance = asset_returns.rolling(window).cov(benchmark_returns)
-        benchmark_variance = benchmark_returns.rolling(window).var()
-
-        beta = covariance / (benchmark_variance + 1e-8)
-        return beta.fillna(1.0)  # Default to beta = 1
-
-    def normalize_features(self, features: Dict[str, pd.DataFrame],
-                          method: str = 'robust') -> Dict[str, pd.DataFrame]:
-        """
-        Normalize features to prevent scale dominance.
-
-        Args:
-            features: Dictionary of feature DataFrames
-            method: Normalization method ('robust', 'standard', 'minmax')
-
-        Returns:
-            Dictionary of normalized feature DataFrames
-        """
-        from sklearn.preprocessing import RobustScaler, StandardScaler, MinMaxScaler
-
-        if method == 'robust':
-            scaler = RobustScaler()
-        elif method == 'standard':
-            scaler = StandardScaler()
-        elif method == 'minmax':
-            scaler = MinMaxScaler()
-        else:
-            raise ValueError(f"Unknown normalization method: {method}")
-
-        normalized_features = {}
-
-        for symbol, feature_df in features.items():
+        # Compute enabled feature types
+        for feature_type in self.config.enabled_features:
             try:
-                # Fit scaler on non-NaN data
-                valid_data = feature_df.dropna()
-                if len(valid_data) > 10:  # Need minimum samples
-                    scaler.fit(valid_data)
-                    normalized = scaler.transform(feature_df.fillna(0))
-                    normalized_features[symbol] = pd.DataFrame(
-                        normalized, index=feature_df.index, columns=feature_df.columns
+                if feature_type == FeatureType.MOMENTUM:
+                    momentum_features = self.technical_calculator.compute_momentum_features(
+                        data, self.config.momentum_periods
                     )
-                else:
-                    normalized_features[symbol] = feature_df.copy()
+                    features = pd.concat([features, momentum_features], axis=1)
+
+                elif feature_type == FeatureType.VOLATILITY:
+                    volatility_features = self.technical_calculator.compute_volatility_features(
+                        data, self.config.volatility_windows
+                    )
+                    features = pd.concat([features, volatility_features], axis=1)
+
+                elif feature_type == FeatureType.TECHNICAL and self.config.include_technical:
+                    technical_features = self.technical_calculator.compute_technical_indicators(data)
+                    features = pd.concat([features, technical_features], axis=1)
+
+                elif feature_type == FeatureType.VOLUME:
+                    volume_features = self.technical_calculator.compute_volume_features(data)
+                    features = pd.concat([features, volume_features], axis=1)
+
+                elif feature_type == FeatureType.LIQUIDITY:
+                    liquidity_features = self.technical_calculator.compute_liquidity_features(data)
+                    features = pd.concat([features, liquidity_features], axis=1)
+
+                elif feature_type == FeatureType.MEAN_REVERSION:
+                    mean_reversion_features = self.technical_calculator.compute_mean_reversion_features(
+                        data, self.config.lookback_periods
+                    )
+                    features = pd.concat([features, mean_reversion_features], axis=1)
+
+                elif feature_type == FeatureType.TREND:
+                    trend_features = self.technical_calculator.compute_trend_features(
+                        data, self.config.lookback_periods
+                    )
+                    features = pd.concat([features, trend_features], axis=1)
 
             except Exception as e:
-                logger.warning(f"Failed to normalize features for {symbol}: {e}")
-                normalized_features[symbol] = feature_df.copy()
+                logger.warning(f"Failed to compute {feature_type.value} features for {symbol}: {e}")
+                continue
 
-        return normalized_features
-
-    def select_features(self, features: Dict[str, pd.DataFrame],
-                       target: pd.Series, method: str = 'univariate',
-                       max_features: int = 50) -> List[str]:
-        """
-        Select most predictive features.
-
-        Args:
-            features: Dictionary of feature DataFrames
-            target: Target variable for feature selection
-            method: Feature selection method ('univariate', 'importance')
-            max_features: Maximum number of features to select
-
-        Returns:
-            List of selected feature names
-        """
-        try:
-            # Combine all features for selection, handling duplicate columns
-            all_features_list = []
-            for symbol, feature_df in features.items():
-                if feature_df is not None and len(feature_df) > 0:
-                    # Add symbol prefix to avoid duplicate column names
-                    prefixed_df = feature_df.copy()
-                    prefixed_df.columns = [f"{symbol}_{col}" for col in prefixed_df.columns]
-                    all_features_list.append(prefixed_df)
-
-            if not all_features_list:
-                logger.warning("No valid features for selection")
-                return []
-
-            all_features = pd.concat(all_features_list, axis=0)
-            all_features = all_features.dropna()
-
-            if len(all_features) == 0 or len(target) == 0:
-                # Return original feature names without prefix
-                if features:
-                    valid_features = [f for f in features.values() if f is not None and len(f) > 0]
-                    if valid_features:
-                        return list(valid_features[0].columns)[:max_features]
-                return []
-
-            # Align features with target
-            aligned_features, aligned_target = all_features.align(target, join='inner', axis=0)
-
-            if method == 'univariate':
-                from sklearn.feature_selection import SelectKBest, f_regression
-                selector = SelectKBest(score_func=f_regression, k=max_features)
-                selector.fit(aligned_features, aligned_target)
-                selected_with_prefix = aligned_features.columns[selector.get_support()].tolist()
-
-            elif method == 'importance':
-                from sklearn.ensemble import RandomForestRegressor
-                rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-                rf.fit(aligned_features, aligned_target)
-                importance_df = pd.DataFrame({
-                    'feature': aligned_features.columns,
-                    'importance': rf.feature_importances_
-                }).sort_values('importance', ascending=False)
-                selected_with_prefix = importance_df.head(max_features)['feature'].tolist()
-
-            else:
-                raise ValueError(f"Unknown feature selection method: {method}")
-
-            # Remove symbol prefixes from selected features
-            selected = []
-            for feat in selected_with_prefix:
-                # Remove symbol prefix (format: "symbol_featurename")
-                if '_' in feat:
-                    # Find the first underscore and remove the symbol part
-                    parts = feat.split('_', 1)
-                    if len(parts) == 2:
-                        selected.append(parts[1])
-                    else:
-                        selected.append(feat)
-                else:
-                    selected.append(feat)
-
-            logger.info(f"Selected {len(selected)} features using {method} method")
-            return selected
-
-        except Exception as e:
-            logger.error(f"Feature selection failed: {e}")
-            # Fallback to all features
-            if features:
-                return list(list(features.values())[0].columns)[:max_features]
-            return []
-
-    def get_feature_info(self) -> Dict:
-        """Get information about computed features."""
-        return {
-            'lookback_periods': self.lookback_periods,
-            'momentum_periods': self.momentum_periods,
-            'volatility_windows': self.volatility_windows,
-            'include_technical': self.include_technical,
-            'include_theoretical': self.include_theoretical,
-            'benchmark_symbol': self.benchmark_symbol,
-            'feature_categories': [
-                'price_features',
-                'momentum_features',
-                'volatility_features',
-                'technical_indicators',
-                'theoretical_features',
-                'relative_features'
-            ]
-        }
-
-    def _handle_duplicate_columns(self, features: pd.DataFrame, symbol: str) -> pd.DataFrame:
-        """Handle duplicate column names in features DataFrame."""
-        # Check for duplicate columns
-        if features.columns.duplicated().any():
-            duplicate_cols = features.columns[features.columns.duplicated()].tolist()
-            logger.warning(f"Duplicate columns found for {symbol}: {duplicate_cols}")
-
-            # Create unique column names
-            new_columns = []
-            col_counts = {}
-
-            for col in features.columns:
-                if col in col_counts:
-                    col_counts[col] += 1
-                    new_col = f"{col}_{col_counts[col]}"
-                else:
-                    col_counts[col] = 0
-                    new_col = col
-                new_columns.append(new_col)
-
-            features.columns = new_columns
-            logger.info(f"Renamed duplicate columns for {symbol}")
+        # Clean up features
+        features = self._clean_features(features)
 
         return features
+
+    def _combine_features(self, symbol_features: Dict[str, pd.DataFrame]) -> pd.DataFrame:
+        """Combine features from all symbols into a single DataFrame."""
+        if not symbol_features:
+            return pd.DataFrame()
+
+        # Create a unified feature DataFrame with symbol prefixes
+        combined_features_list = []
+
+        for symbol, features in symbol_features.items():
+            # Add symbol prefix to avoid column name conflicts
+            prefixed_features = features.copy()
+            prefixed_features.columns = [f"{symbol}_{col}" for col in prefixed_features.columns]
+            combined_features_list.append(prefixed_features)
+
+        # Concatenate all features
+        combined_features = pd.concat(combined_features_list, axis=1, sort=False)
+
+        return combined_features
+
+    def _clean_features(self, features: pd.DataFrame) -> pd.DataFrame:
+        """Clean and preprocess features."""
+        # Handle infinite values
+        features = features.replace([np.inf, -np.inf], np.nan)
+
+        # Apply feature lag to prevent look-ahead bias
+        if self.config.feature_lag > 0:
+            features = features.shift(self.config.feature_lag)
+
+        # Fill NaN values
+        features = features.ffill().bfill().fillna(0)
+
+        # Remove constant features (zero variance)
+        constant_cols = []
+        for col in features.columns:
+            if features[col].var() == 0:
+                constant_cols.append(col)
+
+        if constant_cols:
+            features = features.drop(columns=constant_cols)
+            logger.debug(f"Removed {len(constant_cols)} constant features")
+
+        return features
+
+    def get_feature_names(self) -> List[str]:
+        """Get list of feature names this engine generates."""
+        if self._feature_names_cache is None:
+            if self._last_result:
+                self._feature_names_cache = self._last_result.feature_names
+            else:
+                # Generate sample data to get feature names
+                sample_data = self._generate_sample_data()
+                sample_result = self.compute_features(sample_data)
+                self._feature_names_cache = sample_result.feature_names
+
+        return self._feature_names_cache
+
+    def get_config(self) -> FeatureConfig:
+        """Get current configuration."""
+        return self.config
+
+    def _generate_sample_data(self) -> Dict[str, pd.DataFrame]:
+        """Generate sample price data for feature name extraction."""
+        dates = pd.date_range('2023-01-01', periods=500, freq='D')
+        sample_symbol = 'SAMPLE'
+
+        # Generate realistic OHLCV data
+        np.random.seed(42)
+        base_price = 100
+        returns = np.random.normal(0, 0.02, len(dates))
+        prices = base_price * np.cumprod(1 + returns)
+
+        high = prices * (1 + np.abs(np.random.normal(0, 0.01, len(dates))))
+        low = prices * (1 - np.abs(np.random.normal(0, 0.01, len(dates))))
+        open_price = np.roll(prices, 1)
+        open_price[0] = prices[0]
+        volume = np.random.lognormal(15, 1, len(dates))
+
+        sample_data = pd.DataFrame({
+            'Open': open_price,
+            'High': high,
+            'Low': low,
+            'Close': prices,
+            'Volume': volume
+        }, index=dates)
+
+        return {sample_symbol: sample_data}
+
+    def get_feature_summary(self) -> Optional[pd.DataFrame]:
+        """Get summary of last computed features."""
+        if not self._last_result:
+            return None
+
+        summary_data = []
+        for feature_name, metrics in self._last_result.metrics.items():
+            summary_data.append({
+                'feature_name': feature_name,
+                'ic': metrics.information_coefficient,
+                'ic_p_value': metrics.ic_p_value,
+                'positive_ic_ratio': metrics.positive_ic_ratio,
+                'stability': metrics.feature_stability,
+                'economic_significance': metrics.economic_significance,
+                'recommendation': metrics.recommendation,
+                'accepted': feature_name in self._last_result.accepted_features
+            })
+
+        return pd.DataFrame(summary_data).sort_values('ic', ascending=False)
+
+
+# ============================================================================
+# Convenience Functions
+# ============================================================================
+
+def create_feature_engine(config: Optional[FeatureConfig] = None) -> FeatureEngine:
+    """Create a feature engine with default or custom configuration."""
+    return FeatureEngine(config)
+
+
+def compute_features(price_data: PriceData,
+                    forward_returns: Optional[ForwardReturns] = None,
+                    config: Optional[FeatureConfig] = None) -> FeatureResult:
+    """
+    Convenience function to compute features without explicitly creating engine.
+
+    Args:
+        price_data: Dictionary of price DataFrames by symbol
+        forward_returns: Optional forward returns for validation
+        config: Optional configuration
+
+    Returns:
+        FeatureResult object with features and metrics
+    """
+    engine = FeatureEngine(config)
+    return engine.compute_features(price_data, forward_returns)

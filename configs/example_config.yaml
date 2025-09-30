@@ -1,0 +1,141 @@
+# Core Trading System Configuration
+# Based on src/trading_system/config/ data models
+
+# Backtest Configuration
+backtest:
+  name: "default_backtest"
+  initial_capital: 1000000
+  start_date: "2023-01-01"
+  end_date: "2023-12-31"
+  symbols: ["SPY", "QQQ", "IWM", "EFA", "AGG"]
+  benchmark_symbol: "SPY"
+
+  # Transaction costs
+  commission_rate: 0.001
+  spread_rate: 0.0005
+  slippage_rate: 0.0002
+  short_borrow_rate: 0.02
+
+  # Trading parameters
+  rebalance_frequency: "monthly"
+  position_limit: 0.10
+  rebalance_threshold: 0.01
+
+  # Risk management
+  max_drawdown_limit: 0.20
+  volatility_limit: 0.30
+  enable_stop_loss: true
+  stop_loss_threshold: -0.07
+
+  # Performance calculation
+  risk_free_rate: 0.02
+
+  # Advanced options
+  enable_short_selling: false
+  enable_leverage: false
+  max_leverage: 1.0
+
+  # Output and logging
+  save_results: true
+  output_directory: "results"
+  log_level: "INFO"
+
+# Strategy Configuration
+strategy:
+  name: "dual_momentum_strategy"
+  strategy_type: "dual_momentum"
+  universe: ["SPY", "QQQ", "IWM", "EFA", "AGG"]
+  lookback_period: 252
+
+  # Signal generation
+  signal_threshold: 0.5
+  enable_short_signals: false
+
+  # Position sizing
+  allocation_method: "equal_weight"
+  max_positions: 20
+  min_position_weight: 0.01
+
+  # Risk management
+  stop_loss_enabled: true
+  stop_loss_threshold: -0.10
+  position_size_limit: 0.15
+
+  # Strategy-specific parameters
+  parameters:
+    formation_period: 252
+    holding_period: 20
+    lookback_window: 63
+    momentum_window: 12
+
+    # Asset-specific parameters
+    equity_bond_ratio: 0.6
+    cash_allocation: 0.2
+
+    # Signal thresholds
+    long_threshold: 0.5
+    short_threshold: -0.5
+    neutral_threshold: 0.1
+
+    # Protection rules
+    crash_protection: true
+    volatility_filter: true
+    correlation_filter: true
+
+    # Rebalancing
+    rebalance_trigger: 0.05
+    min_rebalance_interval: 5
+
+  # Feature engineering (not used for momentum)
+  enable_features: false
+  feature_config: null
+
+# System Configuration
+system:
+  name: "default_system"
+  core_weight: 0.75
+  satellite_weight: 0.25
+  max_positions: 20
+  rebalance_frequency: 30
+  risk_budget: 0.15
+  volatility_target: 0.12
+
+  # Advanced parameters
+  min_correlation_threshold: 0.7
+  max_sector_allocation: 0.25
+  ips_compliance_required: true
+
+  # Backtest parameters (for backward compatibility)
+  start_date: "2023-01-01"
+  end_date: "2023-12-31"
+  initial_capital: 1000000
+  transaction_costs: 0.001
+  slippage: 0.0005
+
+  # System constraints
+  max_leverage: 1.0
+  enable_short_selling: false
+  emergency_stop_loss: -0.20
+
+  # Monitoring and reporting
+  enable_monitoring: true
+  monitoring_frequency: "daily"
+  report_frequency: "monthly"
+
+  # Strategy orchestration
+  strategy_allocation_method: "fixed"
+  enable_strategy_rotation: false
+  rotation_frequency: 90
+
+  # Risk management overrides
+  override_strategy_risk_params: true
+  systemwide_position_limit: 0.10
+
+  # Sector limits
+  systemwide_sector_limits:
+    Technology: 0.30
+    Healthcare: 0.20
+    Finance: 0.20
+    Consumer: 0.15
+    Industrial: 0.15
+    Other: 0.10

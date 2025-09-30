@@ -23,16 +23,23 @@ import json
 from pathlib import Path
 
 from ..data.ff5_provider import FF5DataProvider
+from ..utils.performance import PerformanceMetrics
+from ..utils.risk import RiskCalculator
+from ..utils.data_utils import DataProcessor
 from ..data.stock_classifier import StockClassifier, InvestmentBox, SizeCategory, StyleCategory, RegionCategory
-from ..models.ff5_regression import FF5RegressionEngine
-from ..models.residual_predictor import ResidualPredictor
+from ..models.serving.predictor import ModelPredictor
+from ..strategies.base_strategy import LegacyBaseStrategy as BaseStrategy
 from ..types.data_types import (
-    BaseStrategy, StrategyConfig, BacktestConfig, TradingSignal, SignalType,
-    PortfolioPosition, PortfolioSnapshot, Trade, DataValidator, DataValidationError
+    PortfolioPosition, PortfolioSnapshot,
+    Trade
 )
+from ..utils.validation import DataValidator, DataValidationError
+from ..types.signals import TradingSignal
+from ..types.enums import SignalType
 from ..backtesting.engine import BacktestEngine
-from ..backtesting.risk_management import RiskManager
-from ..utils.feature_engineering import FeatureEngineering
+# Risk management functionality moved to utils/risk.py
+from ..config import ConfigFactory
+from ..feature_engineering import compute_technical_features, FeatureConfig, FeatureType
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +64,8 @@ class CoreFFMLStrategy(BaseStrategy):
         # Handle backward compatibility - if kwargs are passed, create config objects
         if kwargs and (config is None or isinstance(config, dict)):
             # Create config objects from kwargs
-            from ..types.data_types import StrategyConfig, BacktestConfig
+            from ..config.strategy import StrategyConfig
+            from ..config.backtest import BacktestConfig
 
             if config is None:
                 config = {}
@@ -116,20 +124,26 @@ class CoreFFMLStrategy(BaseStrategy):
         self.ff5_provider = FF5DataProvider(data_frequency="monthly")
         self.stock_classifier = StockClassifier()
 
-        # Initialize models
-        self.ff5_regression = FF5RegressionEngine(
-            estimation_window=config.parameters.get('ff5_lookback', 36),
-            min_observations=config.parameters.get('min_observations', 20)
+        # Initialize model predictor
+        self.model_predictor = ModelPredictor(
+            enable_monitoring=True,
+            cache_predictions=True
         )
 
-        self.residual_predictor = ResidualPredictor(
-            prediction_horizon=config.parameters.get('prediction_horizon', 1),
-            feature_lag=config.parameters.get('feature_lags', 1),
-            cv_folds=config.parameters.get('cv_folds', 5)
-        )
+        # Load the residual predictor model
+        try:
+            self.model_id = self.model_predictor.load_model("residual_predictor")
+            logger.info(f"Loaded residual predictor model: {self.model_id}")
+        except Exception as e:
+            logger.warning(f"Failed to load residual predictor model: {e}")
+            self.model_id = None
 
         # Initialize feature engineering
-        self.feature_engineering = FeatureEngineering()
+        self.feature_config = FeatureConfig(
+            enabled_features=[FeatureType.TECHNICAL, FeatureType.MOMENTUM, FeatureType.VOLATILITY],
+            normalize_features=True,
+            feature_lag=config.parameters.get('feature_lag', 1)
+        )
 
         # Strategy parameters
         self.min_signal_strength = config.parameters.get('min_signal_strength', 0.1)
@@ -151,7 +165,6 @@ class CoreFFMLStrategy(BaseStrategy):
         # Data storage
         self.equity_data = {}
         self.factor_data = None
-        self.residuals = {}
         self.ml_predictions = {}
         self.combined_predictions = {}
 
@@ -229,29 +242,56 @@ class CoreFFMLStrategy(BaseStrategy):
             logger.info("Classifying stocks into investment boxes...")
             self.stock_classifications = self._classify_stocks()
 
-            # Step 5: Estimate factor betas and extract residuals
-            logger.info("Estimating factor betas...")
-            factor_betas, factor_returns, self.residuals = self.ff5_regression.estimate_factor_betas(
-                self.equity_data, self.factor_data
-            )
+            # Step 5: Check if model is available
+            if self.model_predictor.get_current_model() is None:
+                logger.warning("No model available for predictions. Please train and load a model first.")
+                return False
 
-            # Step 6: Train ML residual predictor
-            logger.info("Training ML residual predictor...")
-            self.residual_predictor.train_models(
-                self.equity_data, self.residuals, start_date, end_date
-            )
+            # Step 6: Generate predictions using the loaded model
+            logger.info("Generating predictions using loaded model...")
+            self.ml_predictions = {}
 
-            # Step 7: Generate ML residual predictions
-            logger.info("Generating ML residual predictions...")
-            self.ml_predictions = self.residual_predictor.predict_residuals(
-                self.equity_data, self.factor_data.index[-1]
-            )
+            for symbol in self.config.universe:
+                try:
+                    # Get symbol data
+                    symbol_data = self.equity_data.get(symbol)
+                    if symbol_data is None or len(symbol_data) == 0:
+                        continue
 
-            # Step 8: Combine factor and ML predictions
-            logger.info("Combining factor and ML predictions...")
-            self.combined_predictions = self._combine_predictions(
-                factor_returns, self.ml_predictions, factor_betas
-            )
+                    # Use model predictor to make prediction
+                    prediction_result = self.model_predictor.predict(
+                        market_data=symbol_data,
+                        symbol=symbol,
+                        prediction_date=end_date
+                    )
+
+                    self.ml_predictions[symbol] = prediction_result['prediction']
+
+                except Exception as e:
+                    logger.warning(f"Failed to generate prediction for {symbol}: {e}")
+                    continue
+
+            # Step 7: Use ML predictions directly (they already include FF5 + residual)
+            logger.info("Using model predictions directly...")
+            self.combined_predictions = self.ml_predictions.copy()
+
+            # Step 8: Add confidence scores and metadata
+            for symbol in self.combined_predictions:
+                try:
+                    confidence = self._get_ml_confidence(symbol)
+                    # Store both prediction and confidence
+                    self.combined_predictions[symbol] = {
+                        'prediction': self.combined_predictions[symbol],
+                        'confidence': confidence,
+                        'model_id': self.model_id
+                    }
+                except Exception as e:
+                    logger.warning(f"Failed to get confidence for {symbol}: {e}")
+                    self.combined_predictions[symbol] = {
+                        'prediction': self.combined_predictions[symbol],
+                        'confidence': 0.5,
+                        'model_id': self.model_id
+                    }
 
             logger.info(f"Data preparation completed successfully")
             logger.info(f"Processed {len(self.equity_data)} symbols with {len(self.factor_data)} factor observations")
@@ -358,17 +398,21 @@ class CoreFFMLStrategy(BaseStrategy):
 
     def _get_ml_confidence(self, symbol: str) -> float:
         """Get confidence score for ML model based on recent performance."""
-        # Get recent prediction accuracy for this symbol
-        recent_performance = self.residual_predictor.get_recent_performance(symbol)
+        # Get model health from monitor
+        model_health = self.model_predictor.get_model_health()
 
-        if recent_performance is None:
+        if model_health is None:
             return 0.5  # Default confidence
 
-        # Use correlation between predicted and actual residuals
-        correlation = recent_performance.get('correlation', 0.0)
-
-        # Apply confidence threshold
-        return max(0.0, min(correlation, 1.0))
+        # Use health status and overall model confidence
+        if model_health.status == 'healthy':
+            return 0.8  # High confidence for healthy models
+        elif model_health.status == 'warning':
+            return 0.6  # Medium confidence for warning models
+        elif model_health.status == 'degraded':
+            return 0.4  # Low confidence for degraded models
+        else:
+            return 0.3  # Very low confidence for critical models
 
     def generate_signals(self, date: datetime) -> List[TradingSignal]:
         """
@@ -430,7 +474,7 @@ class CoreFFMLStrategy(BaseStrategy):
                         metadata={
                             'predicted_return': predicted_return,
                             'rank': i + 1,
-                            'factor_confidence': self._get_factor_confidence(symbol, self.ff5_regression.factor_betas),
+                            'factor_confidence': 0.7,  # Placeholder factor confidence
                             'ml_confidence': self._get_ml_confidence(symbol),
                             'investment_box': self.stock_classifications.get(symbol).__dict__ if symbol in self.stock_classifications else None
                         }
@@ -465,7 +509,7 @@ class CoreFFMLStrategy(BaseStrategy):
     def _calculate_signal_confidence(self, symbol: str, predicted_return: float, date: datetime) -> float:
         """Calculate overall signal confidence."""
         # Combine factor and ML confidences
-        factor_confidence = self._get_factor_confidence(symbol, self.ff5_regression.factor_betas)
+        factor_confidence = 0.7  # Placeholder factor confidence
         ml_confidence = self._get_ml_confidence(symbol)
 
         # Weight by prediction magnitude
@@ -596,17 +640,27 @@ class CoreFFMLStrategy(BaseStrategy):
             Performance metrics and diagnostics
         """
         try:
-            # Calculate performance metrics
+            # Get historical returns from portfolio history if available
+            if len(self.portfolio_history) >= 2:
+                returns = pd.Series([p.daily_return for p in self.portfolio_history[-252:]])
+            else:
+                # Use current daily return as proxy if no history
+                returns = pd.Series([portfolio.daily_return])
+
+            # Calculate performance metrics using unified utilities
+            perf_metrics = PerformanceMetrics.calculate_all_metrics(returns)
+
+            # Calculate portfolio-specific metrics
             metrics = {
                 'total_return': portfolio.total_return,
                 'daily_return': portfolio.daily_return,
                 'drawdown': portfolio.drawdown,
-                'sharpe_ratio': self._calculate_sharpe_ratio(portfolio),
-                'information_ratio': self._calculate_information_ratio(portfolio),
-                'max_drawdown': self._calculate_max_drawdown(portfolio),
-                'volatility': self._calculate_volatility(portfolio),
+                'sharpe_ratio': perf_metrics.get('sharpe_ratio', 0.0),
+                'information_ratio': perf_metrics.get('information_ratio', 0.0),
+                'max_drawdown': perf_metrics.get('max_drawdown', portfolio.drawdown),
+                'volatility': perf_metrics.get('volatility', 0.0),
                 'number_of_positions': len(portfolio.positions),
-                'concentration': self._calculate_concentration(portfolio),
+                'concentration': RiskCalculator.concentration_risk(portfolio, 'herfindahl'),
                 'turnover': self._calculate_turnover()
             }
 
@@ -617,13 +671,13 @@ class CoreFFMLStrategy(BaseStrategy):
                 'combined_prediction_accuracy': self._calculate_combined_prediction_accuracy()
             }
 
-            # Risk metrics
+            # Risk metrics using unified utilities
             metrics['risk_metrics'] = {
-                'var_95': self._calculate_var(portfolio, 0.05),
-                'var_99': self._calculate_var(portfolio, 0.01),
-                'expected_shortfall': self._calculate_expected_shortfall(portfolio),
-                'beta_to_market': self._calculate_beta_to_market(portfolio),
-                'tracking_error': self._calculate_tracking_error(portfolio)
+                'var_95': perf_metrics.get('var_95', 0.0),
+                'var_99': perf_metrics.get('var_99', 0.0),
+                'expected_shortfall': perf_metrics.get('expected_shortfall_95', 0.0),
+                'beta_to_market': perf_metrics.get('beta', 1.0),
+                'tracking_error': perf_metrics.get('tracking_error', 0.0)
             }
 
             # IPS compliance metrics
@@ -639,30 +693,7 @@ class CoreFFMLStrategy(BaseStrategy):
             logger.error(f"Failed to monitor performance: {e}")
             return {}
 
-    def _calculate_sharpe_ratio(self, portfolio: PortfolioSnapshot) -> float:
-        """Calculate Sharpe ratio."""
-        # Simplified calculation
-        if len(self.portfolio_history) < 2:
-            return 0.0
-
-        returns = [p.daily_return for p in self.portfolio_history[-12:]]  # Last 12 months
-        if len(returns) < 2:
-            return 0.0
-
-        avg_return = np.mean(returns)
-        std_return = np.std(returns)
-
-        return avg_return / std_return if std_return > 0 else 0.0
-
-    def _calculate_information_ratio(self, portfolio: PortfolioSnapshot) -> float:
-        """Calculate information ratio vs benchmark."""
-        # Simplified calculation - would need benchmark data
-        return portfolio.total_return / 0.15  # Assume 15% benchmark vol
-
-    def _calculate_max_drawdown(self, portfolio: PortfolioSnapshot) -> float:
-        """Calculate maximum drawdown."""
-        return portfolio.drawdown
-
+  
     def _calculate_volatility(self, portfolio: PortfolioSnapshot) -> float:
         """Calculate portfolio volatility."""
         if len(self.portfolio_history) < 2:
@@ -691,7 +722,11 @@ class CoreFFMLStrategy(BaseStrategy):
 
     def _calculate_ml_prediction_accuracy(self) -> float:
         """Calculate ML prediction accuracy."""
-        return self.residual_predictor.get_overall_accuracy()
+        # Get model health and use its metrics
+        model_health = self.model_predictor.get_model_health()
+        if model_health and 'accuracy' in model_health.metrics:
+            return model_health.metrics['accuracy']
+        return 0.7  # Placeholder
 
     def _calculate_combined_prediction_accuracy(self) -> float:
         """Calculate combined prediction accuracy."""
@@ -931,8 +966,8 @@ class CoreFFMLStrategy(BaseStrategy):
                 'transaction_cost': self.backtest_config.transaction_cost
             },
             'model_configuration': {
-                'ff5_lookback_window': self.ff5_regression.lookback_window,
-                'ml_prediction_horizon': self.residual_predictor.prediction_horizon,
+                'model_id': self.model_id,
+                'model_health': self.model_predictor.get_model_health().status if self.model_predictor.get_model_health() else 'unknown',
                 'min_signal_strength': self.min_signal_strength,
                 'target_positions': self.target_positions
             },

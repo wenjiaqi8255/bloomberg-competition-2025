@@ -21,14 +21,16 @@ import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import TimeSeriesSplit
-from ..validation.time_series_validation import PurgedTimeSeriesSplit
+from ..validation.time_series_cv import PurgedTimeSeriesSplit, TimeSeriesCV
 from sklearn.preprocessing import RobustScaler
 import xgboost as xgb
 import lightgbm as lgb
 
 from .base_strategy import BaseStrategy
-from ..feature_engineering import FeatureEngine
+from ..feature_engineering import compute_technical_features, FeatureConfig, FeatureType
 from ..utils.secrets_manager import SecretsManager
+from ..utils.performance import PerformanceMetrics
+from ..utils.risk import RiskCalculator
 
 logger = logging.getLogger(__name__)
 
@@ -145,13 +147,16 @@ class MLStrategy(BaseStrategy):
         self.model_save_path.mkdir(exist_ok=True, parents=True)
 
         # Initialize components
-        self.feature_engine = FeatureEngine(
-            lookback_periods=[20, 50, 200],
+        self.feature_config = FeatureConfig(
+            enabled_features=[
+                FeatureType.MOMENTUM, FeatureType.VOLATILITY,
+                FeatureType.TECHNICAL, FeatureType.TREND
+            ],
             momentum_periods=self.feature_periods,
             volatility_windows=[20, 60],
             include_technical=True,
-            include_theoretical=True,
-            feature_lag=self.feature_lag
+            feature_lag=self.feature_lag,
+            max_features=self.max_features
         )
 
         # Model storage
@@ -298,7 +303,8 @@ class MLStrategy(BaseStrategy):
 
         try:
             # 1. Compute features
-            features = self.feature_engine.compute_features(price_data, start_date, end_date)
+            feature_result = compute_technical_features(price_data, config=self.feature_config)
+            features = feature_result.features
 
             # 2. Create target variable
             targets = self._create_targets(price_data, self.prediction_horizon)
@@ -310,13 +316,19 @@ class MLStrategy(BaseStrategy):
                 logger.warning(f"Insufficient training data: {len(X)} < {self.min_train_samples}")
                 return
 
-            # 4. Feature selection
+            # 4. Feature selection (simplified - using validation metrics from feature engineering)
             if len(feature_names) > self.max_features:
-                selected_features = self.feature_engine.select_features(
-                    features, y, method=self.feature_selection_method, max_features=self.max_features
-                )
-                X = X[selected_features]
-                feature_names = selected_features
+                # Use already validated features from the feature engineering step
+                if hasattr(feature_result, 'accepted_features') and feature_result.accepted_features:
+                    # Filter to accepted features that are also in our feature set
+                    selected_features = [f for f in feature_result.accepted_features if f in feature_names]
+                    if selected_features:
+                        X = X[[f for f in selected_features if f in X.columns]]
+                        feature_names = [f for f in selected_features if f in feature_names]
+                else:
+                    # Fallback: keep first max_features
+                    X = X.iloc[:, :self.max_features]
+                    feature_names = feature_names[:self.max_features]
 
             # 5. Split data (time series aware)
             split_idx = int(len(X) * self.train_test_split)
@@ -374,33 +386,29 @@ class MLStrategy(BaseStrategy):
 
         return targets
 
-    def _prepare_training_data(self, features: Dict[str, pd.DataFrame],
+    def _prepare_training_data(self, features: pd.DataFrame,
                               targets: Dict[str, pd.Series]) -> Tuple[pd.DataFrame, pd.Series, List[str]]:
         """Prepare data for ML training."""
-        # Combine all features and targets
-        all_features = []
+        # Features are now in a single DataFrame with symbol-prefixed columns
+        X = features.copy()
         all_targets = []
 
-        for symbol in features.keys():
-            if symbol in targets:
-                # Align features and targets
-                symbol_features = features[symbol]
-                symbol_targets = targets[symbol]
+        for symbol in targets.keys():
+            symbol_targets = targets[symbol]
 
-                # Remove rows with NaN in targets
-                valid_mask = symbol_targets.notna()
-                if valid_mask.sum() > 0:
-                    symbol_features = symbol_features[valid_mask]
-                    symbol_targets = symbol_targets[valid_mask]
+            # Find feature columns for this symbol
+            symbol_cols = [col for col in X.columns if col.startswith(f"{symbol}_")]
 
-                    all_features.append(symbol_features)
-                    all_targets.append(symbol_targets)
+            if symbol_cols:
+                # Create symbol-specific target aligned with feature dates
+                symbol_target_aligned = symbol_targets.reindex(X.index)
+                all_targets.append(symbol_target_aligned)
 
-        if not all_features:
+        if not all_targets:
             raise ValueError("No valid training data available")
 
-        X = pd.concat(all_features, axis=0)
-        y = pd.concat(all_targets, axis=0)
+        # Combine targets (use mean of available targets for each row)
+        y = pd.concat(all_targets, axis=1).mean(axis=1)
 
         # Remove features with too many NaN values
         nan_threshold = 0.3
@@ -576,16 +584,26 @@ class MLStrategy(BaseStrategy):
                 logger.debug(f"Insufficient data for prediction: {len(data_up_to_date)} < {self.lookback_days}")
                 return None
 
-            # Compute features
-            features = self.feature_engine._compute_symbol_features(data_up_to_date, symbol)
+            # Compute features using new system
+            feature_result = compute_technical_features({symbol: data_up_to_date}, config=self.feature_config)
+            features = feature_result.features
+
+            # Extract symbol-specific features
+            symbol_cols = [col for col in features.columns if col.startswith(f"{symbol}_")]
+            if not symbol_cols:
+                logger.debug(f"No features computed for {symbol}")
+                return None
+
+            symbol_features = features[symbol_cols].copy()
+            symbol_features.columns = [col.replace(f"{symbol}_", "") for col in symbol_features.columns]
 
             # Select and order features
-            available_features = [f for f in self.feature_names if f in features.columns]
+            available_features = [f for f in self.feature_names if f in symbol_features.columns]
             if len(available_features) < len(self.feature_names) * 0.5:  # Need at least 50% of features
                 logger.debug(f"Insufficient features available: {len(available_features)} < {len(self.feature_names)}")
                 return None
 
-            feature_data = features[available_features].fillna(0).iloc[-1:]  # Use most recent data
+            feature_data = symbol_features[available_features].fillna(0).iloc[-1:]  # Use most recent data
 
             # Scale features
             feature_scaled = self.scaler.transform(feature_data)
@@ -607,7 +625,7 @@ class MLStrategy(BaseStrategy):
                 'scaler': self.scaler,
                 'feature_names': self.feature_names,
                 'model_metadata': self.model_metadata,
-                'feature_engine_config': self.feature_engine.get_feature_info(),
+                'feature_engine_config': self.feature_config.__dict__ if hasattr(self.feature_config, '__dict__') else str(self.feature_config),
                 'training_date': datetime.now().isoformat()
             }
 
@@ -691,7 +709,7 @@ class MLStrategy(BaseStrategy):
             'max_position_size': self.max_position_size,
             'retrain_frequency': self.retrain_frequency,
             'use_optuna': self.use_optuna,
-            'feature_engine': self.feature_engine.get_feature_info(),
+            'feature_engine': self.feature_config.__dict__ if hasattr(self.feature_config, '__dict__') else str(self.feature_config),
             'model_info': self.get_model_info(),
             'risk_management': 'Feature-based selection with position size constraints'
         })
@@ -720,12 +738,12 @@ class MLStrategy(BaseStrategy):
                     returns_df = pd.DataFrame(asset_returns)
                     portfolio_returns = (returns_df * portfolio_weights.reindex(returns_df.index, method='ffill')).sum(axis=1)
 
-                    # Risk metrics
+                    # Risk metrics - using unified calculation systems
                     metrics['portfolio_volatility'] = portfolio_returns.std() * np.sqrt(252)
-                    metrics['max_drawdown'] = (portfolio_returns.cumsum().expanding().max() - portfolio_returns.cumsum()).max()
-                    metrics['sharpe_ratio'] = portfolio_returns.mean() / portfolio_returns.std() * np.sqrt(252) if portfolio_returns.std() > 0 else 0
-                    metrics['var_95'] = portfolio_returns.quantile(0.05)
-                    metrics['expected_shortfall'] = portfolio_returns[portfolio_returns <= portfolio_returns.quantile(0.05)].mean()
+                    metrics['max_drawdown'] = PerformanceMetrics.max_drawdown(portfolio_returns)
+                    metrics['sharpe_ratio'] = PerformanceMetrics.sharpe_ratio(portfolio_returns)
+                    metrics['var_95'] = RiskCalculator.value_at_risk(portfolio_returns, 0.95)
+                    metrics['expected_shortfall'] = RiskCalculator.expected_shortfall(portfolio_returns, 0.95)
 
             # Model-based risk metrics
             if hasattr(self, 'model_metadata') and self.model_metadata:

@@ -12,11 +12,14 @@ from typing import Dict, List, Optional, Any
 
 import pandas as pd
 
-from .config.config_loader import ConfigLoader
+from .config.factory import ConfigFactory
 from .data.yfinance_provider import YFinanceProvider
-from .backtest.standard_backtest import StandardBacktest
+# New backtesting architecture
+from .backtesting import BacktestEngine
+from .config.backtest import BacktestConfig
 from .strategies import DualMomentumStrategy, FamaFrench5Strategy, MLStrategy
 from .utils.wandb_logger import WandBLogger
+from .types import TradingSignal, SignalType
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +43,11 @@ class StrategyRunner:
         Args:
             config_path: Path to configuration file
         """
-        self.config_loader = ConfigLoader(config_path)
-        self.config = self.config_loader.load_config()
+        if config_path:
+            self.configs = ConfigFactory.load_all_configs(config_path)
+        else:
+            # Use default configs
+            self.configs = {}
 
         # Initialize components
         self.data_provider = None
@@ -53,55 +59,102 @@ class StrategyRunner:
         self.results = {}
         self.is_initialized = False
 
+    def _convert_signals_to_unified_format(self, strategy_signals: pd.DataFrame) -> Dict[datetime, List[TradingSignal]]:
+        """
+        Convert DataFrame strategy signals to unified format Dict[datetime, List[TradingSignal]].
+
+        Args:
+            strategy_signals: DataFrame with strategy signals (old format)
+
+        Returns:
+            Dictionary mapping dates to lists of TradingSignal objects (new format)
+        """
+        unified_signals = {}
+
+        if strategy_signals is None or strategy_signals.empty:
+            return unified_signals
+
+        for date in strategy_signals.index:
+            if not isinstance(date, datetime):
+                continue
+
+            signals_for_date = []
+
+            for symbol in strategy_signals.columns:
+                signal_value = strategy_signals.loc[date, symbol]
+
+                if pd.isna(signal_value) or signal_value == 0:
+                    continue
+
+                # Determine signal type
+                signal_type = SignalType.BUY if signal_value > 0 else SignalType.SELL
+
+                # Create TradingSignal object
+                trading_signal = TradingSignal(
+                    symbol=symbol,
+                    signal_type=signal_type,
+                    strength=abs(float(signal_value)),
+                    timestamp=date,
+                    confidence=abs(float(signal_value))  # Use strength as confidence
+                )
+
+                signals_for_date.append(trading_signal)
+
+            if signals_for_date:
+                unified_signals[date] = signals_for_date
+
+        return unified_signals
+
     def initialize(self):
         """Initialize all components based on configuration."""
         try:
             logger.info("Initializing strategy runner components...")
 
-            # Initialize data provider
-            data_config = self.config_loader.get_data_config()
+            # Initialize data provider with defaults
             self.data_provider = YFinanceProvider(
-                max_retries=data_config.get('retry_attempts', 3),
-                retry_delay=data_config.get('retry_delay', 1.0),
-                request_timeout=data_config.get('timeout', 30)
+                max_retries=3,
+                retry_delay=1.0,
+                request_timeout=30
             )
 
-            # Initialize strategy
-            strategy_config = self.config_loader.get_strategy_config()
-            strategy_params = self.config_loader.get_strategy_parameters()
+            # Initialize strategy with config objects
+            strategy_config = self.configs.get('strategy')
+            backtest_config = self.configs.get('backtest')
 
-            if strategy_config.get('type') == 'DualMomentumStrategy':
+            if not strategy_config:
+                raise ValueError("Strategy configuration not found")
+
+            if strategy_config.strategy_type.value == 'dual_momentum':
                 self.strategy = DualMomentumStrategy(
-                    name=strategy_config.get('name', 'DualMomentum'),
-                    **strategy_params
+                    name=strategy_config.name,
+                    **strategy_config.parameters
                 )
-            elif strategy_config.get('type') == 'FamaFrench5Strategy':
+            elif strategy_config.strategy_type.value == 'fama_french':
                 self.strategy = FamaFrench5Strategy(
-                    name=strategy_config.get('name', 'FamaFrench5'),
-                    **strategy_params
+                    name=strategy_config.name,
+                    **strategy_config.parameters
                 )
-            elif strategy_config.get('type') == 'MLStrategy':
+            elif strategy_config.strategy_type.value == 'ml':
                 self.strategy = MLStrategy(
-                    name=strategy_config.get('name', 'MLStrategy'),
-                    **strategy_params
+                    name=strategy_config.name,
+                    **strategy_config.parameters
                 )
             else:
-                raise ValueError(f"Unknown strategy type: {strategy_config.get('type')}")
+                raise ValueError(f"Unknown strategy type: {strategy_config.strategy_type.value}")
 
-            # Initialize backtest engine
-            backtest_config = self.config_loader.get_backtest_config()
-            self.backtest_engine = StandardBacktest(
-                initial_capital=backtest_config.get('initial_capital', 1_000_000),
-                transaction_cost=backtest_config.get('transaction_cost', 0.001),
-                benchmark_symbol=backtest_config.get('benchmark_symbol', 'SPY')
-            )
+            # Initialize backtest engine using config object
+            if not backtest_config:
+                raise ValueError("Backtest configuration not found")
 
-            # Initialize WandB logger
-            experiment_config = self.config_loader.get_experiment_config()
+            # Use new BacktestEngine
+            self.backtest_engine = BacktestEngine(backtest_config)
+            logger.info(f"Initialized new BacktestEngine with ${backtest_config.initial_capital:,.0f} capital")
+
+            # Initialize WandB logger with defaults
             self.wandb_logger = WandBLogger(
-                project_name=experiment_config.get('project_name', 'bloomberg-competition'),
-                tags=experiment_config.get('tags', []),
-                group=experiment_config.get('group')
+                project_name='bloomberg-competition',
+                tags=[],
+                group=None
             )
 
             self.is_initialized = True
@@ -132,27 +185,28 @@ class StrategyRunner:
 
         try:
             # Initialize WandB experiment
-            experiment_config = self.config_loader.get_experiment_config()
             self.wandb_logger.initialize_experiment(
                 experiment_name=experiment_name,
-                notes=experiment_config.get('notes', ''),
-                tags=experiment_config.get('tags', [])
+                notes='',
+                tags=[]
             )
 
-            # Log configuration
-            self.wandb_logger.log_config(self.config)
+            # Log configuration summary
+            config_summary = {name: config.get_summary() for name, config in self.configs.items()}
+            self.wandb_logger.log_config(config_summary)
 
-            # Step 1: Get asset universe
-            universe = self.config_loader.get_asset_universe()
+            # Step 1: Get asset universe from strategy config
+            strategy_config = self.configs.get('strategy')
+            universe = strategy_config.universe if strategy_config else []
             logger.info(f"Asset universe: {universe}")
 
             # Step 2: Fetch data
-            backtest_config = self.config_loader.get_backtest_config()
+            backtest_config = self.configs.get('backtest')
             price_data, benchmark_data = self._fetch_data(
                 universe=universe,
-                start_date=datetime.strptime(backtest_config['start_date'], '%Y-%m-%d'),
-                end_date=datetime.strptime(backtest_config['end_date'], '%Y-%m-%d'),
-                benchmark_symbol=backtest_config['benchmark_symbol']
+                start_date=backtest_config.start_date,
+                end_date=backtest_config.end_date,
+                benchmark_symbol=backtest_config.benchmark_symbol
             )
 
             # Log data statistics
@@ -166,26 +220,27 @@ class StrategyRunner:
                 end_date=datetime.strptime(backtest_config['end_date'], '%Y-%m-%d')
             )
 
-            # Step 4: Run backtest
+            # Step 4: Convert signals to unified format and run backtest
+            unified_strategy_signals = self._convert_signals_to_unified_format(strategy_signals)
+
             backtest_results = self.backtest_engine.run_backtest(
-                strategy_signals=strategy_signals,
+                strategy_signals=unified_strategy_signals,
                 price_data=price_data,
-                benchmark_data=benchmark_data,
-                start_date=datetime.strptime(backtest_config['start_date'], '%Y-%m-%d'),
-                end_date=datetime.strptime(backtest_config['end_date'], '%Y-%m-%d'),
-                rebalance_frequency=backtest_config.get('rebalance_frequency', 'monthly')
+                benchmark_data=benchmark_data
             )
 
-            # Step 5: Log performance to WandB
-            portfolio_history = backtest_results['portfolio_history']
-            self.wandb_logger.log_portfolio_performance(
-                portfolio_df=portfolio_history,
-                benchmark_df=benchmark_data
-            )
+            # Step 5: Log performance to WandB (adapted for new architecture)
+            portfolio_history = backtest_results.portfolio_values if hasattr(backtest_results, 'portfolio_values') else backtest_results.get('portfolio_history')
+            if portfolio_history is not None:
+                self.wandb_logger.log_portfolio_performance(
+                    portfolio_df=portfolio_history.to_frame('portfolio_value') if hasattr(portfolio_history, 'to_frame') else portfolio_history,
+                    benchmark_df=benchmark_data
+                )
 
             # Step 6: Log trades if available
-            if backtest_results.get('trades'):
-                trades_df = self._process_trades_to_dataframe(backtest_results['trades'])
+            trades = backtest_results.trades if hasattr(backtest_results, 'trades') else backtest_results.get('trades', [])
+            if trades:
+                trades_df = self._process_trades_to_dataframe(trades)
                 if not trades_df.empty:
                     self.wandb_logger.log_trades(trades_df)
 
@@ -200,14 +255,14 @@ class StrategyRunner:
             )
             self.wandb_logger.log_metrics(strategy_metrics)
 
-            # Compile final results
+            # Compile final results (adapted for new architecture)
             self.results = {
                 'experiment_name': experiment_name,
                 'config': self.config,
                 'data_statistics': data_stats,
                 'strategy_signals': strategy_signals,
                 'backtest_results': backtest_results,
-                'performance_metrics': backtest_results['performance_metrics'],
+                'performance_metrics': backtest_results.performance_metrics if hasattr(backtest_results, 'performance_metrics') else backtest_results.get('performance_metrics', {}),
                 'risk_metrics': risk_metrics,
                 'strategy_metrics': strategy_metrics,
                 'execution_timestamp': datetime.now().isoformat()
@@ -388,11 +443,12 @@ class StrategyRunner:
     def _save_results(self):
         """Save results to local files."""
         try:
-            output_config = self.config_loader.get_output_config()
+            # Use backtest config for output settings
+            backtest_config = self.configs.get('backtest')
 
-            if output_config.get('save_results', True):
+            if backtest_config and backtest_config.save_results:
                 # Create results directory
-                results_dir = output_config.get('results_path', './results/')
+                results_dir = backtest_config.output_directory
                 os.makedirs(results_dir, exist_ok=True)
 
                 # Save results as JSON
@@ -412,10 +468,15 @@ class StrategyRunner:
                 self.results['strategy_signals'].to_csv(signals_file)
                 logger.info(f"Signals saved to {signals_file}")
 
-                # Save portfolio history
+                # Save portfolio history (adapted for new architecture)
                 history_file = os.path.join(results_dir, f"{self.results['experiment_name']}_portfolio.csv")
-                self.results['backtest_results']['portfolio_history'].to_csv(history_file)
-                logger.info(f"Portfolio history saved to {history_file}")
+                portfolio_history = self.results['backtest_results'].portfolio_values if hasattr(self.results['backtest_results'], 'portfolio_values') else self.results['backtest_results'].get('portfolio_history')
+                if portfolio_history is not None:
+                    if hasattr(portfolio_history, 'to_csv'):
+                        portfolio_history.to_csv(history_file)
+                    elif isinstance(portfolio_history, pd.DataFrame):
+                        portfolio_history.to_csv(history_file)
+                    logger.info(f"Portfolio history saved to {history_file}")
 
         except Exception as e:
             logger.error(f"Failed to save results: {e}")

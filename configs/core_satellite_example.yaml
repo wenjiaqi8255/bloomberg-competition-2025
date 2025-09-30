@@ -1,0 +1,236 @@
+# Core + Satellite Strategy Configuration Example
+
+# Backtest Configuration
+backtest:
+  name: "core_satellite_backtest"
+  initial_capital: 2000000
+  start_date: "2023-01-01"
+  end_date: "2023-12-31"
+  symbols: ["SPY", "QQQ", "IWM", "EFA", "AGG", "GLD", "VNQ", "TLT", "HYG", "LQD"]
+  benchmark_symbol: "SPY"
+
+  # Transaction costs
+  commission_rate: 0.0008
+  spread_rate: 0.0004
+  slippage_rate: 0.00015
+  short_borrow_rate: 0.015
+
+  # Trading parameters
+  rebalance_frequency: "quarterly"
+  position_limit: 0.12
+  rebalance_threshold: 0.03
+
+  # Risk management
+  max_drawdown_limit: 0.18
+  volatility_limit: 0.25
+  enable_stop_loss: true
+  stop_loss_threshold: -0.10
+
+  # Performance calculation
+  risk_free_rate: 0.025
+
+  # Advanced options
+  enable_short_selling: false
+  enable_leverage: false
+  max_leverage: 1.0
+
+  # Output and logging
+  save_results: true
+  output_directory: "results"
+  log_level: "INFO"
+
+# Core Strategy Configuration
+strategy:
+  name: "core_dual_momentum"
+  strategy_type: "dual_momentum"
+  universe: ["SPY", "QQQ", "IWM", "EFA", "AGG", "BND"]
+  lookback_period: 252
+
+  # Signal generation
+  signal_threshold: 0.6
+  enable_short_signals: false
+
+  # Position sizing
+  allocation_method: "equal_weight"
+  max_positions: 6
+  min_position_weight: 0.05
+
+  # Risk management
+  stop_loss_enabled: true
+  stop_loss_threshold: -0.12
+  position_size_limit: 0.20
+
+  # Core-specific parameters
+  parameters:
+    formation_period: 252
+    holding_period: 63
+    lookback_window: 126
+    momentum_window: 12
+
+    # Asset allocation targets
+    equity_target: 0.6
+    bond_target: 0.4
+    international_target: 0.25
+
+    # Core stability parameters
+    low_turnover: true
+    min_holding_period: 30
+    rebalance_tolerance: 0.05
+
+    # Risk controls
+    volatility_target: 0.10
+    max_sector_exposure: 0.40
+    correlation_threshold: 0.8
+
+    # Protection mechanisms
+    crash_protection: true
+    volatility_filter: true
+    trend_filter: true
+
+    # Rebalancing rules
+    quarterly_rebalance: true
+    threshold_rebalance: 0.08
+    band_rebalance: true
+
+  # Feature engineering (minimal for core)
+  enable_features: false
+  feature_config: null
+
+# Satellite Strategy Configuration (would be loaded separately)
+satellite_strategy:
+  name: "satellite_ml"
+  strategy_type: "ml"
+  universe: ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA", "NVDA", "JPM", "JNJ", "V"]
+  lookback_period: 504
+
+  # Signal generation
+  signal_threshold: 0.4
+  enable_short_signals: true
+
+  # Position sizing
+  allocation_method: "risk_parity"
+  max_positions: 10
+  min_position_weight: 0.01
+
+  # Risk management
+  stop_loss_enabled: true
+  stop_loss_threshold: -0.08
+  position_size_limit: 0.06
+
+  # Satellite-specific parameters
+  parameters:
+    # Model configuration
+    model_type: "lightgbm"
+    n_estimators: 200
+    learning_rate: 0.05
+    max_depth: 4
+
+    # Feature engineering
+    feature_types: ["technical", "momentum", "volatility", "cross_sectional"]
+    lookback_windows: [10, 20, 60]
+    target_horizon: 10
+
+    # Satellite alpha parameters
+    alpha_target: 0.15
+    tracking_error_budget: 0.08
+    beta_neutral: false
+
+    # Risk parameters
+    max_volatility: 0.20
+    max_drawdown: 0.20
+    position_concentration: 0.05
+
+    # Trading parameters
+    rebalance_frequency: "weekly"
+    turnover_limit: 0.5
+    trading_cost_budget: 0.02
+
+    # Selection criteria
+    liquidity_threshold: 1000000
+    market_cap_min: 1000000000
+    volume_threshold: 1000000
+
+  # Feature engineering
+  enable_features: true
+  feature_config:
+    # Enhanced features for satellite
+    rsi_periods: [7, 14, 21]
+    macd_config:
+      fast: 8
+      slow: 21
+      signal: 9
+
+    returns_features:
+      periods: [3, 7, 14, 30]
+      log_returns: true
+
+    volatility_features:
+      periods: [10, 20, 60]
+      garch_filtering: true
+
+    momentum_features:
+      periods: [1, 3, 6, 12]
+      risk_adjusted: true
+
+    cross_sectional:
+      sector_neutral: true
+      market_cap_neutral: false
+      beta_adjusted: true
+
+# System Configuration
+system:
+  name: "core_satellite_system"
+  core_weight: 0.70
+  satellite_weight: 0.30
+  max_positions: 15
+  rebalance_frequency: 30
+  risk_budget: 0.12
+  volatility_target: 0.10
+
+  # Advanced parameters
+  min_correlation_threshold: 0.7
+  max_sector_allocation: 0.30
+  ips_compliance_required: true
+
+  # Backtest parameters
+  start_date: "2023-01-01"
+  end_date: "2023-12-31"
+  initial_capital: 2000000
+  transaction_costs: 0.001
+  slippage: 0.0004
+
+  # System constraints
+  max_leverage: 1.0
+  enable_short_selling: false
+  emergency_stop_loss: -0.20
+
+  # Monitoring and reporting
+  enable_monitoring: true
+  monitoring_frequency: "daily"
+  report_frequency: "monthly"
+
+  # Strategy orchestration
+  strategy_allocation_method: "fixed"
+  enable_strategy_rotation: false
+  rotation_frequency: 120
+
+  # Risk management overrides
+  override_strategy_risk_params: true
+  systemwide_position_limit: 0.10
+
+  # Sector limits
+  systemwide_sector_limits:
+    Technology: 0.25
+    Healthcare: 0.20
+    Finance: 0.20
+    Consumer: 0.15
+    Industrial: 0.10
+    Real_Estate: 0.05
+    Utilities: 0.03
+    Materials: 0.02
+
+  # Core+Satellite specific
+  core_satellite_integration: true
+  satellite_alpha_budget: 0.08
+  satellite_tracking_error_limit: 0.06
+  rebalance_drift_tolerance: 0.03

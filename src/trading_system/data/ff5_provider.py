@@ -20,7 +20,8 @@ from typing import Dict, List, Optional, Tuple, Union
 import requests
 from io import StringIO
 
-from ..types.data_types import DataSource, DataValidator, DataValidationError
+from ..types.enums import DataSource
+from ..utils.validation import DataValidator, DataValidationError
 
 logger = logging.getLogger(__name__)
 

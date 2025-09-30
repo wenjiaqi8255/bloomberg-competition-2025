@@ -1,0 +1,9 @@
+{
+    "output_styles": {
+      "qwen_enhanced": {
+        "description": "Enhance response with Qwen's perspective",
+        "pre_process": "qwen -p 'Provide brief analysis: ${user_message}'",
+        "post_process": "Combine insights from both responses"
+      }
+    }
+}

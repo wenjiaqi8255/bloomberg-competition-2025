@@ -16,6 +16,9 @@ import numpy as np
 import pandas as pd
 
 from .base_strategy import BaseStrategy
+from ..utils.performance import PerformanceMetrics
+from ..utils.risk import RiskCalculator
+from ..utils.data_utils import DataProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -289,25 +292,18 @@ class DualMomentumStrategy(BaseStrategy):
             if portfolio_returns.empty:
                 return {}
 
-            # Basic risk metrics
-            volatility = portfolio_returns.std() * np.sqrt(252)
-            max_drawdown = self._calculate_max_drawdown(portfolio_returns)
-            var_95 = portfolio_returns.quantile(0.05)
-            var_99 = portfolio_returns.quantile(0.01)
-
-            # Momentum-specific metrics
-            concentration_risk = self._calculate_concentration_risk(signals)
-            turnover = self._calculate_turnover(signals)
-
-            return {
-                'volatility': volatility,
-                'max_drawdown': max_drawdown,
-                'var_95': var_95,
-                'var_99': var_99,
-                'concentration_risk': concentration_risk,
-                'turnover': turnover,
-                'sharpe_ratio': portfolio_returns.mean() / portfolio_returns.std() * np.sqrt(252) if portfolio_returns.std() > 0 else 0
+            # Use unified risk calculator
+            risk_metrics = {
+                'volatility': RiskCalculator.value_at_risk(portfolio_returns, 0.95),  # Using as volatility proxy
+                'max_drawdown': PerformanceMetrics.max_drawdown(portfolio_returns),
+                'var_95': RiskCalculator.value_at_risk(portfolio_returns, 0.95),
+                'var_99': RiskCalculator.value_at_risk(portfolio_returns, 0.99),
+                'sharpe_ratio': PerformanceMetrics.sharpe_ratio(portfolio_returns),
+                'concentration_risk': self._calculate_concentration_risk(signals),
+                'turnover': self._calculate_turnover(signals)
             }
+
+            return risk_metrics
 
         except Exception as e:
             logger.error(f"Error calculating risk metrics: {e}")
@@ -345,13 +341,7 @@ class DualMomentumStrategy(BaseStrategy):
 
         return returns
 
-    def _calculate_max_drawdown(self, returns: pd.Series) -> float:
-        """Calculate maximum drawdown from returns series."""
-        cumulative = (1 + returns).cumprod()
-        running_max = cumulative.expanding().max()
-        drawdown = (cumulative - running_max) / running_max
-        return drawdown.min()
-
+    
     def _calculate_concentration_risk(self, signals: pd.DataFrame) -> float:
         """Calculate Herfindahl-Hirschman Index for concentration risk."""
         hhi_values = []

@@ -11,7 +11,8 @@ import pandas as pd
 import yfinance as yf
 from pandas.tseries.offsets import BDay
 
-from ..types.data_types import DataSource, DataValidator, DataValidationError
+from ..types.enums import DataSource
+from ..utils.validation import DataValidator, DataValidationError
 
 logger = logging.getLogger(__name__)
 
