@@ -25,6 +25,7 @@ class DataSource(Enum):
     ALPHA_VANTAGE = "alpha_vantage"
     BLOOMBERG = "bloomberg"
     QUANDL = "quandl"
+    KENNETH_FRENCH = "kenneth_french"
 
 
 class SignalType(Enum):
@@ -132,8 +133,32 @@ class BacktestConfig:
     end_date: datetime
     symbols: List[str]
     transaction_cost: float = 0.001
+    slippage: float = 0.0005
     benchmark_symbol: Optional[str] = None
-    rebalance_frequency: str = "daily"  # daily, weekly, monthly
+    rebalance_frequency: str = "daily"
+
+
+@dataclass
+class SystemConfig:
+    """System orchestrator configuration."""
+    # Basic system parameters
+    system_name: str
+    core_weight: float = 0.75
+    satellite_weight: float = 0.25
+    max_positions: int = 20
+    rebalance_frequency: int = 30
+    risk_budget: float = 0.15
+    volatility_target: float = 0.12
+
+    # Advanced parameters
+    min_correlation_threshold: float = 0.7
+    max_sector_allocation: float = 0.25
+    ips_compliance_required: bool = True
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+    initial_capital: float = 1000000
+    transaction_costs: float = 0.001
+    slippage: float = 0.0005  # daily, weekly, monthly
 
 
 @dataclass
@@ -213,6 +238,43 @@ class DataValidator:
         return True
 
     @staticmethod
+    def validate_factor_data(df: pd.DataFrame, data_source: str) -> bool:
+        """
+        Validate factor data DataFrame.
+
+        Args:
+            df: DataFrame with factor data
+            data_source: Name of the data source for validation
+
+        Returns:
+            True if valid, raises DataValidationError otherwise
+        """
+        # Check required FF5 columns
+        required_columns = ['MKT', 'SMB', 'HML', 'RMW', 'CMA', 'RF']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            raise DataValidationError(f"Missing required factor columns: {missing_columns}")
+
+        # Check for empty DataFrame
+        if df.empty:
+            raise DataValidationError(f"Empty factor DataFrame for source {data_source}")
+
+        # Check for missing values
+        if df[required_columns].isnull().all().any():
+            raise DataValidationError(f"All values missing in required factor columns for {data_source}")
+
+        # Validate factor return ranges (should be reasonable)
+        for col in ['MKT', 'SMB', 'HML', 'RMW', 'CMA']:
+            if ((df[col] < -1.0) | (df[col] > 1.0)).any():
+                raise DataValidationError(f"Factor returns out of range for {col} in {data_source}")
+
+        # Validate risk-free rate range
+        if ((df['RF'] < -0.1) | (df['RF'] > 0.1)).any():
+            raise DataValidationError(f"Risk-free rate out of range for {data_source}")
+
+        return True
+
+    @staticmethod
     def validate_signals(signals: pd.DataFrame, symbols: List[str]) -> bool:
         """
         Validate trading signals DataFrame.
@@ -260,6 +322,22 @@ class DataValidator:
                 raise DataValidationError(f"Invalid weight {weight} for {symbol}")
 
         return True
+
+
+class BaseStrategy:
+    """Base class for all trading strategies."""
+
+    def __init__(self, config: Dict[str, Any] = None, backtest_config: Dict[str, Any] = None):
+        self.config = config or {}
+        self.backtest_config = backtest_config or {}
+
+    def generate_signals(self, market_data: Dict[str, Any]) -> Dict[str, float]:
+        """Generate trading signals. Override in subclasses."""
+        raise NotImplementedError("Subclasses must implement generate_signals")
+
+    def get_name(self) -> str:
+        """Get strategy name."""
+        return self.__class__.__name__
 
 
 # Type aliases for common data structures
