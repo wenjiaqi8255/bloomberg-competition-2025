@@ -22,7 +22,8 @@ RUN_TYPES = [
     "optimization",    # Hyperparameter optimization experiments
     "backtest",        # Strategy backtesting experiments
     "monitoring",      # Model monitoring experiments
-    "analysis"         # Data analysis experiments
+    "analysis",        # Data analysis experiments
+    "hyperparameter_trial"  # Individual hyperparameter optimization trials
 ]
 
 # Alert levels

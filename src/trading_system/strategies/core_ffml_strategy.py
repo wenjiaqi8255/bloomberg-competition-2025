@@ -52,11 +52,12 @@ class CoreFFMLStrategy(BaseStrategy):
     to generate trading signals with superior risk-adjusted returns.
     """
 
-    def __init__(self, config=None, backtest_config=None, **kwargs):
+    def __init__(self, model_predictor, config=None, backtest_config=None, **kwargs):
         """
-        Initialize Core FFML Strategy.
+        Initialize Core FFML Strategy with dependency injection.
 
         Args:
+            model_predictor: Pre-configured ModelPredictor instance with loaded model
             config: Strategy configuration with parameters (StrategyConfig or dict)
             backtest_config: Backtest configuration (BacktestConfig or dict)
             **kwargs: Direct parameters for backward compatibility
@@ -120,23 +121,21 @@ class CoreFFMLStrategy(BaseStrategy):
 
         super().__init__(config, backtest_config)
 
-        # Initialize data providers
+        # Dependency injection: validate predictor has loaded model
+        if not isinstance(model_predictor, ModelPredictor):
+            raise TypeError("model_predictor must be a ModelPredictor instance")
+
+        if not hasattr(model_predictor, '_current_model') or model_predictor._current_model is None:
+            raise ValueError("ModelPredictor must have a loaded model")
+
+        self.model_predictor = model_predictor
+        self.model_id = model_predictor.model_id
+
+        logger.info(f"Using injected model predictor: {self.model_id}")
+
+        # Initialize data providers (only for factor data, model prediction is handled by ModelPredictor)
         self.ff5_provider = FF5DataProvider(data_frequency="monthly")
         self.stock_classifier = StockClassifier()
-
-        # Initialize model predictor
-        self.model_predictor = ModelPredictor(
-            enable_monitoring=True,
-            cache_predictions=True
-        )
-
-        # Load the residual predictor model
-        try:
-            self.model_id = self.model_predictor.load_model("residual_predictor")
-            logger.info(f"Loaded residual predictor model: {self.model_id}")
-        except Exception as e:
-            logger.warning(f"Failed to load residual predictor model: {e}")
-            self.model_id = None
 
         # Initialize feature engineering
         self.feature_config = FeatureConfig(
@@ -429,8 +428,8 @@ class CoreFFMLStrategy(BaseStrategy):
 
             signals = []
 
-            # Get current predictions
-            current_predictions = self._get_current_predictions(date)
+            # Get current predictions from ModelPredictor (stateless)
+            current_predictions = self._get_predictions_from_model(date)
 
             # Rank stocks by predicted returns
             ranked_stocks = sorted(
@@ -493,17 +492,34 @@ class CoreFFMLStrategy(BaseStrategy):
             logger.error(f"Failed to generate signals for {date}: {e}")
             return []
 
-    def _get_current_predictions(self, date: datetime) -> Dict[str, float]:
-        """Get current predictions for all symbols."""
+    def _get_predictions_from_model(self, date: datetime) -> Dict[str, float]:
+        """
+        Get current predictions for all symbols using the injected ModelPredictor.
+
+        This method is stateless and relies on the ModelPredictor interface only,
+        without storing any internal prediction state.
+        """
         predictions = {}
 
         for symbol in self.config.universe:
-            if symbol in self.combined_predictions:
-                predictions[symbol] = self.combined_predictions[symbol]
-            else:
+            try:
+                # Use the injected ModelPredictor to get predictions
+                # ModelPredictor will handle data acquisition automatically
+                prediction_result = self.model_predictor.predict(
+                    market_data=None,  # Let ModelPredictor fetch data automatically
+                    symbol=symbol,
+                    prediction_date=date
+                )
+
+                predictions[symbol] = prediction_result['prediction']
+                logger.debug(f"Generated prediction for {symbol}: {predictions[symbol]:.6f}")
+
+            except Exception as e:
+                logger.warning(f"Failed to get prediction for {symbol}: {e}")
                 # Use fallback prediction
                 predictions[symbol] = 0.0
 
+        logger.info(f"Generated predictions for {len(predictions)} symbols using ModelPredictor")
         return predictions
 
     def _calculate_signal_confidence(self, symbol: str, predicted_return: float, date: datetime) -> float:

@@ -133,6 +133,40 @@ class ExperimentTrackerInterface(ABC):
         """
         pass
 
+    def log_artifact_from_dict(self, data: Dict[str, Any], artifact_name: str) -> None:
+        """
+        Log a dictionary as an artifact.
+
+        This is a convenience method that converts a dictionary to a temporary
+        file and logs it as an artifact. Not all tracking backends support this.
+
+        Args:
+            data: Dictionary data to log.
+            artifact_name: Name for the artifact.
+
+        Raises:
+            ExperimentTrackingError: If logging fails.
+        """
+        import tempfile
+        import json
+
+        try:
+            # Create temporary file
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                json.dump(data, f, indent=2, default=str)
+                temp_path = f.name
+
+            # Log as artifact
+            self.log_artifact(temp_path, artifact_name, artifact_type="metadata")
+
+            # Clean up
+            import os
+            os.unlink(temp_path)
+
+        except Exception as e:
+            logger.warning(f"Failed to log dictionary as artifact {artifact_name}: {e}")
+            # Don't raise exception to avoid breaking the flow
+
     @abstractmethod
     def create_child_run(self, name: str, config: Optional[Dict[str, Any]] = None) -> 'ExperimentTrackerInterface':
         """
