@@ -21,6 +21,7 @@ import warnings
 
 from ..base.base_model import BaseModel
 from ..utils.performance_evaluator import PerformanceEvaluator
+from ...utils.experiment_tracking.interface import ExperimentTrackerInterface
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,8 @@ class ModelMonitor:
     - Health reporting
     """
 
-    def __init__(self, model_id: str, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, model_id: str, config: Optional[Dict[str, Any]] = None,
+                 tracker: Optional[ExperimentTrackerInterface] = None):
         """
         Initialize model monitor.
 
@@ -74,9 +76,11 @@ class ModelMonitor:
                 - min_samples: Minimum samples for evaluation (default: 100)
                 - alert_threshold: Number of issues before alert (default: 3)
                 - log_path: Path for storing logs (default: "./logs/")
+            tracker: Optional experiment tracker for logging monitoring events
         """
         self.model_id = model_id
         self.config = config or {}
+        self.tracker = tracker
 
         # Configuration
         self.performance_window = self.config.get('performance_window', 30)
@@ -98,6 +102,29 @@ class ModelMonitor:
 
         # Baseline metrics (set during initialization or first evaluation)
         self.baseline_metrics: Dict[str, float] = {}
+
+        # Initialize monitoring run if tracker provided
+        self.monitor_run_id = None
+        if self.tracker:
+            try:
+                from ...utils.experiment_tracking.config import ExperimentConfig
+                monitor_config = ExperimentConfig(
+                    project_name="model_monitoring",
+                    experiment_name=f"monitor_{model_id}",
+                    run_type="monitoring",
+                    tags=["monitoring", model_id],
+                    hyperparameters={},
+                    metadata={
+                        "model_id": model_id,
+                        "monitoring_config": self.config,
+                        "start_time": datetime.now().isoformat()
+                    }
+                )
+                self.monitor_run_id = self.tracker.init_run(monitor_config)
+                self.tracker.update_run_status("monitoring")
+                logger.info(f"Initialized monitoring run {self.monitor_run_id} for model: {model_id}")
+            except Exception as e:
+                logger.warning(f"Failed to initialize monitoring run: {e}")
 
         logger.info(f"Initialized ModelMonitor for model: {model_id}")
 
@@ -213,6 +240,28 @@ class ModelMonitor:
 
             # Keep only recent history
             self.performance_history = self.performance_history[-100:]  # Keep last 100 evaluations
+
+            # Log to tracker if degradation detected
+            if self.tracker and degradation_analysis.get('degradation_detected', False):
+                try:
+                    self.tracker.log_metrics({
+                        'current_performance': current_metrics.get('r2', 0.0),
+                        'baseline_performance': self.baseline_metrics.get('r2', 0.0),
+                        'performance_drop': abs(current_metrics.get('r2', 0.0) - self.baseline_metrics.get('r2', 0.0)),
+                        'degradation_detected': int(degradation_analysis.get('degradation_detected', False))
+                    })
+
+                    # Send alert
+                    self.tracker.log_alert(
+                        title="Model Performance Degradation",
+                        text=f"Model {self.model_id} performance degraded. "
+                             f"R² dropped from {self.baseline_metrics.get('r2', 0.0):.3f} to {current_metrics.get('r2', 0.0):.3f}",
+                        level="warning"
+                    )
+
+                    logger.warning(f"Performance degradation detected for model {self.model_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to log degradation to tracker: {e}")
 
             return degradation_analysis
 
@@ -365,6 +414,7 @@ class ModelMonitor:
                 status = 'critical'
 
             # Update health status
+            old_status = self.health_status.status
             self.health_status = ModelHealthStatus(
                 model_id=self.model_id,
                 status=status,
@@ -373,6 +423,36 @@ class ModelMonitor:
                 metrics=metrics,
                 recommendations=recommendations
             )
+
+            # Log health status changes to tracker
+            if self.tracker and old_status != status:
+                try:
+                    self.tracker.log_metrics({
+                        'health_status_code': {'healthy': 0, 'warning': 1, 'critical': 2, 'error': 3, 'degraded': 4}.get(status, 0),
+                        'num_issues': len(issues),
+                        'daily_predictions': metrics.get('daily_predictions', 0),
+                        'feedback_rate': metrics.get('feedback_rate', 0.0)
+                    })
+
+                    # Send alert for status changes
+                    if status in ['critical', 'error']:
+                        self.tracker.log_alert(
+                            title=f"Model Health Status: {status.upper()}",
+                            text=f"Model {self.model_id} health status changed to {status}. "
+                                 f"Issues: {len(issues)}. Recommendations: {len(recommendations)}",
+                            level="error"
+                        )
+                    elif status == 'warning' and old_status == 'healthy':
+                        self.tracker.log_alert(
+                            title="Model Health Status: Warning",
+                            text=f"Model {self.model_id} health status changed to warning. "
+                                 f"Issues detected: {issues}",
+                            level="warning"
+                        )
+
+                    logger.info(f"Health status changed from {old_status} to {status} for model {self.model_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to log health status to tracker: {e}")
 
             return self.health_status
 
@@ -623,3 +703,54 @@ class ModelMonitor:
         except Exception as e:
             logger.warning(f"PSI calculation failed: {e}")
             return 0.0
+
+    def stop_monitoring(self) -> None:
+        """
+        Stop monitoring and finish the tracking run.
+
+        This method should be called when monitoring is complete to
+        properly close the experiment tracking run.
+        """
+        if self.tracker and self.monitor_run_id:
+            try:
+                # Log final summary
+                final_report = self.generate_report()
+                self.tracker.log_artifact_from_dict(final_report, f"final_monitoring_report_{self.model_id}")
+
+                # Finish the run
+                self.tracker.finish_run(exit_code=0)
+                logger.info(f"Finished monitoring run {self.monitor_run_id} for model {self.model_id}")
+                self.monitor_run_id = None
+            except Exception as e:
+                logger.warning(f"Failed to finish monitoring run: {e}")
+
+    def get_metrics_history(self) -> List[Dict[str, Any]]:
+        """
+        Get the historical metrics for dashboard visualization.
+
+        Returns:
+            List of historical metric dictionaries
+        """
+        return self.performance_history.copy()
+
+    def get_current_metrics(self) -> Dict[str, Any]:
+        """
+        Get current monitoring metrics for dashboard.
+
+        Returns:
+            Dictionary of current metrics
+        """
+        recent_predictions = [r for r in self.prediction_log
+                            if r.timestamp > datetime.now() - timedelta(days=1)]
+
+        return {
+            'model_id': self.model_id,
+            'health_status': self.health_status.status,
+            'last_check': self.health_status.last_check,
+            'daily_predictions': len(recent_predictions),
+            'total_predictions': len(self.prediction_log),
+            'issues_count': len(self.health_status.issues),
+            'recommendations_count': len(self.health_status.recommendations),
+            'baseline_metrics': self.baseline_metrics,
+            'current_metrics': self.performance_history[-1]['metrics'] if self.performance_history else {}
+        }

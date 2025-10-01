@@ -133,6 +133,19 @@ class ExperimentTrackerInterface(ABC):
         """
         pass
 
+    @abstractmethod
+    def update_run_status(self, status: str) -> None:
+        """
+        Update the status of the current run.
+
+        Args:
+            status: New status value (e.g., "running", "completed", "failed", "monitoring").
+
+        Raises:
+            ExperimentTrackingError: If status update fails.
+        """
+        pass
+
     def log_artifact_from_dict(self, data: Dict[str, Any], artifact_name: str) -> None:
         """
         Log a dictionary as an artifact.
@@ -296,6 +309,10 @@ class NullExperimentTracker(ExperimentTrackerInterface):
     def log_alert(self, title: str, text: str, level: str = "info") -> None:
         """Do nothing."""
         logger.debug(f"Null tracker: would log alert {title}: {text}")
+
+    def update_run_status(self, status: str) -> None:
+        """Do nothing."""
+        logger.debug(f"Null tracker: would update run status to {status}")
 
     def create_child_run(self, name: str, config: Optional[Dict[str, Any]] = None) -> 'NullExperimentTracker':
         """Return another null tracker."""

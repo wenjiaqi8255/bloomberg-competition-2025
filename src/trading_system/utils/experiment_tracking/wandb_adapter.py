@@ -276,6 +276,33 @@ class WandBExperimentTracker(ExperimentTrackerInterface):
         except Exception as e:
             self._handle_wandb_error("alert logging", e)
 
+    def update_run_status(self, status: str) -> None:
+        """Update the status of the current run."""
+        if self.wandb_logger is None:
+            logger.debug(f"Offline mode: would update run status to {status}")
+            return
+
+        try:
+            import wandb
+
+            # Log status as a metric
+            status_codes = {
+                "running": 0, "completed": 1, "failed": 2, "monitoring": 3,
+                "training": 4, "evaluation": 5, "optimization": 6, "backtest": 7
+            }
+            status_code = status_codes.get(status.lower(), 0)
+
+            wandb.log({
+                "run_status": status_code,
+                "run_status_name": status,
+                "status_timestamp": pd.Timestamp.now().isoformat()
+            })
+
+            logger.debug(f"Updated run status to {status}")
+
+        except Exception as e:
+            self._handle_wandb_error("status update", e)
+
     def create_child_run(self, name: str, config: Optional[Dict[str, Any]] = None) -> 'WandBExperimentTracker':
         """Create a child run for hierarchical experiment tracking."""
         try:
