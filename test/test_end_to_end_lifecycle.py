@@ -31,8 +31,10 @@ import warnings
 # Suppress warnings for cleaner output
 warnings.filterwarnings('ignore')
 
-# Add src to path
-sys.path.append(str(Path(__file__).parent / "src"))
+# Add src to path - 修正路径问题
+project_root = Path(__file__).parent.parent
+src_path = project_root / "src"
+sys.path.insert(0, str(src_path))
 
 import pandas as pd
 import numpy as np
@@ -99,6 +101,8 @@ class EndToEndLifecycleTest:
         for i, symbol in enumerate(self.test_symbols):
             # 生成日期序列
             dates = pd.date_range(start=self.start_date, end=self.end_date, freq='D')
+            # 只保留交易日（周一到周五）
+            dates = dates[dates.dayofweek < 5]
 
             # 生成合成价格数据
             n_days = len(dates)
@@ -122,17 +126,20 @@ class EndToEndLifecycleTest:
             # 创建OHLCV数据
             df = pd.DataFrame({
                 'date': dates,
-                'close': prices,
-                'open': prices * np.random.uniform(0.995, 1.005, n_days),
-                'high': prices * np.random.uniform(1.0, 1.02, n_days),
-                'low': prices * np.random.uniform(0.98, 1.0, n_days),
-                'volume': np.random.randint(1_000_000, 10_000_000, n_days)
+                'Close': prices,
+                'Open': prices * np.random.uniform(0.995, 1.005, n_days),
+                'High': prices * np.random.uniform(1.0, 1.02, n_days),
+                'Low': prices * np.random.uniform(0.98, 1.0, n_days),
+                'Volume': np.random.randint(1_000_000, 10_000_000, n_days)
             })
+
+            # 设置日期为索引，这对pipeline很重要
+            df = df.set_index('date')
 
             # 添加一些缺失值模拟真实数据
             missing_indices = np.random.choice(n_days, size=int(n_days * 0.02), replace=False)
             for idx in missing_indices:
-                df.loc[idx, 'volume'] = np.nan
+                df.iloc[idx, df.columns.get_loc('Volume')] = np.nan
 
             equity_data[symbol] = df
             logger.info(f"✅ 生成 {symbol} 数据: {len(df)} 行")
@@ -143,13 +150,12 @@ class EndToEndLifecycleTest:
 
         # 合成FF5因子 (基于历史统计特征)
         factor_data = pd.DataFrame({
-            'date': factor_dates,
             'MKT': np.random.normal(0.006, 0.045, n_factors),  # 市场因子
             'SMB': np.random.normal(0.002, 0.030, n_factors),  # 规模因子
             'HML': np.random.normal(0.001, 0.025, n_factors),  # 价值因子
             'RMW': np.random.normal(0.003, 0.020, n_factors),  # 盈利能力因子
             'CMA': np.random.normal(0.001, 0.015, n_factors)   # 投资因子
-        })
+        }, index=factor_dates)
 
         logger.info(f"✅ 生成因子数据: {len(factor_data)} 个月")
 
@@ -169,7 +175,7 @@ class EndToEndLifecycleTest:
 
             for symbol, data in self.equity_data.items():
                 assert len(data) > 200, f"{symbol} 应该有足够的数据点"
-                assert 'close' in data.columns, f"{symbol} 应该有收盘价数据"
+                assert 'Close' in data.columns, f"{symbol} 应该有收盘价数据"
 
             # 3. 验证测试环境
             assert self.test_dir.exists(), "测试目录应该存在"
@@ -189,10 +195,8 @@ class EndToEndLifecycleTest:
         try:
             # 1. 创建训练配置
             config = TrainingConfig(
-                use_cv=True,
+                use_cross_validation=True,
                 cv_folds=3,  # 减少折数以加快测试
-                test_size=0.2,
-                random_state=42,
                 early_stopping=True,
                 validation_split=0.2
             )
@@ -204,36 +208,48 @@ class EndToEndLifecycleTest:
                 registry_path=str(self.registry_path)
             )
 
-            # 3. 执行训练
+            # 3. 创建模拟数据提供者
+            from unittest.mock import Mock
+            mock_data_provider = Mock()
+            mock_data_provider.get_price_data.return_value = self.equity_data
+
+            # Factor data is already indexed by date
+            mock_data_provider.get_factor_data.return_value = self.factor_data
+
+            # 配置数据提供者
+            pipeline.configure_data(mock_data_provider)
+
+            # 4. 执行训练
             logger.info("开始训练残差预测模型...")
             start_time = datetime.now()
 
             self.training_result = pipeline.run_pipeline(
-                equity_data=self.equity_data,
-                factor_data=self.factor_data,
+                start_date=self.start_date,
+                end_date=self.end_date,
                 symbols=self.test_symbols,
                 model_name="test_residual_predictor"
             )
 
             training_time = (datetime.now() - start_time).total_seconds()
 
-            # 4. 验证训练结果
+            # 5. 验证训练结果
             assert self.training_result is not None, "训练结果不应为空"
-            assert 'model_id' in self.training_result, "应该包含模型ID"
-            assert 'metrics' in self.training_result, "应该包含训练指标"
+            assert 'pipeline_info' in self.training_result, "应该包含pipeline信息"
+            assert 'model_id' in self.training_result['pipeline_info'], "应该包含模型ID"
+            assert 'training_results' in self.training_result, "应该包含训练结果"
 
-            self.model_id = self.training_result['model_id']
+            self.model_id = self.training_result['pipeline_info']['model_id']
 
-            # 5. 验证训练时间合理 (不超过5分钟)
+            # 6. 验证训练时间合理 (不超过5分钟)
             assert training_time < 300, f"训练时间过长: {training_time:.2f}秒"
 
-            # 6. 验证模型文件已保存
+            # 7. 验证模型文件已保存
             model_path = self.registry_path / self.model_id
             assert model_path.exists(), f"模型目录应该存在: {model_path}"
             assert (model_path / "model.pkl").exists(), "模型文件应该存在"
             assert (model_path / "metadata.json").exists(), "元数据文件应该存在"
 
-            # 7. 验证元数据内容
+            # 8. 验证元数据内容
             with open(model_path / "metadata.json", 'r') as f:
                 metadata = json.load(f)
 
@@ -261,9 +277,9 @@ class EndToEndLifecycleTest:
             assert "residual_predictor" in available_models, "残差预测器应该已注册"
 
             # 2. 尝试加载模型
-            from trading_system.models.base.base_model import BaseModel
-
-            loaded_model = BaseModel.load(self.registry_path / self.model_id)
+            from trading_system.models.base.model_factory import ModelRegistry
+            model_registry = ModelRegistry(self.registry_path)
+            loaded_model = model_registry.load_model(self.model_id)
 
             # 3. 验证加载的模型
             assert loaded_model is not None, "加载的模型不应为空"
@@ -342,16 +358,70 @@ class EndToEndLifecycleTest:
         logger.info("\n🔮 阶段5: 预测测试")
 
         try:
-            # 1. 准备预测数据 (使用最新的数据)
+            # 1. 准备预测数据 (为predictor提供正确的格式)
             symbol = self.test_symbols[0]  # 使用AAPL
-            latest_data = self.equity_data[symbol].tail(30)  # 最近30天数据
 
-            # 2. 执行预测
-            prediction_result = self.predictor.predict(
-                market_data=latest_data,
-                symbol=symbol,
-                prediction_date=self.end_date
-            )
+            # 构造单个DataFrame，包含symbol列来区分不同股票的数据
+            # 使用完整的历史数据以确保能计算所有特征
+            combined_data = []
+            for s in self.test_symbols:
+                # 使用完整的历史数据，而不是最近60天
+                # 这样可以计算长期特征（如200日均线等）
+                symbol_data = self.equity_data[s].copy()
+
+                # 添加symbol列
+                symbol_data = symbol_data.reset_index()
+                symbol_data['symbol'] = s
+                combined_data.append(symbol_data)
+
+            # 合并所有数据
+            prediction_data = pd.concat(combined_data, ignore_index=True)
+
+            # 为残差预测器添加因子数据
+            # 残差预测器需要FF5因子数据（MKT, SMB, HML, RMW, CMA）
+            if hasattr(self.predictor, '_current_model') and self.predictor._current_model:
+                if hasattr(self.predictor._current_model, 'model_type') and self.predictor._current_model.model_type == "residual_predictor":
+                    logger.info("为残差预测器添加FF5因子数据...")
+
+                    # 重新索引因子数据到日频，使用前向填充
+                    factor_data_daily = self.factor_data.reindex(prediction_data['date'], method='ffill')
+
+                    # 将因子列添加到预测数据中
+                    for factor_col in ['MKT', 'SMB', 'HML', 'RMW', 'CMA']:
+                        if factor_col in factor_data_daily.columns:
+                            prediction_data[factor_col] = factor_data_daily[factor_col].values
+                        else:
+                            # 如果前向填充失败，使用最近的因子值
+                            prediction_data[factor_col] = self.factor_data[factor_col].iloc[-1]
+
+                    logger.info(f"已添加因子列: {['MKT', 'SMB', 'HML', 'RMW', 'CMA']}")
+                    logger.info(f"预测数据形状: {prediction_data.shape}")
+                    logger.info(f"预测数据列: {list(prediction_data.columns)}")
+
+            # 2. 执行预测 - 为所有符号创建预测（因为训练时使用了多符号特征）
+            logger.info("为残差预测器创建多符号预测数据...")
+
+            # 残差预测器训练时使用了所有符号的特征，所以预测时也需要提供所有符号的数据
+            all_symbol_results = {}
+            for s in self.test_symbols:
+                try:
+                    symbol_result = self.predictor.predict(
+                        market_data=prediction_data,
+                        symbol=s,
+                        prediction_date=self.end_date
+                    )
+                    all_symbol_results[s] = symbol_result
+                    logger.info(f"✅ {s} 预测成功: {symbol_result['prediction']:.6f}")
+                except Exception as e:
+                    logger.warning(f"⚠️ {s} 预测失败: {e}")
+                    continue
+
+            # 使用第一个成功的预测结果作为主要结果
+            if all_symbol_results:
+                prediction_result = all_symbol_results[symbol]  # 使用原始请求的符号
+                logger.info(f"使用 {symbol} 的预测结果作为主要结果")
+            else:
+                raise ValueError("所有符号的预测都失败了")
 
             # 3. 验证预测结果
             assert prediction_result is not None, "预测结果不应为空"
@@ -368,10 +438,9 @@ class EndToEndLifecycleTest:
             assert not np.isinf(prediction_value), "预测值不应该是无穷大"
             assert abs(prediction_value) < 1.0, f"预测值应该在合理范围内: {prediction_value}"
 
-            # 5. 测试批量预测
+            # 5. 测试批量预测 (使用相同的数据格式)
             batch_results = self.predictor.predict_batch(
-                market_data=pd.concat([df.tail(30) for df in self.equity_data.values()],
-                                    keys=self.test_symbols),
+                market_data=prediction_data,
                 symbols=self.test_symbols,
                 prediction_date=self.end_date
             )
@@ -423,8 +492,14 @@ class EndToEndLifecycleTest:
                 # 4. 验证监控指标
                 if health.metrics:
                     for metric_name, metric_value in health.metrics.items():
-                        assert isinstance(metric_value, (int, float)), \
-                            f"指标值应该是数值: {metric_name}={metric_value}"
+                        # 允许某些指标为字符串值
+                        string_metrics = {'performance_status'}
+                        if metric_name in string_metrics:
+                            assert isinstance(metric_value, str), \
+                                f"指标 {metric_name} 应该是字符串: {metric_value}={type(metric_value)}"
+                        else:
+                            assert isinstance(metric_value, (int, float)), \
+                                f"指标值应该是数值: {metric_name}={metric_value}"
 
             else:
                 logger.info("新模型暂无监控数据，这是正常的")
@@ -475,17 +550,29 @@ class EndToEndLifecycleTest:
                 symbols=self.test_symbols
             )
 
-            # 3. 创建策略实例
+            # 3. 创建策略实例 - 使用新的依赖注入模式
+            from trading_system.models.serving.predictor import ModelPredictor
+
+            # 首先创建并配置ModelPredictor
+            predictor = ModelPredictor(
+                model_registry_path=str(self.registry_path),
+                enable_monitoring=True,
+                cache_predictions=True
+            )
+
+            # 加载训练好的模型
+            model_id = predictor.load_model("residual_predictor")
+            logger.info(f"策略集成 - 加载模型: {model_id}")
+
+            # 使用依赖注入创建策略
             strategy = CoreFFMLStrategy(
+                model_predictor=predictor,
                 config=strategy_config,
                 backtest_config=backtest_config
             )
 
-            # 4. 手动设置模型的equity_data (简化测试)
-            strategy.equity_data = self.equity_data
-            strategy.factor_data = self.factor_data
-
-            # 5. 验证策略可以生成信号
+            # 4. 验证策略可以生成信号
+            # 注意：策略现在通过ModelPredictor自动获取数据，无需手动设置equity_data
             # 注意: 由于我们的模型预测可能不准确，这里主要测试流程是否正常
             try:
                 signals = strategy.generate_signals(self.end_date)

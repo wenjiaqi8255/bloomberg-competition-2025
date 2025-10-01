@@ -103,9 +103,9 @@ class CoreFFMLStrategy(BaseStrategy):
                 'end_date': merged_config.get('end_date', datetime(2023, 12, 31)),
                 'initial_capital': merged_config.get('initial_capital', 1000000),
                 'symbols': merged_config.get('symbols', ['SPY', 'QQQ', 'IWM', 'EFA', 'EEM']),
-                'rebalance_frequency': merged_config.get('rebalance_frequency', 30),
-                'transaction_cost': merged_config.get('transaction_cost', 0.001),
-                'slippage': merged_config.get('slippage', 0.0005)
+                'rebalance_frequency': merged_config.get('rebalance_frequency', 'monthly'),
+                'commission_rate': merged_config.get('transaction_cost', 0.001),  # Map transaction_cost to commission_rate
+                'spread_rate': merged_config.get('slippage', 0.0005)  # Map slippage to spread_rate
             }
 
             # Create config objects
@@ -963,7 +963,8 @@ class CoreFFMLStrategy(BaseStrategy):
                 'initial_capital': self.backtest_config.initial_capital,
                 'start_date': self.backtest_config.start_date.isoformat(),
                 'end_date': self.backtest_config.end_date.isoformat(),
-                'transaction_cost': self.backtest_config.transaction_cost
+                'commission_rate': self.backtest_config.commission_rate,
+                'total_cost_rate': self.backtest_config.total_cost_rate
             },
             'model_configuration': {
                 'model_id': self.model_id,
@@ -977,3 +978,7 @@ class CoreFFMLStrategy(BaseStrategy):
                 'frequency': 'monthly'
             }
         }
+
+    def get_strategy_summary(self) -> Dict[str, Any]:
+        """Get strategy summary information (alias for get_strategy_info)."""
+        return self.get_strategy_info()

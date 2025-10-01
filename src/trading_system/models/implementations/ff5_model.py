@@ -67,7 +67,9 @@ class FF5RegressionModel(BaseModel):
 
         # Initialize model components
         if self.regularization == 'ridge':
-            self._model = Ridge(alpha=self.alpha)
+            # Ensure alpha is always positive
+            positive_alpha = max(abs(float(self.alpha)), 1e-6)  # Ensure positive and not zero
+            self._model = Ridge(alpha=positive_alpha)
         else:
             self._model = LinearRegression()
 

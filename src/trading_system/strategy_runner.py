@@ -18,10 +18,49 @@ from .data.yfinance_provider import YFinanceProvider
 from .backtesting import BacktestEngine
 from .config.backtest import BacktestConfig
 from .strategies import DualMomentumStrategy, FamaFrench5Strategy, MLStrategy
+from .utils.experiment_tracking import (
+    ExperimentTrackerInterface,
+    ExperimentConfig,
+    NullExperimentTracker,
+    WandBExperimentTracker,
+    create_backtest_config
+)
 from .utils.wandb_logger import WandBLogger
 from .types import TradingSignal, SignalType
 
 logger = logging.getLogger(__name__)
+
+
+def create_strategy_runner(config_path: str = None,
+                          experiment_tracker: ExperimentTrackerInterface = None,
+                          use_wandb: bool = True) -> 'StrategyRunner':
+    """
+    Factory function to create StrategyRunner with desired experiment tracking.
+
+    Args:
+        config_path: Path to configuration file
+        experiment_tracker: Custom experiment tracker instance
+        use_wandb: Whether to use WandB tracker (ignored if experiment_tracker is provided)
+
+    Returns:
+        StrategyRunner instance with configured experiment tracking
+    """
+    if experiment_tracker is not None:
+        return StrategyRunner(config_path=config_path, experiment_tracker=experiment_tracker)
+
+    if use_wandb:
+        try:
+            wandb_tracker = WandBExperimentTracker(
+                project_name='bloomberg-competition',
+                fail_silently=True
+            )
+            return StrategyRunner(config_path=config_path, experiment_tracker=wandb_tracker)
+        except Exception:
+            logger.warning("Failed to create WandB tracker, using null tracker")
+
+    # Default to null tracker
+    null_tracker = NullExperimentTracker()
+    return StrategyRunner(config_path=config_path, experiment_tracker=null_tracker)
 
 
 class StrategyRunner:
@@ -36,12 +75,13 @@ class StrategyRunner:
     - Error handling and logging
     """
 
-    def __init__(self, config_path: str = None):
+    def __init__(self, config_path: str = None, experiment_tracker: ExperimentTrackerInterface = None):
         """
         Initialize strategy runner.
 
         Args:
             config_path: Path to configuration file
+            experiment_tracker: Experiment tracker instance (uses WandB if None)
         """
         if config_path:
             self.configs = ConfigFactory.load_all_configs(config_path)
@@ -53,7 +93,8 @@ class StrategyRunner:
         self.data_provider = None
         self.strategy = None
         self.backtest_engine = None
-        self.wandb_logger = None
+        self.experiment_tracker = experiment_tracker
+        self.wandb_logger = None  # Keep for backward compatibility
 
         # Results storage
         self.results = {}
@@ -150,12 +191,23 @@ class StrategyRunner:
             self.backtest_engine = BacktestEngine(backtest_config)
             logger.info(f"Initialized new BacktestEngine with ${backtest_config.initial_capital:,.0f} capital")
 
-            # Initialize WandB logger with defaults
-            self.wandb_logger = WandBLogger(
-                project_name='bloomberg-competition',
-                tags=[],
-                group=None
-            )
+            # Initialize experiment tracker with new interface
+            if self.experiment_tracker is None:
+                # Use WandB tracker by default, with fallback to null tracker
+                try:
+                    self.experiment_tracker = WandBExperimentTracker(
+                        project_name='bloomberg-competition',
+                        tags=[],
+                        group=None,
+                        fail_silently=True
+                    )
+                except Exception:
+                    logger.warning("WandB tracker initialization failed, using null tracker")
+                    self.experiment_tracker = NullExperimentTracker()
+
+            # Keep backward compatibility
+            if hasattr(self.experiment_tracker, 'wandb_logger'):
+                self.wandb_logger = self.experiment_tracker.wandb_logger
 
             self.is_initialized = True
             logger.info("Strategy runner initialized successfully")
@@ -184,16 +236,38 @@ class StrategyRunner:
         logger.info(f"Running strategy: {experiment_name}")
 
         try:
-            # Initialize WandB experiment
-            self.wandb_logger.initialize_experiment(
-                experiment_name=experiment_name,
-                notes='',
-                tags=[]
+            # Create experiment configuration
+            strategy_config = self.configs.get('strategy')
+            backtest_config = self.configs.get('backtest')
+
+            # Build hyperparameters from configs
+            hyperparameters = {}
+            if strategy_config:
+                hyperparameters.update(strategy_config.parameters or {})
+            if backtest_config:
+                hyperparameters.update({
+                    'initial_capital': backtest_config.initial_capital,
+                    'start_date': backtest_config.start_date,
+                    'end_date': backtest_config.end_date,
+                    'benchmark_symbol': backtest_config.benchmark_symbol
+                })
+
+            experiment_config = create_backtest_config(
+                project_name='bloomberg-competition',
+                strategy_name=self.strategy.get_name(),
+                strategy_config=hyperparameters,
+                tags=[strategy_config.strategy_type.value if strategy_config else 'unknown'],
+                group=None
             )
+            experiment_config.experiment_name = experiment_name
+
+            # Initialize experiment with new interface
+            run_id = self.experiment_tracker.init_run(experiment_config)
+            logger.info(f"Started experiment run: {run_id}")
 
             # Log configuration summary
             config_summary = {name: config.get_summary() for name, config in self.configs.items()}
-            self.wandb_logger.log_config(config_summary)
+            self.experiment_tracker.log_params(config_summary)
 
             # Step 1: Get asset universe from strategy config
             strategy_config = self.configs.get('strategy')
@@ -211,7 +285,7 @@ class StrategyRunner:
 
             # Log data statistics
             data_stats = self._calculate_data_statistics(price_data)
-            self.wandb_logger.log_dataset_info(data_stats)
+            self.experiment_tracker.log_dataset_info(data_stats)
 
             # Step 3: Generate strategy signals
             strategy_signals = self.strategy.generate_signals(
@@ -229,11 +303,12 @@ class StrategyRunner:
                 benchmark_data=benchmark_data
             )
 
-            # Step 5: Log performance to WandB (adapted for new architecture)
+            # Step 5: Log performance to experiment tracker
             portfolio_history = backtest_results.portfolio_values if hasattr(backtest_results, 'portfolio_values') else backtest_results.get('portfolio_history')
             if portfolio_history is not None:
-                self.wandb_logger.log_portfolio_performance(
-                    portfolio_df=portfolio_history.to_frame('portfolio_value') if hasattr(portfolio_history, 'to_frame') else portfolio_history,
+                portfolio_df = portfolio_history.to_frame('portfolio_value') if hasattr(portfolio_history, 'to_frame') else portfolio_history
+                self.experiment_tracker.log_portfolio_performance(
+                    portfolio_df=portfolio_df,
                     benchmark_df=benchmark_data
                 )
 
@@ -242,18 +317,18 @@ class StrategyRunner:
             if trades:
                 trades_df = self._process_trades_to_dataframe(trades)
                 if not trades_df.empty:
-                    self.wandb_logger.log_trades(trades_df)
+                    self.experiment_tracker.log_trades(trades_df)
 
             # Step 7: Calculate and log risk metrics
             risk_metrics = self.strategy.calculate_risk_metrics(price_data, strategy_signals)
             if risk_metrics:
-                self.wandb_logger.log_metrics(risk_metrics)
+                self.experiment_tracker.log_metrics(risk_metrics)
 
             # Step 8: Log strategy-specific metrics
             strategy_metrics = self._calculate_strategy_specific_metrics(
                 strategy_signals, price_data, backtest_results
             )
-            self.wandb_logger.log_metrics(strategy_metrics)
+            self.experiment_tracker.log_metrics(strategy_metrics)
 
             # Compile final results (adapted for new architecture)
             self.results = {
@@ -483,6 +558,9 @@ class StrategyRunner:
 
     def cleanup(self):
         """Clean up resources."""
+        if self.experiment_tracker:
+            self.experiment_tracker.finish_run()
+        # Backward compatibility
         if self.wandb_logger:
             self.wandb_logger.finish_experiment()
 

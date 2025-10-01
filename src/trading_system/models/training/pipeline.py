@@ -216,7 +216,27 @@ class TrainingPipeline:
             # Use default configuration
             result = compute_technical_features(price_data)
 
-        return result.features
+        features = result.features
+
+        # For residual_predictor, we need to add factor features
+        if self.model_type == "residual_predictor":
+            # Get factor data that was already loaded in _load_data
+            factor_data = self.data_provider.get_factor_data(None, None)  # Should return cached data
+
+            if not factor_data.empty:
+                # Reindex factor data to match features
+                factor_features = factor_data.reindex(features.index)
+
+                # Forward fill factor data (usually monthly, need to fill daily)
+                factor_features = factor_features.ffill().bfill()
+
+                # Combine technical features with factor features
+                features = pd.concat([features, factor_features], axis=1)
+                logger.info(f"Added {len(factor_features.columns)} factor features: {list(factor_features.columns)}")
+            else:
+                logger.warning("No factor data available for residual_predictor")
+
+        return features
 
     def _prepare_training_data(self,
                               features: pd.DataFrame,
@@ -231,26 +251,66 @@ class TrainingPipeline:
         Returns:
             Tuple of (X, y) for training
         """
-        # Combine target data into a single Series
-        all_targets = []
-        for symbol, target_series in target_data.items():
-            target_series.name = symbol
-            all_targets.append(target_series)
+        logger.info(f"Features shape: {features.shape}")
+        logger.info(f"Features index sample: {features.index[:5].tolist()}")
+        logger.info(f"Available symbols in target data: {list(target_data.keys())}")
 
-        if not all_targets:
-            raise ValueError("No target data available")
+        # For debugging, check one symbol's target data
+        if target_data:
+            first_symbol = list(target_data.keys())[0]
+            first_target = target_data[first_symbol]
+            logger.info(f"First symbol '{first_symbol}' target shape: {first_target.shape}")
+            logger.info(f"First symbol target index sample: {first_target.index[:5].tolist()}")
 
-        y = pd.concat(all_targets).dropna()
+        # The issue is that features and targets use different indexing schemes
+        # Features use a multi-index (symbol-level) while targets are concatenated
+        # Let's create proper alignment by rebuilding targets with the same structure as features
 
-        # Align features with targets
-        X = features.loc[y.index].dropna()
+        # First, check if features have a multi-index structure (symbol-date)
+        if isinstance(features.index, pd.MultiIndex):
+            logger.info("Features have MultiIndex, aligning targets accordingly")
+
+            # Rebuild target data to match feature structure
+            all_targets = []
+            for symbol, target_series in target_data.items():
+                if symbol in features.index.get_level_values(0):
+                    # Create MultiIndex entries for this symbol
+                    symbol_indices = features.index.get_level_values(0) == symbol
+                    symbol_dates = features.index[symbol_indices].get_level_values(1)
+
+                    # Align target series with these dates
+                    aligned_target = target_series.reindex(symbol_dates)
+                    aligned_target.index = pd.MultiIndex.from_product(
+                        [[symbol], symbol_dates],
+                        names=['symbol', 'date']
+                    )
+                    all_targets.append(aligned_target)
+
+            if all_targets:
+                y = pd.concat(all_targets).dropna()
+                X = features.loc[y.index].dropna()
+            else:
+                raise ValueError("No matching symbols between features and targets")
+        else:
+            # Use the original approach for single-index features
+            all_targets = []
+            for symbol, target_series in target_data.items():
+                target_series.name = symbol
+                all_targets.append(target_series)
+
+            y = pd.concat(all_targets).dropna()
+            X = features.loc[y.index].dropna()
 
         # Ensure alignment
         common_index = X.index.intersection(y.index)
         X = X.loc[common_index]
         y = y.loc[common_index]
 
-        logger.info(f"Prepared training data: {len(X)} samples, {len(X.columns)} features")
+        logger.info(f"After alignment - training data: {len(X)} samples, {len(X.columns)} features")
+
+        if len(X) == 0:
+            raise ValueError("No training samples after alignment. Check data structure and index compatibility.")
+
         return X, y
 
     def _generate_pipeline_report(self,
@@ -281,7 +341,7 @@ class TrainingPipeline:
                 'symbols': list(price_data.keys()),
                 'price_data_points': sum(len(df) for df in price_data.values()),
                 'feature_count': len(features.columns),
-                'training_samples': len(training_result.model.metadata.training_samples)
+                'training_samples': training_result.model.metadata.training_samples
             },
             'training_results': training_result.get_summary(),
             'model_info': {

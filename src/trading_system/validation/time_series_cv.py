@@ -115,6 +115,77 @@ class TimeSeriesCV:
     - validate_model(): Comprehensive model validation
     """
 
+    def __init__(self, method='purged', n_splits=5, purge_period=5, embargo_period=2):
+        """
+        Initialize TimeSeriesCV with default parameters.
+
+        Parameters:
+        -----------
+        method : str
+            Validation method ('purged', 'expanding', 'walk_forward')
+        n_splits : int
+            Number of splits to generate
+        purge_period : int
+            Number of periods to purge between train and test
+        embargo_period : int
+            Number of periods to embargo after test set
+        """
+        self.method = method
+        self.n_splits = n_splits
+        self.purge_period = purge_period
+        self.embargo_period = embargo_period
+
+    def split(self, X, y=None, groups=None):
+        """
+        Generate cross-validation splits.
+
+        This method provides a unified interface that delegates to the appropriate
+        static method based on the configured validation method.
+
+        Parameters:
+        -----------
+        X : array-like
+            Training data
+        y : array-like, optional
+            Target variable (not used)
+        groups : array-like, optional
+            Group labels (not used)
+
+        Yields:
+        -------
+        train_idx : ndarray
+            Training set indices
+        test_idx : ndarray
+            Test set indices
+        """
+        if self.method == 'purged':
+            yield from self.purged_split(
+                X,
+                n_splits=self.n_splits,
+                purge_period=self.purge_period,
+                embargo_period=self.embargo_period
+            )
+        elif self.method == 'expanding':
+            yield from self.expanding_window_split(
+                X,
+                n_splits=self.n_splits,
+                purge_period=self.purge_period
+            )
+        elif self.method == 'walk_forward':
+            # For walk-forward, we need datetime index
+            if not hasattr(X, 'index'):
+                raise ValueError("Walk-forward requires datetime index")
+            for split_data in self.walk_forward_split(X, purge_period=self.purge_period):
+                # walk_forward_split yields 6 items, we need the last 2
+                _, _, _, _, train_idx, test_idx = split_data
+                yield train_idx, test_idx
+        else:
+            raise ValueError(f"Unknown validation method: {self.method}")
+
+    def get_n_splits(self, X=None, y=None, groups=None):
+        """Returns the number of splitting iterations in the cross-validator"""
+        return self.n_splits
+
     @staticmethod
     def purged_split(X, n_splits=5, purge_period=5, embargo_period=2) -> Generator[Tuple[np.ndarray, np.ndarray], None, None]:
         """
