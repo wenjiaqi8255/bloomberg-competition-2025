@@ -1,0 +1,57 @@
+# Fama-French 5-Factor Strategy Configuration
+# ============================================
+# This configuration demonstrates the Fama-French 5-factor model setup.
+
+strategy:
+  type: fama_french_5
+  name: FamaFrench5Factor
+  
+  # Strategy-specific parameters
+  lookback_days: 252         # Lookback period for factor calculation
+  risk_free_rate: 0.02       # Risk-free rate (annual)
+  
+  # Factor weights (must sum to 1.0)
+  factor_weights:
+    MKT: 0.30   # Market factor (excess returns)
+    SMB: 0.15   # Size factor (Small Minus Big)
+    HML: 0.20   # Value factor (High Minus Low)
+    RMW: 0.20   # Profitability factor (Robust Minus Weak)
+    CMA: 0.15   # Investment factor (Conservative Minus Aggressive)
+  
+  # Position sizing and risk management
+  position_sizing:
+    volatility_target: 0.15      # Target portfolio volatility
+    max_position_weight: 0.10    # Maximum weight per position
+    
+  # Rebalancing
+  rebalance_frequency: monthly
+
+# Backtest configuration
+backtest:
+  start_date: "2020-01-01"
+  end_date: "2023-12-31"
+  initial_capital: 1000000
+  
+  # Transaction costs
+  costs:
+    commission: 0.001
+    slippage: 0.0005
+
+# Universe configuration
+universe:
+  - AAPL
+  - MSFT
+  - GOOGL
+  - AMZN
+  - META
+  - TSLA
+  - NVDA
+  - JPM
+  - V
+  - WMT
+  - JNJ
+  - PG
+  - UNH
+  - HD
+  - BAC
+

@@ -1,0 +1,65 @@
+# Model Configuration Example
+# This file shows how to configure model training and loading in the pipelines
+
+strategy:
+  name: "MLStrategy"
+  model_type: "xgboost"  # "xgboost", "lightgbm", or "random_forest"
+
+# Model training and loading configuration
+model:
+  # Training settings
+  train_ff5_model: true
+  train_residual_model: true
+  require_ff5_model: false  # Set to true if FF5 model is required
+  require_residual_model: false  # Set to true if residual model is required
+
+  # Model loading settings
+  load_ff5_model: true
+  load_residual_model: true
+  ff5_model_name: "ff5_regression_model"  # Custom name for FF5 model file
+  residual_model_name: "residual_prediction_model_xgboost"  # Custom name for residual model file
+
+  # Model persistence
+  save_model: true
+  model_path: "./models/"
+  model_versioning: true
+
+# Asset universe configuration
+universe:
+  all_assets:
+    - "SPY"    # S&P 500
+    - "QQQ"    # Nasdaq 100
+    - "IWM"    # Russell 2000
+    - "DIA"    # Dow Jones
+    - "VTI"    # Total Stock Market
+    - "EFA"    # MSCI EAFE
+    - "EEM"    # MSCI Emerging Markets
+    - "AGG"    # Aggregate Bond ETF
+    - "LQD"    # Investment Grade Corporate Bonds
+    - "SHY"    # Short-term Treasury
+
+# Backtest configuration
+backtest:
+  initial_capital: 1000000    # $1M initial capital
+  transaction_cost: 0.001     # 0.1% transaction cost
+  benchmark_symbol: "SPY"     # Benchmark for comparison
+  start_date: "2018-01-01"
+  end_date: "2024-12-31"
+
+# Data configuration
+data:
+  provider: "yfinance"
+  min_data_points: 252
+  fill_method: "forward_fill"
+
+# Risk management
+risk_management:
+  max_portfolio_volatility: 0.15    # 15% max volatility
+  stop_loss_threshold: 0.15        # 15% stop loss
+  drawdown_threshold: 0.20          # 20% maximum drawdown
+
+# Experiment configuration
+experiment:
+  project_name: "bloomberg-competition"
+  tags: ["ml-strategy", "portfolio-construction"]
+  group: "portfolio-pipelines"

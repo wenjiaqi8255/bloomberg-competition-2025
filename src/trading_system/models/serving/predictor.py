@@ -17,7 +17,7 @@ Key Features:
 import logging
 import numpy as np
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List, Union
 from pathlib import Path
 import uuid
@@ -60,16 +60,27 @@ class ModelPredictor:
     """
 
     def __init__(self,
+                 model_id: Optional[str] = None,
+                 model_path: Optional[str] = None,
+                 model_instance: Optional[BaseModel] = None,
                  model_registry_path: Optional[str] = None,
                  enable_monitoring: bool = True,
                  cache_predictions: bool = True,
                  data_provider=None,
                  ff5_provider=None):
         """
-        Initialize the model predictor with optional data providers.
+        Initialize the model predictor with flexible model loading.
+
+        Three ways to initialize:
+        1. model_id: Create a new model instance from ModelFactory
+        2. model_path: Load a trained model from disk
+        3. model_instance: Directly inject a model instance
 
         Args:
-            model_registry_path: Path to model registry directory
+            model_id: Model type identifier to create from ModelFactory (e.g., 'ff5_regression')
+            model_path: Path to saved model directory
+            model_instance: Pre-initialized model instance
+            model_registry_path: Path to model registry directory (for backward compatibility)
             enable_monitoring: Whether to enable prediction monitoring
             cache_predictions: Whether to cache recent predictions
             data_provider: Optional data provider for price data
@@ -104,7 +115,23 @@ class ModelPredictor:
             logger.info("No data providers provided - initializing default providers for self-contained operation")
             self._initialize_default_providers()
 
-        logger.info("ModelPredictor initialized with data acquisition capabilities")
+        # Auto-load model if provided during initialization
+        if model_instance is not None:
+            # Mode 3: Direct model injection
+            self._current_model = model_instance
+            self._current_model_id = f"{model_instance.model_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            logger.info(f"ModelPredictor initialized with injected model: {self._current_model_id}")
+            self._initialize_monitoring()
+        elif model_path is not None:
+            # Mode 2: Load from path
+            self.load_model(model_name="from_path", model_path=model_path)
+            logger.info(f"ModelPredictor initialized by loading model from: {model_path}")
+        elif model_id is not None:
+            # Mode 1: Create from factory
+            self.load_model(model_name=model_id)
+            logger.info(f"ModelPredictor initialized by creating model: {model_id}")
+        else:
+            logger.info("ModelPredictor initialized without model (model must be loaded later)")
 
     @property
     def model_id(self) -> Optional[str]:
@@ -126,6 +153,17 @@ class ModelPredictor:
         except ImportError as e:
             logger.warning(f"Failed to initialize default providers: {e}")
             logger.warning("ModelPredictor will require external market_data for predictions")
+
+    def _initialize_monitoring(self):
+        """Initialize model monitoring if enabled."""
+        if self._enable_monitoring and self._current_model_id:
+            try:
+                from .monitor import ModelMonitor
+                self._monitor = ModelMonitor(self._current_model_id)
+                logger.info(f"Model monitoring initialized for {self._current_model_id}")
+            except ImportError as e:
+                logger.warning(f"Model monitoring not available: {e}")
+                self._monitor = None
 
     def predict(self,
                 market_data: Optional[pd.DataFrame] = None,
@@ -309,87 +347,6 @@ class ModelPredictor:
         with self._model_lock:
             return self._current_model_id
 
-    def predict(self,
-                market_data: pd.DataFrame,
-                symbol: str,
-                prediction_date: datetime,
-                features: Optional[pd.DataFrame] = None) -> Dict[str, float]:
-        """
-        Make prediction for a single symbol.
-
-        Args:
-            market_data: Market data DataFrame
-            symbol: Symbol to predict for
-            prediction_date: Date for prediction
-            features: Optional pre-computed features
-
-        Returns:
-            Dictionary with prediction results
-
-        Raises:
-            PredictionError: If prediction fails
-        """
-        if self._current_model is None:
-            raise PredictionError("No model loaded")
-
-        try:
-            # Prepare features if not provided
-            if features is None:
-                features = self._prepare_features(market_data, symbol, prediction_date)
-
-            # Make prediction
-            prediction = self._current_model.predict(features)
-
-            # Handle different prediction formats
-            if isinstance(prediction, np.ndarray):
-                if prediction.ndim == 0:
-                    prediction_value = float(prediction)
-                elif len(prediction) == 1:
-                    prediction_value = float(prediction[0])
-                else:
-                    # For multi-output, take the first one
-                    prediction_value = float(prediction[0])
-            else:
-                prediction_value = float(prediction)
-
-            result = {
-                'symbol': symbol,
-                'prediction': prediction_value,
-                'prediction_date': prediction_date,
-                'model_id': self._current_model_id,
-                'timestamp': datetime.now()
-            }
-
-            # Log prediction for monitoring
-            if self._monitor:
-                prediction_record = PredictionRecord(
-                    timestamp=datetime.now(),
-                    model_id=self._current_model_id,
-                    prediction_id=str(uuid.uuid4()),
-                    features=features.iloc[-1].to_dict() if len(features) > 0 else {},
-                    prediction=prediction_value,
-                    metadata={
-                        'symbol': symbol,
-                        'prediction_date': prediction_date.isoformat()
-                    }
-                )
-                self._monitor.log_prediction(
-                    features=prediction_record.features,
-                    prediction=prediction_record.prediction,
-                    confidence=prediction_record.confidence,
-                    metadata=prediction_record.metadata
-                )
-
-            # Cache prediction if enabled
-            if self.cache_predictions:
-                self._cache_prediction(symbol, prediction_date, result)
-
-            return result
-
-        except Exception as e:
-            logger.error(f"Prediction failed for {symbol}: {e}")
-            raise PredictionError(f"Prediction failed for {symbol}: {e}")
-
     def predict_batch(self,
                      market_data: pd.DataFrame,
                      symbols: List[str],
@@ -497,7 +454,7 @@ class ModelPredictor:
             Features DataFrame
         """
         try:
-            # Check if model needs factor data (FF5) or technical features
+            # Check if model needs factor data (FF5)
             if hasattr(self._current_model, 'model_type'):
                 if self._current_model.model_type == "ff5_regression":
                     # For FF5 model, use factor columns directly
@@ -505,9 +462,6 @@ class ModelPredictor:
                     if all(col in market_data.columns for col in factor_columns):
                         # Return the most recent row of factor data
                         return market_data[factor_columns].iloc[[-1]]
-                elif self._current_model.model_type == "residual_predictor":
-                    # For residual predictor, we need both technical features AND factor data
-                    return self._prepare_residual_predictor_features(market_data, symbol, prediction_date)
 
             # For technical feature models, use feature engineering
             # Filter data for the symbol
@@ -645,111 +599,6 @@ class ModelPredictor:
         """
         return list(ModelFactory._registry.keys())
 
-    def _prepare_residual_predictor_features(self,
-                                           market_data: pd.DataFrame,
-                                           symbol: str,
-                                           prediction_date: datetime) -> pd.DataFrame:
-        """
-        Prepare features for residual predictor model.
-
-        The residual predictor needs both technical features (from OHLCV data)
-        and factor features (FF5 factors).
-
-        Args:
-            market_data: Market data DataFrame with OHLCV + factor columns
-            symbol: Symbol to prepare features for
-            prediction_date: Date for prediction
-
-        Returns:
-            Combined features DataFrame
-        """
-        try:
-            # Filter data for the symbol
-            if 'symbol' in market_data.columns:
-                symbol_data = market_data[market_data['symbol'] == symbol].copy()
-            else:
-                # Assume this is already price data for the symbol
-                symbol_data = market_data.copy()
-
-            # Sort by date
-            if 'date' in symbol_data.columns:
-                symbol_data = symbol_data.sort_values('date')
-
-            # Standardize column names to match feature engineering expectations
-            column_mapping = {
-                'open': 'Open',
-                'high': 'High',
-                'low': 'Low',
-                'close': 'Close',
-                'volume': 'Volume'
-            }
-            symbol_data = symbol_data.rename(columns=column_mapping)
-
-            # Ensure we have all required OHLCV columns
-            required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
-            for col in required_columns:
-                if col not in symbol_data.columns:
-                    # Create missing columns from Close price as fallback
-                    if col == 'Volume':
-                        symbol_data[col] = 1_000_000  # Default volume
-                    else:
-                        symbol_data[col] = symbol_data['Close']
-
-            # Step 1: Compute technical features using feature engine
-            from ...feature_engineering.models.data_types import PriceData
-
-            # For residual predictor, we need features for all symbols that were in training
-            # Extract all symbols from market_data
-            all_symbols_in_data = market_data['symbol'].unique() if 'symbol' in market_data.columns else [symbol]
-
-            # Create price data for all symbols
-            price_data = {}
-            for s in all_symbols_in_data:
-                s_data = market_data[market_data['symbol'] == s].copy()
-                if 'date' in s_data.columns:
-                    s_data = s_data.set_index('date')
-                price_data[s] = s_data.sort_index()
-
-            # Compute features
-            feature_result = self._feature_engine.compute_features(price_data)
-            technical_features = feature_result.features
-
-            logger.info(f"Computed technical features shape: {technical_features.shape}")
-            logger.info(f"Technical features columns sample: {list(technical_features.columns)[:10]}")
-
-            if len(technical_features) == 0:
-                raise ValueError(f"No technical features computed for symbols {all_symbols_in_data}")
-
-            # Step 2: Get factor features from the original market data
-            factor_columns = ['MKT', 'SMB', 'HML', 'RMW', 'CMA']
-            factor_data = {}
-
-            for factor_col in factor_columns:
-                if factor_col in symbol_data.columns:
-                    # Get the most recent factor value
-                    factor_data[factor_col] = symbol_data[factor_col].iloc[-1]
-                else:
-                    logger.warning(f"Factor column {factor_col} not found in market data")
-                    factor_data[factor_col] = 0.0  # Default value
-
-            # Step 3: Combine technical and factor features
-            # Create factor features DataFrame with matching index
-            factor_features = pd.DataFrame([factor_data], index=technical_features.index)
-
-            # Combine features
-            combined_features = pd.concat([technical_features, factor_features], axis=1)
-
-            logger.info(f"Prepared residual predictor features: {combined_features.shape}")
-            logger.info(f"Technical features: {len(technical_features.columns)}")
-            logger.info(f"Factor features: {len(factor_features.columns)}")
-            logger.info(f"Total features: {len(combined_features.columns)}")
-
-            # Return the most recent combined features
-            return combined_features.iloc[[-1]]
-
-        except Exception as e:
-            logger.error(f"Failed to prepare residual predictor features for {symbol}: {e}")
-            raise ValueError(f"Failed to prepare residual predictor features for {symbol}: {e}")
 
     def _prepare_features_with_data_acquisition(self,
                                                 market_data: Optional[pd.DataFrame],
@@ -798,29 +647,9 @@ class ModelPredictor:
 
             price_data = price_data_dict[symbol]
 
-            # Fetch factor data if needed (for residual predictor)
-            if (hasattr(self._current_model, 'model_type') and
-                self._current_model.model_type == "residual_predictor"):
-
-                if self._ff5_provider is None:
-                    raise PredictionError("FF5 provider not available for residual predictor")
-
-                factor_data = self._ff5_provider.get_factor_data(start_date, end_date)
-
-                # Prepare market_data with both price and factor data
-                market_data_auto = price_data.copy()
-                market_data_auto['symbol'] = symbol
-
-                # Add factor data if available
-                if not factor_data.empty:
-                    # Reindex factor data to match price data dates
-                    factor_data_aligned = factor_data.reindex(market_data_auto.index, method='ffill')
-                    for col in factor_data_aligned.columns:
-                        market_data_auto[col] = factor_data_aligned[col]
-            else:
-                # For non-residual models, just use price data
-                market_data_auto = price_data.copy()
-                market_data_auto['symbol'] = symbol
+            # Prepare market_data
+            market_data_auto = price_data.copy()
+            market_data_auto['symbol'] = symbol
 
             # Use the existing feature preparation logic
             return self._prepare_features(market_data_auto, symbol, prediction_date)

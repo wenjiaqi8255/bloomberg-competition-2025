@@ -13,8 +13,8 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass
 from enum import Enum
 
-from ..types.portfolio import Portfolio, Position
-from ..types.enums import AssetClass
+from ...types.portfolio import Portfolio, Position
+from ...types.enums import AssetClass
 
 logger = logging.getLogger(__name__)
 
@@ -51,13 +51,25 @@ class ComplianceRule:
 
 
 @dataclass
+class StrategyAllocationRule:
+    """Allocation rule for a single strategy."""
+    strategy_name: str
+    min_weight: float
+    max_weight: float
+
+
+@dataclass
 class ComplianceRules:
-    """Complete set of compliance rules."""
-    # Allocation rules
-    core_min_weight: float = 0.70
-    core_max_weight: float = 0.80
-    satellite_min_weight: float = 0.20
-    satellite_max_weight: float = 0.30
+    """
+    Complete set of compliance rules - supports flexible strategy allocations.
+    
+    Instead of hardcoded core/satellite rules, uses a list of strategy allocation rules
+    that can be configured for any number of strategies.
+    """
+    # Strategy allocation rules - flexible for multiple strategies
+    strategy_allocation_rules: List[StrategyAllocationRule] = None
+    
+    # Cash allocation rules
     cash_min_weight: float = 0.00
     cash_max_weight: float = 0.10
 
@@ -84,6 +96,38 @@ class ComplianceRules:
     # Liquidity rules
     min_liquidity_score: float = 0.7  # Minimum portfolio liquidity
     max_illiquid_allocation: float = 0.10  # Max allocation to illiquid assets
+    
+    def __post_init__(self):
+        """Initialize default strategy allocation rules if not provided."""
+        if self.strategy_allocation_rules is None:
+            self.strategy_allocation_rules = []
+    
+    @classmethod
+    def create_core_satellite(cls, 
+                             core_min: float = 0.70, 
+                             core_max: float = 0.80,
+                             satellite_min: float = 0.20, 
+                             satellite_max: float = 0.30,
+                             core_name: str = "core",
+                             satellite_name: str = "satellite") -> 'ComplianceRules':
+        """
+        Factory method to create traditional core-satellite compliance rules.
+        Provides backward compatibility with the old hardcoded approach.
+        """
+        return cls(
+            strategy_allocation_rules=[
+                StrategyAllocationRule(
+                    strategy_name=core_name,
+                    min_weight=core_min,
+                    max_weight=core_max
+                ),
+                StrategyAllocationRule(
+                    strategy_name=satellite_name,
+                    min_weight=satellite_min,
+                    max_weight=satellite_max
+                )
+            ]
+        )
 
 
 @dataclass
@@ -268,55 +312,35 @@ class ComplianceMonitor:
             sector = getattr(position, 'sector', 'unknown')
             sector_values[sector] = sector_values.get(sector, 0) + weight
 
-        # Check core allocation
-        core_weight = strategy_values.get('core', 0)
-        if core_weight < self.rules.core_min_weight:
-            violations.append(ComplianceRule(
-                name="Core Allocation Minimum",
-                violation_type=ViolationType.ALLOCATION_OUT_OF_BOUNDS,
-                description=f"Core allocation below minimum",
-                threshold_value=self.rules.core_min_weight,
-                current_value=core_weight,
-                status=ComplianceStatus.VIOLATION,
-                recommendation="Increase core allocation to meet minimum requirement",
-                severity="high"
-            ))
-        elif core_weight > self.rules.core_max_weight:
-            violations.append(ComplianceRule(
-                name="Core Allocation Maximum",
-                violation_type=ViolationType.ALLOCATION_OUT_OF_BOUNDS,
-                description=f"Core allocation above maximum",
-                threshold_value=self.rules.core_max_weight,
-                current_value=core_weight,
-                status=ComplianceStatus.VIOLATION,
-                recommendation="Reduce core allocation to meet maximum limit",
-                severity="high"
-            ))
-
-        # Check satellite allocation
-        satellite_weight = strategy_values.get('satellite', 0)
-        if satellite_weight < self.rules.satellite_min_weight:
-            violations.append(ComplianceRule(
-                name="Satellite Allocation Minimum",
-                violation_type=ViolationType.ALLOCATION_OUT_OF_BOUNDS,
-                description=f"Satellite allocation below minimum",
-                threshold_value=self.rules.satellite_min_weight,
-                current_value=satellite_weight,
-                status=ComplianceStatus.WARNING,
-                recommendation="Consider increasing satellite allocation",
-                severity="medium"
-            ))
-        elif satellite_weight > self.rules.satellite_max_weight:
-            violations.append(ComplianceRule(
-                name="Satellite Allocation Maximum",
-                violation_type=ViolationType.ALLOCATION_OUT_OF_BOUNDS,
-                description=f"Satellite allocation above maximum",
-                threshold_value=self.rules.satellite_max_weight,
-                current_value=satellite_weight,
-                status=ComplianceStatus.VIOLATION,
-                recommendation="Reduce satellite allocation to meet maximum limit",
-                severity="high"
-            ))
+        # Check strategy allocations based on configured rules
+        for strategy_rule in self.rules.strategy_allocation_rules:
+            strategy_weight = strategy_values.get(strategy_rule.strategy_name, 0)
+            
+            # Check minimum allocation
+            if strategy_weight < strategy_rule.min_weight:
+                violations.append(ComplianceRule(
+                    name=f"{strategy_rule.strategy_name} Allocation Minimum",
+                    violation_type=ViolationType.ALLOCATION_OUT_OF_BOUNDS,
+                    description=f"{strategy_rule.strategy_name} allocation below minimum",
+                    threshold_value=strategy_rule.min_weight,
+                    current_value=strategy_weight,
+                    status=ComplianceStatus.VIOLATION,
+                    recommendation=f"Increase {strategy_rule.strategy_name} allocation to meet minimum requirement",
+                    severity="high"
+                ))
+            
+            # Check maximum allocation
+            elif strategy_weight > strategy_rule.max_weight:
+                violations.append(ComplianceRule(
+                    name=f"{strategy_rule.strategy_name} Allocation Maximum",
+                    violation_type=ViolationType.ALLOCATION_OUT_OF_BOUNDS,
+                    description=f"{strategy_rule.strategy_name} allocation above maximum",
+                    threshold_value=strategy_rule.max_weight,
+                    current_value=strategy_weight,
+                    status=ComplianceStatus.VIOLATION,
+                    recommendation=f"Reduce {strategy_rule.strategy_name} allocation to meet maximum limit",
+                    severity="high"
+                ))
 
         # Check sector allocations
         for sector, sector_weight in sector_values.items():
@@ -647,22 +671,36 @@ class ComplianceMonitor:
         """Validate compliance rules for consistency."""
         issues = []
 
-        # Check allocation bounds
-        if self.rules.core_min_weight >= self.rules.core_max_weight:
-            issues.append("Core allocation bounds are invalid")
-
-        if self.rules.satellite_min_weight >= self.rules.satellite_max_weight:
-            issues.append("Satellite allocation bounds are invalid")
+        # Check strategy allocation bounds
+        min_total = 0.0
+        max_total = 0.0
+        
+        for strategy_rule in self.rules.strategy_allocation_rules:
+            # Check individual strategy bounds
+            if strategy_rule.min_weight >= strategy_rule.max_weight:
+                issues.append(
+                    f"Strategy '{strategy_rule.strategy_name}' allocation bounds are invalid: "
+                    f"min={strategy_rule.min_weight:.1%} >= max={strategy_rule.max_weight:.1%}"
+                )
+            
+            if strategy_rule.min_weight < 0 or strategy_rule.max_weight > 1:
+                issues.append(
+                    f"Strategy '{strategy_rule.strategy_name}' allocation bounds out of range [0, 1]"
+                )
+            
+            min_total += strategy_rule.min_weight
+            max_total += strategy_rule.max_weight
 
         # Check total allocation makes sense
-        min_total = self.rules.core_min_weight + self.rules.satellite_min_weight
-        max_total = self.rules.core_max_weight + self.rules.satellite_max_weight
-
-        if min_total > 0.8:
-            issues.append("Minimum allocation requirements leave insufficient buffer")
+        if min_total > 0.9:  # Allow for cash
+            issues.append(
+                f"Minimum allocation requirements ({min_total:.1%}) leave insufficient buffer for cash"
+            )
 
         if max_total < 0.6:
-            issues.append("Maximum allocation requirements too restrictive")
+            issues.append(
+                f"Maximum allocation requirements ({max_total:.1%}) too restrictive"
+            )
 
         # Check risk limits
         if self.rules.max_var_95 >= self.rules.max_drawdown:

@@ -1,0 +1,68 @@
+# ML Strategy Configuration
+# =========================
+# This configuration demonstrates ML strategy setup with feature engineering.
+
+strategy:
+  type: ml
+  name: MLStrategy_v1
+  
+  # Model configuration
+  model_id: model_v1           # Model identifier for ModelPredictor
+  min_signal_strength: 0.1     # Minimum signal strength threshold
+  
+  # Feature engineering configuration
+  feature_config:
+    enabled_features:
+      - momentum
+      - volatility
+      - technical
+      - volume
+      - trend
+    
+    momentum_periods: [21, 63, 252]
+    volatility_windows: [20, 60]
+    lookback_periods: [20, 60, 252]
+    
+    min_ic_threshold: 0.02
+    min_significance: 0.1
+    feature_lag: 1
+    include_technical: true
+  
+  # Position sizing and risk management
+  position_sizing:
+    volatility_target: 0.15
+    max_position_weight: 0.10
+    
+  # Rebalancing
+  rebalance_frequency: weekly
+
+# Backtest configuration
+backtest:
+  start_date: "2020-01-01"
+  end_date: "2023-12-31"
+  initial_capital: 1000000
+  
+  costs:
+    commission: 0.001
+    slippage: 0.0005
+
+# Universe configuration
+universe:
+  - AAPL
+  - MSFT
+  - GOOGL
+  - AMZN
+  - META
+  - TSLA
+  - NVDA
+  - JPM
+  - V
+  - WMT
+
+# Model training (if needed)
+model_training:
+  train_start: "2018-01-01"
+  train_end: "2019-12-31"
+  validation_split: 0.2
+  test_size: 0.1
+

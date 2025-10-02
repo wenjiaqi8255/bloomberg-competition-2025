@@ -13,9 +13,22 @@ Key Features:
 """
 
 from .ff5_model import FF5RegressionModel
-from .residual_model import ResidualPredictionModel
+from .momentum_model import MomentumRankingModel
 
+# Optional ML models (require additional dependencies)
 __all__ = [
     'FF5RegressionModel',
-    'ResidualPredictionModel'
+    'MomentumRankingModel',
 ]
+
+try:
+    from .xgboost_model import XGBoostModel
+    __all__.append('XGBoostModel')
+except ImportError:
+    pass
+
+try:
+    from .lstm_model import LSTMModel
+    __all__.append('LSTMModel')
+except ImportError:
+    pass

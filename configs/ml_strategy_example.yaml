@@ -62,91 +62,20 @@ strategy:
 
   # ML-specific parameters
   parameters:
-    # Model configuration
-    model_type: "xgboost"
-    ensemble_method: "bagging"
-    n_estimators: 100
-    learning_rate: 0.1
-    max_depth: 6
+    # --- Model Versioning ---
+    # This ID must correspond to a model saved in the ModelRegistry.
+    # It's generated during the training pipeline run.
+    model_id: "xgboost_model_20250930_120000" 
 
-    # Feature engineering
-    feature_types: ["technical", "price", "volume", "momentum", "volatility"]
-    lookback_windows: [5, 10, 20, 50, 120]
-    target_horizon: 5
-    rolling_windows: [20, 60, 120, 252]
+    # --- Signal Generation & Portfolio Construction ---
+    # These parameters control how raw prediction scores are converted into portfolio weights.
+    top_n_assets: 10
+    min_prediction_score: 0.05
+    max_position_size: 0.15
 
-    # Training parameters
-    train_test_split: 0.8
-    validation_split: 0.15
-    cross_validation_folds: 5
-    time_series_cv: true
-    purge_period: 5
-
-    # Feature selection
-    feature_selection_method: "recursive"
-    max_features: 50
-    feature_importance_threshold: 0.01
-
-    # Model evaluation
-    evaluation_metrics: ["sharpe", "accuracy", "precision", "recall", "f1"]
-    backtest_validation: true
-    out_of_sample_validation: true
-
-    # Residual modeling (Fama-French)
-    use_ff5_factors: true
-    residual_modeling: true
-    factor_lookback: 252
-    residual_smoothing: true
-
-    # Signal generation
-    prediction_threshold: 0.5
-    confidence_threshold: 0.6
-    position_scaling: true
-    risk_adjusted_scaling: true
-
-    # Model monitoring
-    model_degradation_threshold: 0.1
-    retraining_frequency: 30
-    performance_monitoring: true
-
-    # Data quality
-    data_validation: true
-    outlier_detection: true
-    missing_data_handling: "forward_fill"
-
-    # Hyperparameter tuning
-    hyperparameter_tuning: true
-    tuning_method: "bayesian"
-    tuning_trials: 50
-
-  # Feature engineering
-  enable_features: true
-  feature_config:
-    # Technical indicators
-    rsi_periods: [14, 30]
-    macd_periods: [12, 26, 9]
-    bollinger_bands:
-      period: 20
-      std_dev: 2.0
-
-    # Price features
-    returns_periods: [1, 5, 10, 20]
-    volatility_periods: [10, 20, 60]
-    momentum_periods: [5, 10, 20, 50]
-
-    # Volume features
-    volume_ma_periods: [10, 20, 50]
-    volume_ratio_threshold: 1.5
-
-    # Pattern features
-    support_resistance:
-      lookback: 252
-      min_touches: 3
-
-    # Cross-sectional features
-    sector_features: true
-    ranking_features: true
-    z_score_features: true
+    # Note: All training, feature engineering, and validation parameters have been removed
+    # from this section. That logic is now encapsulated in the TrainingPipeline and
+    # the artifacts (model + feature_pipeline) that are loaded via the `model_id`.
 
 # System Configuration
 system:

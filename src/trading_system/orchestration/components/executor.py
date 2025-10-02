@@ -46,7 +46,7 @@ class OrderSide(Enum):
 
 
 @dataclass
-class ExecutionConfig:
+class ExecutionConfig: #TODO: read from config
     """Configuration for trade execution."""
     # Order preferences
     default_order_type: OrderType = OrderType.MARKET

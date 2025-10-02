@@ -1,183 +1,490 @@
 """
-Base strategy interface for all trading strategies.
+Unified Base Strategy - All Strategies Follow the Same Architecture
+
+This is the new base class that enforces a consistent architecture across
+all trading strategies:
+
+    FeatureEngineeringPipeline → ModelPredictor → PositionSizer
+
+Key Design Principles:
+----------------------
+1. **Consistency**: All strategies follow the exact same flow
+2. **Separation of Concerns**: 
+   - Pipeline: Feature computation
+   - Model: Prediction/ranking logic
+   - PositionSizer: Risk management
+3. **Trainability**: All strategies can be "trained" (even rule-based ones)
+4. **Composability**: Easy to swap components
+
+The only difference between strategies is:
+- Feature pipeline configuration (what features to compute)
+- Model type (ML model vs linear model vs rule-based model)
 """
 
+import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Dict, List, Any
-
+from typing import Dict, Optional, Any
 import pandas as pd
+import numpy as np
 
-# Import types for orchestration compatibility
-# Use TYPE_CHECKING to avoid circular imports
-from typing import TYPE_CHECKING
-if TYPE_CHECKING:
-    from ..types.signals import TradingSignal
+from ..feature_engineering.pipeline import FeatureEngineeringPipeline
+from ..models.serving.predictor import ModelPredictor
+from ..utils.position_sizer import PositionSizer
+from .utils.portfolio_calculator import PortfolioCalculator
+
+logger = logging.getLogger(__name__)
 
 
 class BaseStrategy(ABC):
     """
-    Abstract base class for all trading strategies.
-
-    All strategies must implement the following methods:
-    - generate_signals: Generate trading signals based on market data
-    - get_parameters: Get strategy hyperparameters
-    - validate_parameters: Validate strategy parameters
+    Unified base class for all trading strategies.
+    
+    This enforces the architecture:
+        Data → FeaturePipeline → Model → RiskManager → Signals
+    
+    All strategies MUST follow this flow. The differences between strategies
+    are only in the components they use, not in the overall structure.
+    
+    Example:
+        # ML Strategy
+        MLStrategy(
+            pipeline=FeaturePipeline(config=ml_feature_config),
+            model=ModelPredictor(model_id="random_forest_v1"),
+            ...
+        )
+        
+        # Factor Strategy  
+        DualMomentumStrategy(
+            pipeline=FeaturePipeline(config=momentum_feature_config),
+            model=ModelPredictor(model_id="momentum_ranking_v1"),
+            ...
+        )
     """
-
-    def __init__(self, name: str, **kwargs):
+    
+    def __init__(self,
+                 name: str,
+                 feature_pipeline: FeatureEngineeringPipeline,
+                 model_predictor: ModelPredictor,
+                 position_sizer: PositionSizer,
+                 **kwargs):
         """
-        Initialize the base strategy.
-
+        Initialize unified strategy.
+        
         Args:
-            name: Strategy name for identification
-            **kwargs: Strategy-specific parameters
+            name: Strategy identifier
+            feature_pipeline: Fitted FeatureEngineeringPipeline
+            model_predictor: ModelPredictor with loaded model
+            position_sizer: PositionSizer for risk management
+            **kwargs: Additional strategy-specific parameters
         """
         self.name = name
+        self.feature_pipeline = feature_pipeline
+        self.model_predictor = model_predictor
+        self.position_sizer = position_sizer
         self.parameters = kwargs
-        self.validate_parameters()
-
-    @abstractmethod
-    def generate_signals(self, price_data: Dict[str, pd.DataFrame],
-                        start_date: datetime, end_date: datetime) -> pd.DataFrame:
+        
+        # Signal tracking and diagnostics
+        self._last_signals = None
+        self._last_price_data = None
+        self._last_signal_quality = None
+        self._last_position_metrics = None
+        self._signal_generation_count = 0
+        
+        # Validate components
+        self._validate_components()
+        
+        logger.info(f"Initialized {self.__class__.__name__} '{name}' with unified architecture")
+    
+    def _validate_components(self):
+        """Validate that all required components are provided."""
+        if not isinstance(self.feature_pipeline, FeatureEngineeringPipeline):
+            raise TypeError("feature_pipeline must be FeatureEngineeringPipeline instance")
+        if not isinstance(self.model_predictor, ModelPredictor):
+            raise TypeError("model_predictor must be ModelPredictor instance")
+        if not isinstance(self.position_sizer, PositionSizer):
+            raise TypeError("position_sizer must be PositionSizer instance")
+    
+    def generate_signals(self,
+                        price_data: Dict[str, pd.DataFrame],
+                        start_date: datetime,
+                        end_date: datetime) -> pd.DataFrame:
         """
-        Generate trading signals for the strategy.
-
+        Generate trading signals using the unified pipeline.
+        
+        This method implements the standard flow:
+        1. Compute features using FeaturePipeline
+        2. Get predictions from Model
+        3. Apply risk management via PositionSizer
+        
         Args:
-            price_data: Dictionary of price DataFrames for each symbol
+            price_data: Dictionary mapping symbols to OHLCV DataFrames
             start_date: Start date for signal generation
             end_date: End date for signal generation
-
+        
         Returns:
-            DataFrame with trading signals (columns: symbols, index: dates)
-            Positive values = long positions, negative = short, 0 = neutral
+            DataFrame with risk-adjusted portfolio weights
         """
-        pass
-
-    @abstractmethod
-    def validate_parameters(self):
-        """Validate strategy parameters. Raises ValueError if invalid."""
-        pass
-
-    def get_parameters(self) -> Dict:
-        """Get strategy hyperparameters."""
-        return self.parameters.copy()
-
-    def set_parameters(self, **kwargs):
-        """Update strategy parameters."""
-        self.parameters.update(kwargs)
-        self.validate_parameters()
-
+        if not price_data:
+            logger.warning("Empty price data provided")
+            return pd.DataFrame()
+        
+        try:
+            logger.info(f"[{self.name}] Generating signals from {start_date} to {end_date}")
+            
+            # Step 1: Compute features using pipeline
+            logger.debug(f"[{self.name}] Step 1: Computing features...")
+            features = self._compute_features(price_data)
+            
+            if features.empty:
+                logger.warning(f"[{self.name}] Feature computation returned empty DataFrame")
+                return pd.DataFrame()
+            
+            # Step 2: Get model predictions
+            logger.debug(f"[{self.name}] Step 2: Getting model predictions...")
+            predictions = self._get_predictions(features, price_data, start_date, end_date)
+            
+            if predictions.empty:
+                logger.warning(f"[{self.name}] Model predictions returned empty DataFrame")
+                return pd.DataFrame()
+            
+            # Step 3: Apply risk management
+            logger.debug(f"[{self.name}] Step 3: Applying risk management...")
+            final_signals = self._apply_risk_management(predictions, price_data)
+            
+            # Step 4: Evaluate signal quality (NEW)
+            logger.debug(f"[{self.name}] Step 4: Evaluating signal quality...")
+            self._evaluate_and_cache_signals(final_signals, price_data)
+            
+            logger.info(f"[{self.name}] Generated signals for {len(final_signals.columns)} assets")
+            return final_signals
+            
+        except Exception as e:
+            logger.error(f"[{self.name}] Signal generation failed: {e}", exc_info=True)
+            return pd.DataFrame()
+    
+    def _compute_features(self, price_data: Dict[str, pd.DataFrame]) -> pd.DataFrame:
+        """
+        Compute features using the feature pipeline.
+        
+        Args:
+            price_data: Dictionary of price DataFrames
+        
+        Returns:
+            DataFrame with computed features
+        """
+        try:
+            # Prepare data in format expected by pipeline
+            pipeline_data = {'price_data': price_data}
+            
+            # Transform using fitted pipeline
+            features = self.feature_pipeline.transform(pipeline_data)
+            
+            logger.debug(f"[{self.name}] Computed {len(features.columns)} features")
+            return features
+            
+        except Exception as e:
+            logger.error(f"[{self.name}] Feature computation failed: {e}")
+            return pd.DataFrame()
+    
+    def _get_predictions(self,
+                        features: pd.DataFrame,
+                        price_data: Dict[str, pd.DataFrame],
+                        start_date: datetime,
+                        end_date: datetime) -> pd.DataFrame:
+        """
+        Get predictions from the model.
+        
+        Args:
+            features: Computed features
+            price_data: Original price data
+            start_date: Start date
+            end_date: End date
+        
+        Returns:
+            DataFrame with predictions (expected returns or signals)
+        """
+        try:
+            # Get predictions for each symbol
+            predictions_dict = {}
+            
+            for symbol in price_data.keys():
+                # Extract symbol features
+                symbol_features = self._extract_symbol_features(features, symbol)
+                
+                if symbol_features.empty:
+                    continue
+                
+                # Get prediction from model
+                # Model should return expected return or signal strength
+                result = self.model_predictor.predict(
+                    features=symbol_features,
+                    symbol=symbol,
+                    prediction_date=end_date
+                )
+                
+                # Extract prediction value
+                prediction_value = result.get('prediction', 0.0)
+                predictions_dict[symbol] = prediction_value
+            
+            # Convert to DataFrame format
+            dates = pd.date_range(start=start_date, end=end_date, freq='D')
+            predictions_df = pd.DataFrame(
+                index=dates,
+                columns=list(predictions_dict.keys()),
+                data=[list(predictions_dict.values())] * len(dates)
+            )
+            
+            logger.debug(f"[{self.name}] Generated predictions for {len(predictions_dict)} symbols")
+            return predictions_df
+            
+        except Exception as e:
+            logger.error(f"[{self.name}] Prediction failed: {e}")
+            return pd.DataFrame()
+    
+    def _extract_symbol_features(self, features: pd.DataFrame, symbol: str) -> pd.DataFrame:
+        """
+        Extract features for a specific symbol.
+        
+        Args:
+            features: Full feature DataFrame
+            symbol: Symbol to extract
+        
+        Returns:
+            Features for the symbol
+        """
+        # Features may have symbol prefix (e.g., 'AAPL_momentum_21d')
+        symbol_cols = [col for col in features.columns if col.startswith(f"{symbol}_")]
+        
+        if symbol_cols:
+            symbol_features = features[symbol_cols].copy()
+            # Remove symbol prefix
+            symbol_features.columns = [col.replace(f"{symbol}_", "") for col in symbol_cols]
+            return symbol_features
+        
+        # If no prefix, return all features (assume single symbol)
+        return features
+    
+    def _apply_risk_management(self,
+                               raw_signals: pd.DataFrame,
+                               price_data: Dict[str, pd.DataFrame]) -> pd.DataFrame:
+        """
+        Apply position sizing and risk management.
+        
+        Args:
+            raw_signals: Raw predictions/signals from model
+            price_data: Price data for volatility calculation
+        
+        Returns:
+            Risk-adjusted position weights
+        """
+        try:
+            # Calculate asset volatilities
+            asset_volatilities = self._calculate_volatilities(price_data)
+            
+            # Apply position sizer to each date
+            adjusted_signals = raw_signals.copy()
+            
+            for date in raw_signals.index:
+                signal_row = raw_signals.loc[date]
+                
+                # Convert to DataFrame format expected by PositionSizer
+                signal_frame = signal_row.to_frame().T
+                
+                # Get volatilities for active positions
+                relevant_vols = asset_volatilities.reindex(signal_row.index).fillna(0.15)
+                
+                # Apply position sizing
+                adjusted_row = self.position_sizer.adjust_signals(signal_frame, relevant_vols)
+                
+                if not adjusted_row.empty:
+                    adjusted_signals.loc[date] = adjusted_row.iloc[0]
+            
+            logger.debug(f"[{self.name}] Applied risk management")
+            return adjusted_signals
+            
+        except Exception as e:
+            logger.error(f"[{self.name}] Risk management failed: {e}")
+            return raw_signals  # Return unadjusted if fails
+    
+    def _calculate_volatilities(self, price_data: Dict[str, pd.DataFrame]) -> pd.Series:
+        """
+        Calculate annualized volatility for each asset.
+        
+        Args:
+            price_data: Dictionary of price DataFrames
+        
+        Returns:
+            Series mapping symbols to volatilities
+        """
+        volatilities = {}
+        
+        for symbol, data in price_data.items():
+            if 'Close' in data.columns and len(data) > 1:
+                returns = data['Close'].pct_change().dropna()
+                if len(returns) > 0:
+                    volatilities[symbol] = returns.std() * np.sqrt(252)
+                else:
+                    volatilities[symbol] = 0.15
+            else:
+                volatilities[symbol] = 0.15
+        
+        return pd.Series(volatilities)
+    
     def get_name(self) -> str:
         """Get strategy name."""
         return self.name
-
+    
+    def get_parameters(self) -> Dict:
+        """Get strategy parameters."""
+        return self.parameters.copy()
+    
     def get_info(self) -> Dict:
-        """Get strategy information."""
+        """
+        Get comprehensive strategy information.
+        
+        Returns:
+            Dictionary with strategy metadata
+        """
         return {
             'name': self.name,
-            'parameters': self.get_parameters(),
-            'type': self.__class__.__name__
+            'type': self.__class__.__name__,
+            'architecture': 'UnifiedPipeline',
+            'components': {
+                'feature_pipeline': str(type(self.feature_pipeline).__name__),
+                'model_predictor': str(type(self.model_predictor).__name__),
+                'position_sizer': str(type(self.position_sizer).__name__)
+            },
+            'pipeline_fitted': getattr(self.feature_pipeline, '_is_fitted', False),
+            'model_info': self._get_model_info(),
+            'position_sizer_config': {
+                'volatility_target': self.position_sizer.volatility_target,
+                'max_position_weight': self.position_sizer.max_position_weight
+            },
+            'parameters': self.parameters
         }
-
-    def calculate_returns(self, price_data: pd.DataFrame,
-                         lookback_days: int = 252) -> pd.Series:
+    
+    def _get_model_info(self) -> Dict:
+        """Get information about the model."""
+        model_info = {}
+        
+        if hasattr(self.model_predictor, 'model_id'):
+            model_info['model_id'] = self.model_predictor.model_id
+        
+        if hasattr(self.model_predictor, 'model'):
+            model = self.model_predictor.model
+            if hasattr(model, 'model_type'):
+                model_info['model_type'] = model.model_type
+        
+        return model_info
+    
+    # ============================================================================
+    # Signal Quality Evaluation & Diagnostics (NEW)
+    # ============================================================================
+    
+    def _evaluate_and_cache_signals(self, 
+                                   signals: pd.DataFrame, 
+                                   price_data: Dict[str, pd.DataFrame]):
         """
-        Calculate returns over a specified lookback period.
-
+        Evaluate and cache signal quality metrics.
+        
+        This method is called automatically after signal generation to provide
+        a snapshot of the strategy's current state.
+        
         Args:
-            price_data: Price DataFrame
-            lookback_days: Number of days to look back for return calculation
-
-        Returns:
-            Series with returns for each date
+            signals: Generated signals
+            price_data: Price data for context
         """
-        returns = price_data['Close'].pct_change(periods=lookback_days)
-        return returns
-
-    def calculate_volatility(self, price_data: pd.DataFrame,
-                           lookback_days: int = 20) -> pd.Series:
+        try:
+            # Cache signals and data
+            self._last_signals = signals.copy()
+            self._last_price_data = price_data
+            self._signal_generation_count += 1
+            
+            # Evaluate signal quality
+            if not signals.empty:
+                self._last_signal_quality = PortfolioCalculator.calculate_signal_quality(signals)
+                self._last_position_metrics = PortfolioCalculator.calculate_position_metrics(signals)
+                
+                # Log key metrics
+                logger.info(f"[{self.name}] Signal Quality Snapshot:")
+                logger.info(f"  - Avg positions: {self._last_position_metrics.get('avg_number_of_positions', 0):.1f}")
+                logger.info(f"  - Avg position weight: {self._last_position_metrics.get('avg_position_weight', 0):.3f}")
+                logger.info(f"  - Signal intensity: {self._last_signal_quality.get('avg_signal_intensity', 0):.3f}")
+                logger.info(f"  - Concentration risk: {PortfolioCalculator.calculate_concentration_risk(signals):.3f}")
+            else:
+                self._last_signal_quality = {}
+                self._last_position_metrics = {}
+                
+        except Exception as e:
+            logger.warning(f"[{self.name}] Signal evaluation failed: {e}")
+    
+    def evaluate_signal_quality(self, signals: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
         """
-        Calculate rolling volatility.
-
+        Evaluate signal quality metrics.
+        
         Args:
-            price_data: Price DataFrame
-            lookback_days: Number of days for volatility calculation
-
+            signals: Signals to evaluate (defaults to last generated signals)
+        
         Returns:
-            Series with volatility for each date
+            Dictionary with signal quality metrics including:
+            - avg_signal_intensity: Average signal strength
+            - max_signal_intensity: Maximum signal strength
+            - avg_signal_consistency: How consistently signals are generated
+            - signal_frequency: How often signals change
         """
-        returns = price_data['Close'].pct_change()
-        volatility = returns.rolling(window=lookback_days).std() * (252 ** 0.5)
-        return volatility
-
-    def calculate_moving_average(self, price_data: pd.DataFrame,
-                                window: int) -> pd.Series:
+        signals_to_eval = signals if signals is not None else self._last_signals
+        
+        if signals_to_eval is None or signals_to_eval.empty:
+            logger.warning(f"[{self.name}] No signals available for quality evaluation")
+            return {}
+        
+        return PortfolioCalculator.calculate_signal_quality(signals_to_eval)
+    
+    def analyze_positions(self, signals: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
         """
-        Calculate simple moving average.
-
+        Analyze position characteristics.
+        
         Args:
-            price_data: Price DataFrame
-            window: Moving average window
-
+            signals: Signals to analyze (defaults to last generated signals)
+        
         Returns:
-            Series with moving average values
+            Dictionary with position metrics including:
+            - avg_number_of_positions: Average number of positions held
+            - max_number_of_positions: Maximum number of positions
+            - avg_position_weight: Average weight per position
+            - max_position_weight: Maximum position weight
+            - avg_concentration: Average concentration (largest position)
         """
-        return price_data['Close'].rolling(window=window).mean()
-
-    def calculate_exponential_moving_average(self, price_data: pd.DataFrame,
-                                           window: int) -> pd.Series:
+        signals_to_eval = signals if signals is not None else self._last_signals
+        
+        if signals_to_eval is None or signals_to_eval.empty:
+            logger.warning(f"[{self.name}] No signals available for position analysis")
+            return {}
+        
+        return PortfolioCalculator.calculate_position_metrics(signals_to_eval)
+    
+    def calculate_concentration_risk(self, signals: Optional[pd.DataFrame] = None) -> float:
         """
-        Calculate exponential moving average.
-
+        Calculate portfolio concentration risk (HHI).
+        
         Args:
-            price_data: Price DataFrame
-            window: EMA window
-
+            signals: Signals to evaluate (defaults to last generated signals)
+        
         Returns:
-            Series with EMA values
+            Herfindahl-Hirschman Index (0 to 1, higher = more concentrated)
         """
-        return price_data['Close'].ewm(span=window).mean()
-
+        signals_to_eval = signals if signals is not None else self._last_signals
+        
+        if signals_to_eval is None or signals_to_eval.empty:
+            logger.warning(f"[{self.name}] No signals available for concentration analysis")
+            return 0.0
+        
+        return PortfolioCalculator.calculate_concentration_risk(signals_to_eval)
+    
     def __str__(self):
-        return f"{self.__class__.__name__}({self.name})"
-
+        return f"{self.__class__.__name__}(name='{self.name}')"
+    
     def __repr__(self):
-        return f"{self.__class__.__name__}(name='{self.name}', **{self.parameters})"
+        return f"{self.__class__.__name__}(name='{self.name}', pipeline={type(self.feature_pipeline).__name__}, model={type(self.model_predictor).__name__})"
 
-
-class Strategy:
-    """Strategy interface for orchestration components."""
-
-    def __init__(self, name: str, **kwargs):
-        self.name = name
-        self.parameters = kwargs
-
-    def generate_signals(self, date: datetime) -> List['TradingSignal']:
-        """Generate trading signals for a given date."""
-        raise NotImplementedError("Subclasses must implement generate_signals")
-
-    def get_strategy_name(self) -> str:
-        """Get strategy name."""
-        return self.name
-
-
-class LegacyBaseStrategy:
-    """
-    Legacy BaseStrategy class for backward compatibility.
-
-    This class replicates the interface that was previously in data_types.py
-    and is used by strategies like SatelliteStrategy and CoreFFMLStrategy.
-    """
-
-    def __init__(self, config: Dict[str, Any] = None, backtest_config: Dict[str, Any] = None):
-        self.config = config or {}
-        self.backtest_config = backtest_config or {}
-
-    def generate_signals(self, market_data: Dict[str, Any]) -> Dict[str, float]:
-        """Generate trading signals. Override in subclasses."""
-        raise NotImplementedError("Subclasses must implement generate_signals")
-
-    def get_name(self) -> str:
-        """Get strategy name."""
-        return self.__class__.__name__

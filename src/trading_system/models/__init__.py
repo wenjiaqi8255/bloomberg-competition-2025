@@ -19,13 +19,7 @@ Key Features:
 from .base.base_model import BaseModel, ModelStatus, ModelMetadata
 from .base.model_factory import ModelFactory
 from .implementations.ff5_model import FF5RegressionModel
-from .implementations.residual_model import ResidualPredictionModel
-# from .utils.performance_evaluator import PerformanceEvaluator
-# from .serving.monitor import ModelMonitor
-# from .training.trainer import ModelTrainer, TrainingConfig
-
-# Auto-register models with the factory
-from . import registry
+from .implementations.momentum_model import MomentumRankingModel
 
 # Export main interfaces
 __all__ = [
@@ -34,21 +28,29 @@ __all__ = [
     'ModelStatus',
     'ModelMetadata',
 
-    # Model implementations
+    # Model implementations (always available)
     'FF5RegressionModel',
-    'ResidualPredictionModel',
+    'MomentumRankingModel',
 
     # Factory and registry
     'ModelFactory',
 
-    # Training and evaluation
-    # 'ModelTrainer',
-    # 'TrainingConfig',
-    # 'PerformanceEvaluator',
-
-    # Monitoring
-    # 'ModelMonitor',
-
     # Registry (for direct access)
     'registry',
 ]
+
+# Optional ML models (require additional dependencies)
+try:
+    from .implementations.xgboost_model import XGBoostModel
+    __all__.append('XGBoostModel')
+except ImportError:
+    pass
+
+try:
+    from .implementations.lstm_model import LSTMModel
+    __all__.append('LSTMModel')
+except ImportError:
+    pass
+
+# Auto-register models with the factory (must be after imports)
+from . import registry

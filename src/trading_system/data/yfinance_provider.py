@@ -5,7 +5,7 @@ YFinance data provider with retry logic and comprehensive error handling.
 import logging
 import time
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union, Any
 
 import pandas as pd
 import yfinance as yf
@@ -13,11 +13,12 @@ from pandas.tseries.offsets import BDay
 
 from ..types.enums import DataSource
 from ..utils.validation import DataValidator, DataValidationError
+from .base_data_provider import PriceDataProvider
 
 logger = logging.getLogger(__name__)
 
 
-class YFinanceProvider:
+class YFinanceProvider(PriceDataProvider):
     """
     Robust Yahoo Finance data provider with retry logic and data validation.
 
@@ -30,7 +31,7 @@ class YFinanceProvider:
     """
 
     def __init__(self, max_retries: int = 3, retry_delay: float = 1.0,
-                 request_timeout: int = 30):
+                 request_timeout: int = 30, cache_enabled: bool = True):
         """
         Initialize the YFinance provider.
 
@@ -38,67 +39,44 @@ class YFinanceProvider:
             max_retries: Maximum number of retry attempts
             retry_delay: Delay between retries in seconds
             request_timeout: Request timeout in seconds
+            cache_enabled: Whether to enable caching
         """
-        self.max_retries = max_retries
-        self.retry_delay = retry_delay
-        self.request_timeout = request_timeout
-        self.last_request_time = 0
-        self.min_request_interval = 0.5  # 500ms between requests
+        super().__init__(
+            max_retries=max_retries,
+            retry_delay=retry_delay,
+            request_timeout=request_timeout,
+            cache_enabled=cache_enabled,
+            rate_limit=0.5  # 500ms between requests
+        )
 
-    def _wait_for_rate_limit(self):
-        """Implement rate limiting to avoid API restrictions."""
-        current_time = time.time()
-        time_since_last_request = current_time - self.last_request_time
-
-        if time_since_last_request < self.min_request_interval:
-            sleep_time = self.min_request_interval - time_since_last_request
-            logger.debug(f"Rate limiting: waiting {sleep_time:.2f}s")
-            time.sleep(sleep_time)
-
-        self.last_request_time = time.time()
-
-    def _fetch_with_retry(self, fetch_func, *args, **kwargs) -> Optional[pd.DataFrame]:
-        """
-        Execute fetch function with retry logic.
-
-        Args:
-            fetch_func: Function to execute (e.g., yf.download)
-            *args, **kwargs: Arguments for the fetch function
-
-        Returns:
-            DataFrame with data or None if all retries fail
-        """
-        last_error = None
-
-        for attempt in range(self.max_retries):
-            try:
-                self._wait_for_rate_limit()
-
-                if attempt > 0:
-                    logger.info(f"Retry attempt {attempt + 1}/{self.max_retries}")
-
-                # Add auto_adjust=False to prevent yfinance from adjusting prices automatically
-                if 'auto_adjust' not in kwargs:
-                    kwargs['auto_adjust'] = False
-                data = fetch_func(*args, **kwargs)
-
-                if data is not None and not data.empty:
-                    return data
-                else:
-                    logger.warning(f"Empty data returned on attempt {attempt + 1}")
-                    last_error = "Empty data returned"
-
-            except Exception as e:
-                last_error = str(e)
-                logger.warning(f"Attempt {attempt + 1} failed: {e}")
-
-                if attempt < self.max_retries - 1:
-                    sleep_time = self.retry_delay * (2 ** attempt)  # Exponential backoff
-                    logger.info(f"Retrying in {sleep_time:.1f}s...")
-                    time.sleep(sleep_time)
-
-        logger.error(f"All {self.max_retries} attempts failed. Last error: {last_error}")
-        return None
+    def get_data_source(self) -> DataSource:
+        """Get the data source enum for this provider."""
+        return DataSource.YFINANCE
+    
+    def get_provider_info(self) -> Dict[str, Any]:
+        """Get information about this data provider."""
+        return {
+            'provider': 'Yahoo Finance',
+            'data_source': DataSource.YFINANCE.value,
+            'description': 'Yahoo Finance stock data provider',
+            'features': [
+                'Historical price data',
+                'Real-time quotes',
+                'Dividend data',
+                'Retry logic',
+                'Rate limiting',
+                'Data validation'
+            ],
+            'rate_limit': self.rate_limit,
+            'max_retries': self.max_retries,
+            'cache_enabled': self.cache_enabled
+        }
+    
+    def _fetch_raw_data(self, *args, **kwargs) -> Optional[pd.DataFrame]:
+        """Fetch raw data from YFinance API."""
+        # This method is called by the base class's _fetch_with_retry
+        # The actual fetching logic is in the specific methods
+        pass
 
     def get_historical_data(self, symbols: Union[str, List[str]],
                            start_date: Union[str, datetime],
@@ -131,6 +109,14 @@ class YFinanceProvider:
             logger.debug(f"Fetching data for {symbol}")
 
             try:
+                # Check cache first
+                cache_key = self._get_cache_key(symbol, start_date, end_date, period)
+                cached_data = self._get_from_cache(cache_key)
+                if cached_data is not None:
+                    results[symbol] = cached_data
+                    continue
+
+                # Fetch data with retry logic
                 if period:
                     data = self._fetch_with_retry(
                         yf.download, symbol, period=period,
@@ -143,8 +129,13 @@ class YFinanceProvider:
                     )
 
                 if data is not None and not data.empty:
-                    # Data validation and cleaning
+                    # Data validation and cleaning using base class method
                     data = self._validate_and_clean_data(data, symbol)
+                    data = self.add_data_source_metadata(data)
+                    
+                    # Store in cache
+                    self._store_in_cache(cache_key, data)
+                    
                     results[symbol] = data
                     logger.info(f"Successfully fetched {len(data)} rows for {symbol}")
                 else:
@@ -175,6 +166,13 @@ class YFinanceProvider:
 
         for symbol in symbols:
             try:
+                # Check cache first
+                cache_key = self._get_cache_key(symbol, "latest_price")
+                cached_data = self._get_from_cache(cache_key)
+                if cached_data is not None:
+                    results[symbol] = cached_data
+                    continue
+
                 ticker = yf.Ticker(symbol)
                 # Get today's data or most recent trading day
                 data = self._fetch_with_retry(
@@ -185,6 +183,10 @@ class YFinanceProvider:
                 if data is not None and not data.empty:
                     latest_price = data['Close'].iloc[-1]
                     results[symbol] = latest_price
+                    
+                    # Store in cache (shorter cache time for latest prices)
+                    self._store_in_cache(cache_key, latest_price)
+                    
                     logger.debug(f"Latest price for {symbol}: ${latest_price:.2f}")
                 else:
                     logger.warning(f"No price data available for {symbol}")
@@ -285,70 +287,42 @@ class YFinanceProvider:
             # First normalize the data format
             data = self._normalize_yfinance_data(data, symbol)
 
-            # Check required columns
-            required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
-            missing_columns = [col for col in required_columns if col not in data.columns]
+            # Use base class validation for price data
+            data = self.validate_price_data(data, symbol)
 
-            if missing_columns:
-                logger.warning(f"Missing columns {missing_columns} for {symbol}")
-                # Add missing columns with NaN values
-                for col in missing_columns:
-                    data[col] = pd.NA
+            # Additional YFinance-specific validation and cleaning
+            # Check for anomalous values and fix them
+            for col in ['Open', 'High', 'Low', 'Close']:
+                if col in data.columns:
+                    # Negative prices are invalid
+                    negative_prices = data[data[col] < 0]
+                    if not negative_prices.empty:
+                        logger.warning(f"Found {len(negative_prices)} negative prices in {col} for {symbol}")
+                        data.loc[data[col] < 0, col] = pd.NA
 
-            # Remove rows with all NaN values
-            initial_len = len(data)
-            data = data.dropna(how='all')
-            if len(data) < initial_len:
-                logger.warning(f"Removed {initial_len - len(data)} empty rows for {symbol}")
+            # Validate High-Low relationships
+            invalid_hl = data[data['High'] < data['Low']]
+            if not invalid_hl.empty:
+                logger.warning(f"Found {len(invalid_hl)} invalid High-Low pairs for {symbol}")
+                # Fix by swapping values
+                data.loc[invalid_hl.index, ['High', 'Low']] = \
+                    data.loc[invalid_hl.index, ['Low', 'High']].values
 
-            # Use the new data validator for comprehensive checks
-            try:
-                DataValidator.validate_price_data(data, symbol)
-            except DataValidationError as e:
-                logger.warning(f"Data validation issue for {symbol}: {e}")
-                # Attempt to fix common issues
-
-                # Check for anomalous values and fix them
-                for col in ['Open', 'High', 'Low', 'Close']:
-                    if col in data.columns:
-                        # Negative prices are invalid
-                        negative_prices = data[data[col] < 0]
-                        if not negative_prices.empty:
-                            logger.warning(f"Found {len(negative_prices)} negative prices in {col} for {symbol}")
-                            data.loc[data[col] < 0, col] = pd.NA
-
-                # Validate High-Low relationships
-                invalid_hl = data[data['High'] < data['Low']]
-                if not invalid_hl.empty:
-                    logger.warning(f"Found {len(invalid_hl)} invalid High-Low pairs for {symbol}")
-                    # Fix by swapping values
-                    data.loc[invalid_hl.index, ['High', 'Low']] = \
-                        data.loc[invalid_hl.index, ['Low', 'High']].values
-
-                # Validate High-Low-Open-Close relationships
-                invalid_ohlc = data[
-                    (data['High'] < data['Open']) |
-                    (data['High'] < data['Close']) |
-                    (data['Low'] > data['Open']) |
-                    (data['Low'] > data['Close'])
-                ]
-                if not invalid_ohlc.empty:
-                    logger.warning(f"Found {len(invalid_ohlc)} invalid OHLC relationships for {symbol}")
-                    # Fix by adjusting high/low
-                    data.loc[invalid_ohlc.index, 'High'] = data.loc[invalid_ohlc.index, ['Open', 'Close', 'High']].max(axis=1)
-                    data.loc[invalid_ohlc.index, 'Low'] = data.loc[invalid_ohlc.index, ['Open', 'Close', 'Low']].min(axis=1)
-
-            # Sort by date and ensure datetime index
-            if not isinstance(data.index, pd.DatetimeIndex):
-                data.index = pd.to_datetime(data.index)
-
-            data = data.sort_index()
+            # Validate High-Low-Open-Close relationships
+            invalid_ohlc = data[
+                (data['High'] < data['Open']) |
+                (data['High'] < data['Close']) |
+                (data['Low'] > data['Open']) |
+                (data['Low'] > data['Close'])
+            ]
+            if not invalid_ohlc.empty:
+                logger.warning(f"Found {len(invalid_ohlc)} invalid OHLC relationships for {symbol}")
+                # Fix by adjusting high/low
+                data.loc[invalid_ohlc.index, 'High'] = data.loc[invalid_ohlc.index, ['Open', 'Close', 'High']].max(axis=1)
+                data.loc[invalid_ohlc.index, 'Low'] = data.loc[invalid_ohlc.index, ['Open', 'Close', 'Low']].min(axis=1)
 
             # Add symbol column for multi-symbol datasets
             data['Symbol'] = symbol
-
-            # Add data source metadata
-            data['DataSource'] = DataSource.YFINANCE.value
 
             return data
 
@@ -359,11 +333,10 @@ class YFinanceProvider:
     def _filter_dates(self, data: pd.Series, start_date: Union[str, datetime] = None,
                      end_date: Union[str, datetime] = None) -> pd.Series:
         """Filter data by date range."""
-        if start_date is not None:
-            data = data[data.index >= pd.to_datetime(start_date)]
-        if end_date is not None:
-            data = data[data.index <= pd.to_datetime(end_date)]
-        return data
+        # Convert Series to DataFrame for base class method
+        df = data.to_frame()
+        filtered_df = self.filter_by_date(df, start_date, end_date)
+        return filtered_df.iloc[:, 0]  # Convert back to Series
 
     def validate_symbol(self, symbol: str) -> bool:
         """

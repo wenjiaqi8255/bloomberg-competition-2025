@@ -15,13 +15,14 @@ import logging
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union, Any
 from enum import Enum
 import yfinance as yf
 
 from ..types.enums import DataSource
 from ..utils.validation import DataValidationError
 from .yfinance_provider import YFinanceProvider
+from .base_data_provider import ClassificationProvider
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +93,7 @@ class InvestmentBox:
         return f"InvestmentBox(size={self.size}, style={self.style}, region={self.region}, sector={self.sector})"
 
 
-class StockClassifier:
+class StockClassifier(ClassificationProvider):
     """
     Stock classifier for IPS box-based allocation system.
 
@@ -128,16 +129,82 @@ class StockClassifier:
         'Communication Services': ['GOOGL', 'META', 'T', 'VZ', 'DIS', 'NFLX', 'CMCSA', 'TMUS']
     }
 
-    def __init__(self, yfinance_provider: YFinanceProvider = None):
+    def __init__(self, yfinance_provider: YFinanceProvider = None,
+                 max_retries: int = 3, retry_delay: float = 1.0,
+                 request_timeout: int = 30, cache_enabled: bool = True):
         """
         Initialize stock classifier.
 
         Args:
             yfinance_provider: YFinance provider instance
+            max_retries: Maximum number of retry attempts
+            retry_delay: Delay between retries in seconds
+            request_timeout: Request timeout in seconds
+            cache_enabled: Whether to enable caching
         """
+        super().__init__(
+            max_retries=max_retries,
+            retry_delay=retry_delay,
+            request_timeout=request_timeout,
+            cache_enabled=cache_enabled,
+            rate_limit=0.5  # 500ms between requests
+        )
+        
         self.yfinance_provider = yfinance_provider or YFinanceProvider()
         self.market_cap_cache = {}
         self.sector_cache = {}
+
+    def get_data_source(self) -> DataSource:
+        """Get the data source enum for this provider."""
+        return DataSource.YFINANCE  # Uses YFinance for data
+    
+    def get_provider_info(self) -> Dict[str, Any]:
+        """Get information about this data provider."""
+        return {
+            'provider': 'Stock Classifier',
+            'data_source': DataSource.YFINANCE.value,
+            'description': 'Stock classification system for IPS box-based allocation',
+            'classification_dimensions': ['Size', 'Style', 'Region', 'Sector'],
+            'size_categories': [cat.value for cat in SizeCategory],
+            'style_categories': [cat.value for cat in StyleCategory],
+            'region_categories': [cat.value for cat in RegionCategory],
+            'sector_categories': [cat.value for cat in SectorCategory],
+            'classification_method': 'Technical proxies for fundamental factors',
+            'cache_enabled': self.cache_enabled
+        }
+    
+    def _fetch_raw_data(self, *args, **kwargs) -> Optional[Any]:
+        """Fetch raw data from YFinance API."""
+        # This method is called by the base class's _fetch_with_retry
+        # The actual fetching logic is in the specific methods
+        pass
+
+    def classify_items(self, items: List[str], **kwargs) -> Dict[str, Any]:
+        """
+        Classify items into categories.
+        
+        Args:
+            items: List of stock symbols to classify
+            **kwargs: Additional parameters
+            
+        Returns:
+            Dictionary with classification results
+        """
+        return self.classify_stocks(items, **kwargs)
+    
+    def get_classification_categories(self) -> Dict[str, List[str]]:
+        """
+        Get available classification categories.
+        
+        Returns:
+            Dictionary mapping category types to available values
+        """
+        return {
+            'size': [cat.value for cat in SizeCategory],
+            'style': [cat.value for cat in StyleCategory],
+            'region': [cat.value for cat in RegionCategory],
+            'sector': [cat.value for cat in SectorCategory]
+        }
 
     def classify_stocks(self, symbols: List[str],
                        price_data: Dict[str, pd.DataFrame] = None,

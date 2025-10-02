@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from ..config.backtest import BacktestConfig
 from .types.results import BacktestResults
 from ..utils.performance import PerformanceMetrics
+from ..utils.risk import RiskCalculator
 from .costs.transaction_costs import TransactionCostModel, TradeDirection
 from .utils.validators import validate_inputs, align_data_periods, clean_price_data
 from ..types import Position, Trade
@@ -56,6 +57,7 @@ class BacktestEngine:
             slippage_rate=config.slippage_rate,
             short_borrow_rate=config.short_borrow_rate
         )
+        self.risk_calculator = RiskCalculator()
 
         # Portfolio state - keep minimal state
         self.initial_capital = config.initial_capital
@@ -102,6 +104,7 @@ class BacktestEngine:
             validate_inputs(strategy_signals, price_data, benchmark_data)
             self.price_data = clean_price_data(price_data)
             self.benchmark_data = benchmark_data
+            self.strategy_signals = strategy_signals
 
             # Preload price data for performance optimization
             self._price_cache, self._sorted_dates_cache = self._preload_price_data()
@@ -679,6 +682,9 @@ class BacktestEngine:
                 periods_per_year=252
             )
 
+            # DELEGATE risk calculations to RiskCalculator
+            risk_metrics = self._calculate_risk_metrics(returns_clean, benchmark_returns)
+
             # Calculate turnover rate
             turnover_rate = self._calculate_turnover_rate()
 
@@ -688,6 +694,7 @@ class BacktestEngine:
                 daily_returns=self.daily_returns,
                 benchmark_returns=benchmark_returns,
                 performance_metrics=performance_metrics,
+                risk_metrics=risk_metrics,
                 trades=self.trades,
                 transaction_costs=self.total_costs,
                 start_date=self.portfolio_values.index[0] if len(self.portfolio_values) > 0 else None,
@@ -703,13 +710,51 @@ class BacktestEngine:
             logger.error(f"Error calculating results: {e}")
             return self._empty_results()
 
+    def _calculate_risk_metrics(self, portfolio_returns: pd.Series,
+                                benchmark_returns: Optional[pd.Series] = None) -> Dict[str, float]:
+        """
+        Calculate all risk metrics using the unified RiskCalculator.
+
+        Args:
+            portfolio_returns: Series of portfolio daily returns.
+            benchmark_returns: Series of benchmark daily returns.
+
+        Returns:
+            Dictionary of comprehensive risk metrics.
+        """
+        # Note: This is a simplified risk calculation.
+        # A more advanced version would use the full returns matrix of all assets.
+        # For now, we calculate portfolio-level risk based on the final return series.
+
+        risk_metrics = {
+            'value_at_risk_95': self.risk_calculator.value_at_risk(portfolio_returns, 0.95),
+            'expected_shortfall_95': self.risk_calculator.expected_shortfall(portfolio_returns, 0.95),
+            'downside_deviation': self.risk_calculator.downside_deviation(portfolio_returns)
+        }
+
+        if benchmark_returns is not None:
+            risk_metrics['beta_to_market'] = self.risk_calculator.portfolio_beta(
+                portfolio_returns, benchmark_returns
+            )
+            risk_metrics['tracking_error'] = self.risk_calculator.tracking_error(
+                portfolio_returns, benchmark_returns
+            )
+
+        # Drawdown risk is part of performance metrics but we can add it here if needed
+        drawdown_info = self.risk_calculator.drawdown_risk(portfolio_returns)
+        risk_metrics.update(drawdown_info)
+
+        return risk_metrics
+
     def _calculate_turnover_rate(self) -> float:
         """Calculate annual turnover rate."""
         if len(self.trades) == 0:
             return 0.0
 
         total_trade_value = sum(trade.quantity * trade.price for trade in self.trades)
-        avg_portfolio_value = (self.initial_capital + self.current_capital) / 2
+        avg_portfolio_value = self.portfolio_values.mean()
+        if avg_portfolio_value == 0:
+            return 0.0
 
         days_elapsed = len(self.daily_returns)
         if days_elapsed == 0:

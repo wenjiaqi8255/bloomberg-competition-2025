@@ -17,33 +17,20 @@ logger = logging.getLogger(__name__)
 @dataclass
 class BacktestResults:
     """
-    Unified backtest results with backward compatibility.
-
-    Provides clean access to all backtest results while maintaining
-    compatibility with existing code that expects specific attributes.
+    Unified data structure for storing comprehensive backtest results.
     """
-
-    # Core time series data
     portfolio_values: pd.Series
     daily_returns: pd.Series
+    performance_metrics: Dict[str, float]
+    trades: List[Any]
+    transaction_costs: float
+    initial_capital: float
+    final_value: float
     benchmark_returns: Optional[pd.Series] = None
-
-    # Performance metrics (calculated, not stored)
-    performance_metrics: Dict[str, float] = field(default_factory=dict)
-
-    # Trading information
-    trades: List[Any] = field(default_factory=list)  # Will be Trade objects
-    transaction_costs: float = 0.0
-
-    # Metadata
+    risk_metrics: Dict[str, float] = field(default_factory=dict)
+    turnover_rate: float = 0.0
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
-    initial_capital: float = 0.0
-    final_value: float = 0.0
-
-    # Additional analytics
-    positions_history: List[Any] = field(default_factory=list)  # Portfolio snapshots
-    turnover_rate: float = 0.0
 
     def __post_init__(self):
         """Initialize results and calculate derived values."""
@@ -107,7 +94,7 @@ class BacktestResults:
 
     @property
     def max_drawdown(self) -> float:
-        """Get maximum drawdown."""
+        """Returns the maximum drawdown."""
         return self.performance_metrics.get('max_drawdown', 0.0)
 
     @property

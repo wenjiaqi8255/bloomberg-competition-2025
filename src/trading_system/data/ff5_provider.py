@@ -16,17 +16,18 @@ import logging
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union, Any
 import requests
 from io import StringIO
 
 from ..types.enums import DataSource
 from ..utils.validation import DataValidator, DataValidationError
+from .base_data_provider import FactorDataProvider
 
 logger = logging.getLogger(__name__)
 
 
-class FF5DataProvider:
+class FF5DataProvider(FactorDataProvider):
     """
     Fama-French 5-Factor data provider.
 
@@ -40,22 +41,60 @@ class FF5DataProvider:
 
     BASE_URL = "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/"
 
-    def __init__(self, data_frequency: str = "monthly", cache_dir: str = None):
+    def __init__(self, data_frequency: str = "monthly", cache_dir: str = None,
+                 max_retries: int = 3, retry_delay: float = 1.0,
+                 request_timeout: int = 30, cache_enabled: bool = True):
         """
         Initialize FF5 data provider.
 
         Args:
             data_frequency: Data frequency ("daily" or "monthly")
             cache_dir: Directory for caching data (optional)
+            max_retries: Maximum number of retry attempts
+            retry_delay: Delay between retries in seconds
+            request_timeout: Request timeout in seconds
+            cache_enabled: Whether to enable caching
         """
+        super().__init__(
+            max_retries=max_retries,
+            retry_delay=retry_delay,
+            request_timeout=request_timeout,
+            cache_enabled=cache_enabled,
+            rate_limit=1.0  # 1 second between requests for Kenneth French
+        )
+        
         self.data_frequency = data_frequency.lower()
         self.cache_dir = cache_dir
-        self._cached_data = {}
 
         if self.data_frequency not in ["daily", "monthly"]:
             raise ValueError("data_frequency must be 'daily' or 'monthly'")
 
         logger.info(f"Initialized FF5 provider with {data_frequency} data")
+
+    def get_data_source(self) -> DataSource:
+        """Get the data source enum for this provider."""
+        return DataSource.KENNETH_FRENCH
+    
+    def get_provider_info(self) -> Dict[str, Any]:
+        """Get information about this data provider."""
+        return {
+            'provider': 'Kenneth French Data Library',
+            'data_source': DataSource.KENNETH_FRENCH.value,
+            'description': 'Fama-French 5-factor model data',
+            'data_frequency': self.data_frequency,
+            'factors': ['MKT', 'SMB', 'HML', 'RMW', 'CMA', 'RF'],
+            'base_url': self.BASE_URL,
+            'update_frequency': 'Daily/Monthly (depends on source)',
+            'units': 'Decimal (converted from percentage)',
+            'cache_enabled': self.cache_enabled,
+            'cached_datasets': len(self._cache)
+        }
+    
+    def _fetch_raw_data(self, *args, **kwargs) -> Optional[pd.DataFrame]:
+        """Fetch raw data from Kenneth French Data Library."""
+        # This method is called by the base class's _fetch_with_retry
+        # The actual fetching logic is in the specific methods
+        pass
 
     def get_factor_returns(self, start_date: Union[str, datetime] = None,
                            end_date: Union[str, datetime] = None) -> pd.DataFrame:
@@ -71,6 +110,12 @@ class FF5DataProvider:
             Index: Dates
         """
         try:
+            # Check cache first
+            cache_key = self._get_cache_key("factor_returns", start_date, end_date, self.data_frequency)
+            cached_data = self._get_from_cache(cache_key)
+            if cached_data is not None:
+                return cached_data
+
             # Determine data file based on frequency
             if self.data_frequency == "daily":
                 file_url = f"{self.BASE_URL}ftp/F-F_Research_Data_5_Factors_2x3_daily_TXT.zip"
@@ -79,15 +124,26 @@ class FF5DataProvider:
                 file_url = f"{self.BASE_URL}ftp/F-F_Research_Data_5_Factors_2x3_TXT.zip"
                 filename = "F-F_Research_Data_5_Factors_2x3.txt"
 
-            # Fetch and parse data
-            raw_data = self._fetch_and_parse_data(file_url, filename)
+            # Fetch and parse data with retry logic
+            raw_data = self._fetch_with_retry(
+                self._fetch_and_parse_data, file_url, filename
+            )
 
-            # Clean and validate data
-            clean_data = self._clean_factor_data(raw_data)
+            if raw_data is None:
+                raise DataValidationError("Failed to fetch FF5 data")
 
-            # Filter by date range
+            # Clean and validate data using base class method
+            clean_data = self.validate_factor_data(raw_data)
+
+            # Filter by date range using base class method
             if start_date or end_date:
-                clean_data = self._filter_by_date(clean_data, start_date, end_date)
+                clean_data = self.filter_by_date(clean_data, start_date, end_date)
+
+            # Add data source metadata
+            clean_data = self.add_data_source_metadata(clean_data)
+
+            # Store in cache
+            self._store_in_cache(cache_key, clean_data)
 
             logger.info(f"Retrieved {len(clean_data)} rows of {self.data_frequency} FF5 data")
             return clean_data
@@ -195,9 +251,9 @@ class FF5DataProvider:
 
             # Check cache first
             cache_key = f"{filename}_{self.data_frequency}"
-            if cache_key in self._cached_data:
+            if cache_key in self._cache:
                 logger.debug(f"Using cached data for {filename}")
-                return self._cached_data[cache_key].copy()
+                return self._cache[cache_key].copy()
 
             logger.info(f"Fetching FF5 data from {file_url}")
 
@@ -273,7 +329,7 @@ class FF5DataProvider:
                 df[col] = df[col] / 100.0
 
             # Cache the data
-            self._cached_data[cache_key] = df.copy()
+            self._cache[cache_key] = df.copy()
 
             logger.info(f"Successfully parsed {len(df)} rows of FF5 data")
             return df
@@ -317,8 +373,8 @@ class FF5DataProvider:
             # Fill any remaining NaN values with forward fill
             data = data.ffill().bfill()
 
-            # Validate with data validator
-            DataValidator.validate_factor_data(data, "FF5")
+            # Use base class validation
+            data = self.validate_factor_data(data)
 
             return data
 
@@ -326,31 +382,6 @@ class FF5DataProvider:
             logger.error(f"Failed to clean FF5 data: {e}")
             raise DataValidationError(f"Data cleaning failed: {e}")
 
-    def _filter_by_date(self, data: pd.DataFrame,
-                       start_date: Union[str, datetime] = None,
-                       end_date: Union[str, datetime] = None) -> pd.DataFrame:
-        """Filter data by date range."""
-        if start_date is None and end_date is None:
-            return data
-
-        mask = pd.Series(True, index=data.index)
-
-        if start_date is not None:
-            if isinstance(start_date, str):
-                start_date = pd.to_datetime(start_date)
-            mask = mask & (data.index >= start_date)
-
-        if end_date is not None:
-            if isinstance(end_date, str):
-                end_date = pd.to_datetime(end_date)
-            mask = mask & (data.index <= end_date)
-
-        filtered_data = data[mask]
-
-        if len(filtered_data) == 0:
-            logger.warning(f"No data found for date range {start_date} to {end_date}")
-
-        return filtered_data
 
     def get_latest_factors(self) -> pd.Series:
         """Get the latest available factor values."""
@@ -383,5 +414,5 @@ class FF5DataProvider:
             'update_frequency': 'Daily/Monthly (depends on source)',
             'units': 'Decimal (converted from percentage)',
             'cache_enabled': self.cache_dir is not None,
-            'cached_datasets': len(self._cached_data)
+            'cached_datasets': len(self._cache)
         }

@@ -1,10 +1,63 @@
 """
-System Orchestrator  - Refactored Architecture
+System Orchestrator for Production Trading
+==========================================
 
-This is the refactored version of the SystemOrchestrator that follows the
-Single Responsibility Principle. It coordinates the specialized components
-while delegating specific responsibilities to them.
+This module provides the `SystemOrchestrator`, the master coordinator for running
+a complete, multi-strategy trading system in a production or simulated live
+environment. It embodies the principle of Separation of Concerns by delegating
+specific tasks to specialized components.
 
+Core Responsibilities:
+----------------------
+1.  **Component Coordination**: It does not perform any single task itself, but
+    instead manages the flow of data and commands between various sub-components.
+2.  **Lifecycle Management**: Manages the step-by-step execution of the trading
+    lifecycle for a given point in time (e.g., daily rebalancing).
+3.  **State Management**: Holds the current state of the system, including the
+    live portfolio and historical execution results.
+
+Trading Lifecycle Orchestrated:
+-------------------------------
+For each run (e.g., each day), the orchestrator calls its components in a
+specific sequence:
+1.  `StrategyCoordinator`: Gathers trading signals from all active strategies
+    (e.g., a core and a satellite strategy) and resolves any conflicts.
+2.  `CapitalAllocator`: Decides how to allocate capital between the different
+    strategies based on the system's configuration.
+3.  `ComplianceMonitor`: Checks the proposed trades and resulting portfolio
+    against a set of rules (e.g., IPS, risk limits).
+4.  `TradeExecutor`: Takes the final, approved list of trades and executes them
+    (either in simulation or against a live brokerage).
+5.  `PerformanceReporter`: Calculates and reports on the performance of the
+    overall system.
+
+Usage Example:
+--------------
+.. code-block:: python
+
+    from trading_system.config.system import SystemConfig
+    from trading_system.orchestration import SystemOrchestrator
+
+    # Load system configuration from a file
+    system_config = SystemConfig.from_yaml("configs/system_config.yaml")
+
+    # Initialize the orchestrator
+    orchestrator = SystemOrchestrator(system_config=system_config)
+    orchestrator.initialize_system()
+
+    # Run the system for a specific date
+    today = datetime(2025, 10, 3)
+    result = orchestrator.run_system(date=today)
+
+    if result.is_successful and not result.has_compliance_issues:
+        print("System executed successfully.")
+
+Distinction from StrategyRunner:
+--------------------------------
+- **SystemOrchestrator**: Manages a **multi-strategy portfolio**. It is designed
+  for production-level complexity, including compliance and capital allocation.
+- **StrategyRunner**: Focuses on backtesting a **single strategy**. It is a
+  tool for research and validation, not for live portfolio management.
 """
 
 import logging
@@ -13,13 +66,12 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass
 
 from .components.coordinator import StrategyCoordinator, CoordinatorConfig
-from .components.allocator import CapitalAllocator, AllocationConfig
-from .components.compliance import ComplianceMonitor, ComplianceRules, ComplianceReport, ComplianceStatus
+from .components.allocator import CapitalAllocator, AllocationConfig, StrategyAllocation
+from .components.compliance import ComplianceMonitor, ComplianceRules, ComplianceReport, ComplianceStatus, StrategyAllocationRule
 from .components.executor import TradeExecutor, ExecutionConfig
 from .components.reporter import PerformanceReporter, ReportConfig
 
-from ..strategies.core_ffml_strategy import CoreFFMLStrategy
-from ..strategies.satellite_strategy import SatelliteStrategy
+from ..strategies.base_strategy import BaseStrategy
 from ..types.portfolio import Portfolio
 from ..types.data_types import TradingSignal
 from ..config.system import SystemConfig
@@ -54,37 +106,52 @@ class SystemResult:
 
 class SystemOrchestrator:
     """
-    Refactored System Orchestrator - Coordination Layer Only
+    Coordinates specialized components to run a complete multi-strategy system.
 
-    This new version delegates specific responsibilities to specialized components:
-    - Strategy coordination: StrategyCoordinator
-    - Capital allocation: CapitalAllocator
-    - IPS compliance: ComplianceMonitor
-    - Trade execution: TradeExecutor
-    - Performance reporting: PerformanceReporter
-
-    The orchestrator now only coordinates these components and manages the overall system flow.
+    This class acts as the "brain" of the live trading system, but it delegates
+    all the "thinking" to its components. Its sole responsibility is to ensure
+    that each component is called in the correct order and that data flows
+    between them correctly. This design makes the system highly modular,
+    testable, and extensible.
     """
 
-    def __init__(self, system_config: SystemConfig,
-                 core_strategy: Optional[CoreFFMLStrategy] = None,
-                 satellite_strategy: Optional[SatelliteStrategy] = None,
+    def __init__(self, 
+                 system_config: SystemConfig,
+                 strategies: List[BaseStrategy],
+                 allocation_config: AllocationConfig,
+                 compliance_rules: Optional[ComplianceRules] = None,
                  custom_configs: Optional[Dict[str, Any]] = None):
         """
-        Initialize refactored System Orchestrator.
+        Initialize System Orchestrator with flexible strategy support.
+        
+        This refactored version supports an arbitrary number of strategies (1, 2, 3, or more)
+        instead of being hardcoded to just core and satellite strategies.
 
         Args:
             system_config: System configuration
-            core_strategy: Core FFML strategy (optional, will be created if not provided)
-            satellite_strategy: Satellite strategy (optional, will be created if not provided)
+            strategies: List of trading strategies (can be 1 or more)
+            allocation_config: Capital allocation configuration for all strategies
+            compliance_rules: Compliance rules (optional, will be auto-generated from allocation if not provided)
             custom_configs: Custom configuration overrides for components
+        
+        Raises:
+            ValueError: If strategies list is empty or configuration is inconsistent
         """
+        if not strategies:
+            raise ValueError("At least one strategy must be provided")
+        
         self.config = system_config
+        self.strategies = strategies
+        self.allocation_config = allocation_config
         self.custom_configs = custom_configs or {}
-
-        # Initialize strategies
-        self.core_strategy = core_strategy or self._create_core_strategy()
-        self.satellite_strategy = satellite_strategy or self._create_satellite_strategy()
+        
+        # Validate that strategy names match allocation config
+        self._validate_configuration()
+        
+        # Auto-generate compliance rules from allocation if not provided
+        if compliance_rules is None:
+            compliance_rules = self._generate_compliance_rules_from_allocation()
+        self.compliance_rules = compliance_rules
 
         # Initialize specialized components
         self._initialize_components()
@@ -96,62 +163,82 @@ class SystemOrchestrator:
         # Risk management functionality moved to utils/risk.py
         self.risk_calculator = RiskCalculator()
 
-        logger.info("Initialized SystemOrchestrator ")
-        logger.info(f"Core strategy: {self.core_strategy.config.name}")
-        logger.info(f"Satellite strategy: {self.satellite_strategy.config.name}")
+        logger.info(f"Initialized SystemOrchestrator with {len(self.strategies)} strategies:")
+        for strategy in self.strategies:
+            alloc = self.allocation_config.get_allocation_for_strategy(strategy.name)
+            if alloc:
+                logger.info(
+                    f"  - {strategy.name}: target={alloc.target_weight:.1%}, "
+                    f"priority={alloc.priority}"
+                )
 
-    def _create_core_strategy(self) -> CoreFFMLStrategy:
-        """Create default core strategy."""
-        return CoreFFMLStrategy(
-            strategy_name=f"{self.config.system_name}_Core",
-            core_weight=self.config.core_target_weight,
-            lookback_window=252,
-            max_position_size=0.15
+    def _validate_configuration(self) -> None:
+        """
+        Validate that strategies and allocation configuration are consistent.
+        
+        Raises:
+            ValueError: If configuration is inconsistent
+        """
+        strategy_names = {s.name for s in self.strategies}
+        config_names = {a.strategy_name for a in self.allocation_config.strategy_allocations}
+        
+        if strategy_names != config_names:
+            raise ValueError(
+                f"Strategy names mismatch between strategies and allocation config.\n"
+                f"Strategies: {sorted(strategy_names)}\n"
+                f"Allocation config: {sorted(config_names)}\n"
+                f"All strategy names must match exactly."
+            )
+        
+        logger.info("Configuration validation passed")
+    
+    def _generate_compliance_rules_from_allocation(self) -> ComplianceRules:
+        """
+        Auto-generate compliance rules from allocation configuration.
+        
+        This creates compliance rules that match the allocation constraints,
+        so strategies stay within their configured bounds.
+        """
+        strategy_rules = [
+            StrategyAllocationRule(
+                strategy_name=alloc.strategy_name,
+                min_weight=alloc.min_weight,
+                max_weight=alloc.max_weight
+            )
+            for alloc in self.allocation_config.strategy_allocations
+        ]
+        
+        compliance_rules = ComplianceRules(
+            strategy_allocation_rules=strategy_rules
         )
-
-    def _create_satellite_strategy(self) -> SatelliteStrategy:
-        """Create default satellite strategy."""
-        return SatelliteStrategy(
-            strategy_name=f"{self.config.system_name}_Satellite",
-            satellite_weight=self.config.satellite_target_weight,
-            max_positions=8
-        )
+        
+        logger.info(f"Auto-generated compliance rules for {len(strategy_rules)} strategies")
+        return compliance_rules
 
     def _initialize_components(self) -> None:
         """Initialize all specialized components."""
-        # Strategy Coordinator
+        # Strategy Coordinator - extract priorities from allocation config
+        strategy_priority = {
+            alloc.strategy_name: alloc.priority 
+            for alloc in self.allocation_config.strategy_allocations
+        }
+        
         coordinator_config = CoordinatorConfig(
             max_signals_per_day=self.custom_configs.get('max_signals_per_day', 50),
             signal_conflict_resolution=self.custom_configs.get('signal_conflict_resolution', 'merge'),
-            capacity_scaling=self.custom_configs.get('capacity_scaling', True)
+            capacity_scaling=self.custom_configs.get('capacity_scaling', True),
+            strategy_priority=strategy_priority
         )
         self.coordinator = StrategyCoordinator(
-            strategies=[self.core_strategy, self.satellite_strategy],
+            strategies=self.strategies,  # Use full list of strategies
             config=coordinator_config
         )
 
-        # Capital Allocator
-        allocation_config = AllocationConfig(
-            core_target_weight=self.config.core_target_weight,
-            core_min_weight=self.config.core_min_weight,
-            core_max_weight=self.config.core_max_weight,
-            satellite_target_weight=self.config.satellite_target_weight,
-            satellite_min_weight=self.config.satellite_min_weight,
-            satellite_max_weight=self.config.satellite_max_weight,
-            rebalance_threshold=self.custom_configs.get('rebalance_threshold', 0.05)
-        )
-        self.allocator = CapitalAllocator(allocation_config)
+        # Capital Allocator - use the provided allocation config
+        self.allocator = CapitalAllocator(self.allocation_config)
 
-        # Compliance Monitor
-        compliance_rules = ComplianceRules(
-            core_min_weight=self.config.core_min_weight,
-            core_max_weight=self.config.core_max_weight,
-            satellite_min_weight=self.config.satellite_min_weight,
-            satellite_max_weight=self.config.satellite_max_weight,
-            max_single_position_weight=self.custom_configs.get('max_single_position_weight', 0.15),
-            max_portfolio_volatility=self.custom_configs.get('max_portfolio_volatility', 0.15)
-        )
-        self.compliance_monitor = ComplianceMonitor(compliance_rules)
+        # Compliance Monitor - use the compliance rules (auto-generated or provided)
+        self.compliance_monitor = ComplianceMonitor(self.compliance_rules)
 
         # Trade Executor
         execution_config = ExecutionConfig(
@@ -181,18 +268,27 @@ class SystemOrchestrator:
         try:
             logger.info("Initializing trading system components")
 
-            # Initialize strategies
-            core_success = self.core_strategy.prepare_data()
-            satellite_success = self.satellite_strategy.prepare_data()
+            # Initialize all strategies
+            failed_strategies = []
+            for strategy in self.strategies:
+                try:
+                    if hasattr(strategy, 'prepare_data'):
+                        success = strategy.prepare_data()
+                        if not success:
+                            failed_strategies.append(strategy.name)
+                            logger.warning(f"Strategy '{strategy.name}' preparation returned False")
+                except Exception as e:
+                    failed_strategies.append(strategy.name)
+                    logger.error(f"Failed to initialize strategy '{strategy.name}': {e}")
 
-            if not core_success or not satellite_success:
-                logger.error("Failed to initialize strategies")
+            if failed_strategies:
+                logger.error(f"Failed to initialize strategies: {failed_strategies}")
                 return False
 
-            # Initialize portfolio state (simplified - would create actual portfolio)
+            # Initialize portfolio state
             self.current_portfolio = self._create_initial_portfolio()
 
-            logger.info("System initialization completed successfully")
+            logger.info(f"System initialization completed successfully for {len(self.strategies)} strategies")
             return True
 
         except Exception as e:
@@ -436,9 +532,13 @@ class SystemOrchestrator:
         """Get information about all system components."""
         return {
             'strategies': {
-                'core': self.core_strategy.config.name,
-                'satellite': self.satellite_strategy.config.name
+                strategy.name: {
+                    'type': strategy.__class__.__name__,
+                    'config': getattr(strategy, 'config', {})
+                }
+                for strategy in self.strategies
             },
+            'strategy_count': len(self.strategies),
             'components': {
                 'coordinator': self.coordinator.get_coordination_stats(),
                 'allocator': self.allocator.get_allocation_status(),
@@ -456,6 +556,11 @@ class SystemOrchestrator:
         """Validate entire system configuration."""
         issues = []
 
+        # Validate we have strategies
+        if not self.strategies:
+            issues.append("No strategies initialized")
+            return False, issues
+
         # Validate components
         component_validations = [
             self.coordinator.validate_configuration(),
@@ -469,11 +574,15 @@ class SystemOrchestrator:
             if not is_valid:
                 issues.extend(component_issues)
 
-        # Validate strategy configurations
-        if not self.core_strategy:
-            issues.append("Core strategy not initialized")
+        # Validate each strategy has allocation config
+        for strategy in self.strategies:
+            alloc = self.allocation_config.get_allocation_for_strategy(strategy.name)
+            if not alloc:
+                issues.append(f"Strategy '{strategy.name}' missing allocation configuration")
 
-        if not self.satellite_strategy:
-            issues.append("Satellite strategy not initialized")
+        # Validate strategy names are unique
+        strategy_names = [s.name for s in self.strategies]
+        if len(strategy_names) != len(set(strategy_names)):
+            issues.append("Duplicate strategy names detected")
 
         return len(issues) == 0, issues

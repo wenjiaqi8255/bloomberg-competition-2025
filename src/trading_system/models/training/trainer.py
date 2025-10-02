@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class TrainingConfig:
+class TrainingConfig: #TODO: read from config
     """Configuration for model training."""
     # Training parameters
     use_cross_validation: bool = True

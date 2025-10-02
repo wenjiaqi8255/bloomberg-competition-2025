@@ -381,3 +381,103 @@ class PerformanceEvaluator:
             'long_short_sharpe': 0.0
         }
         return {**base_metrics, **financial_metrics}
+
+    @staticmethod
+    def evaluate_comprehensive(model: BaseModel, X_test: pd.DataFrame, y_test: pd.Series,
+                              benchmark_returns: Optional[pd.Series] = None,
+                              dataset_name: str = "test") -> Dict[str, Any]:
+        """
+        Comprehensive evaluation for Phase 7 pipeline.
+
+        Simple extension of existing evaluate_model with additional Phase 7 features.
+
+        Args:
+            model: Trained model to evaluate
+            X_test: Test features
+            y_test: True target values
+            benchmark_returns: Optional benchmark returns for comparison
+            dataset_name: Name of evaluation dataset
+
+        Returns:
+            Dictionary with comprehensive evaluation results
+        """
+        try:
+            # Use existing evaluate_model for base metrics
+            base_metrics = PerformanceEvaluator.evaluate_model(model, X_test, y_test)
+
+            # Add financial evaluation if requested
+            if benchmark_returns is not None:
+                financial_metrics = PerformanceEvaluator.evaluate_financial_model(
+                    model, X_test, y_test, benchmark_returns
+                )
+                # Merge results with prefix to avoid conflicts
+                for key, value in financial_metrics.items():
+                    if key not in base_metrics:
+                        base_metrics[f'financial_{key}'] = value
+
+            # Add Phase 7 specific metadata
+            evaluation_result = {
+                'model_id': model.model_id,
+                'evaluation_timestamp': pd.Timestamp.now().isoformat(),
+                'dataset_name': dataset_name,
+                'dataset_size': len(y_test),
+                'metrics': base_metrics,
+                'status': 'completed'
+            }
+
+            logger.info(f"Comprehensive evaluation completed for {model.model_id}")
+            return evaluation_result
+
+        except Exception as e:
+            logger.error(f"Comprehensive evaluation failed: {e}")
+            return {
+                'model_id': getattr(model, 'model_id', 'unknown'),
+                'evaluation_timestamp': pd.Timestamp.now().isoformat(),
+                'dataset_name': dataset_name,
+                'dataset_size': 0,
+                'metrics': {},
+                'status': 'failed',
+                'error': str(e)
+            }
+
+    @staticmethod
+    def generate_recommendations(metrics: Dict[str, float]) -> List[str]:
+        """
+        Generate simple recommendations based on evaluation metrics.
+
+        Args:
+            metrics: Dictionary of evaluation metrics
+
+        Returns:
+            List of recommendations
+        """
+        recommendations = []
+
+        try:
+            # Information Coefficient recommendations
+            ic = metrics.get('financial_information_coefficient', metrics.get('information_coefficient', 0))
+            if abs(ic) < 0.05:
+                recommendations.append("Low IC detected. Consider feature engineering.")
+            elif abs(ic) < 0.1:
+                recommendations.append("Moderate IC. Consider hyperparameter tuning.")
+
+            # R-squared recommendations
+            r2 = metrics.get('r2', 0)
+            if r2 < 0.1:
+                recommendations.append("Low R². Model may need improvements.")
+            elif r2 > 0.9:
+                recommendations.append("High R². Check for overfitting.")
+
+            # MSE recommendations
+            mse = metrics.get('mse', float('inf'))
+            if mse > 1.0:
+                recommendations.append("High MSE. Consider different model architecture.")
+
+            if not recommendations:
+                recommendations.append("Model performance appears reasonable.")
+
+        except Exception as e:
+            logger.warning(f"Error generating recommendations: {e}")
+            recommendations.append("Unable to generate recommendations due to evaluation error.")
+
+        return recommendations

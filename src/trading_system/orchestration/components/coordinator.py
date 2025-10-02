@@ -4,7 +4,8 @@ Strategy Coordinator - Multi-Strategy Signal Management
 Coordinates multiple trading strategies, merges conflicting signals, and applies
 capacity constraints to ensure proper signal integration.
 
-Extracted from SystemOrchestrator to follow Single Responsibility Principle.
+应该可以处理单个strategy的情况，而不是必须两个strategy
+而且不应该和core+satellite的逻辑混在一起
 """
 
 import logging
@@ -12,17 +13,17 @@ from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 from dataclasses import dataclass
 
-from ..types.signals import TradingSignal
-from ..types.enums import SignalType
-from ..strategies.base_strategy import Strategy
-from ..types.enums import AssetClass
+from ...types.signals import TradingSignal
+from ...types.enums import SignalType
+from ...strategies.base_strategy import BaseStrategy
+from ...types.enums import AssetClass
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class CoordinatorConfig:
-    """Configuration for strategy coordinator."""
+    """Configuration for strategy coordinator - supports flexible strategy prioritization."""
     max_signals_per_day: int = 50
     signal_conflict_resolution: str = "merge"  # "merge", "priority", "cancel"
     capacity_scaling: bool = True
@@ -30,14 +31,14 @@ class CoordinatorConfig:
     max_position_size: float = 0.15
 
     # Priority ordering for conflict resolution
+    # Maps strategy name to priority (lower number = higher priority)
+    # e.g., {"FF5_Core": 1, "ML_Satellite": 2, "Tech_Tactical": 3}
     strategy_priority: Dict[str, int] = None
 
     def __post_init__(self):
+        # If no priorities specified, all strategies have equal priority
         if self.strategy_priority is None:
-            self.strategy_priority = {
-                "core": 1,      # Higher priority
-                "satellite": 2  # Lower priority
-            }
+            self.strategy_priority = {}
 
 
 class StrategyCoordinator:
@@ -51,7 +52,7 @@ class StrategyCoordinator:
     - Filter weak signals
     """
 
-    def __init__(self, strategies: List[Strategy], config: CoordinatorConfig):
+    def __init__(self, strategies: List[BaseStrategy], config: CoordinatorConfig):
         """
         Initialize strategy coordinator.
 

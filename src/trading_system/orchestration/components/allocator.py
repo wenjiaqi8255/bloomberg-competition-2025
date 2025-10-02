@@ -4,7 +4,8 @@ Capital Allocator - Strategy Capital Management
 Manages capital allocation between different strategies, enforces allocation
 constraints, and tracks allocation drift and rebalancing needs.
 
-Extracted from SystemOrchestrator to follow Single Responsibility Principle.
+应该可以处理单个strategy的情况，而不是必须两个strategy
+而且不应该和core+satellite的逻辑混在一起
 """
 
 import logging
@@ -30,8 +31,27 @@ class AllocationStatus(Enum):
 
 
 @dataclass
+class StrategyAllocation:
+    """Allocation configuration for a single strategy."""
+    strategy_name: str
+    target_weight: float
+    min_weight: float
+    max_weight: float
+    priority: int = 1  # Lower number = higher priority (1 is highest)
+    
+    def __post_init__(self):
+        """Validate allocation parameters."""
+        if not 0 <= self.target_weight <= 1:
+            raise ValueError(f"target_weight must be between 0 and 1, got {self.target_weight}")
+        if not 0 <= self.min_weight <= self.max_weight:
+            raise ValueError(f"min_weight must be <= max_weight")
+        if not self.min_weight <= self.target_weight <= self.max_weight:
+            raise ValueError(f"target_weight must be between min_weight and max_weight")
+
+
+@dataclass
 class AllocationTarget:
-    """Target allocation for a strategy."""
+    """Current allocation state for a strategy."""
     strategy_name: str
     target_weight: float
     min_weight: float
@@ -52,16 +72,15 @@ class AllocationTarget:
 
 @dataclass
 class AllocationConfig:
-    """Configuration for capital allocator."""
-    # Core-Satellite allocation
-    core_target_weight: float = 0.75
-    core_min_weight: float = 0.70
-    core_max_weight: float = 0.80
-
-    satellite_target_weight: float = 0.25
-    satellite_min_weight: float = 0.20
-    satellite_max_weight: float = 0.30
-
+    """
+    Configuration for capital allocator - supports arbitrary number of strategies.
+    
+    This replaces the old hardcoded core/satellite configuration with a flexible
+    list-based approach following SOLID and YAGNI principles.
+    """
+    # Strategy allocations - can be 1, 2, or more strategies
+    strategy_allocations: List[StrategyAllocation]
+    
     # Rebalancing parameters
     rebalance_threshold: float = 0.05  # 5% drift triggers rebalance
     max_drift_before_rebalance: float = 0.10  # 10% drift forces rebalance
@@ -75,6 +94,60 @@ class AllocationConfig:
     # Risk management
     max_daily_allocation_change: float = 0.20  # Max 20% change per day
     volatility_adjustment_factor: bool = True
+    
+    def __post_init__(self):
+        """Validate configuration."""
+        if not self.strategy_allocations:
+            raise ValueError("At least one strategy allocation must be provided")
+        
+        # Validate total target weight
+        total_target = sum(s.target_weight for s in self.strategy_allocations)
+        if total_target > 1.0:
+            raise ValueError(
+                f"Total target weight {total_target:.2%} exceeds 100%. "
+                f"Sum of all strategy target weights must be <= 1.0"
+            )
+        
+        # Check for duplicate strategy names
+        names = [s.strategy_name for s in self.strategy_allocations]
+        if len(names) != len(set(names)):
+            raise ValueError("Duplicate strategy names found in allocations")
+    
+    def get_allocation_for_strategy(self, strategy_name: str) -> Optional[StrategyAllocation]:
+        """Get allocation configuration for a specific strategy."""
+        for alloc in self.strategy_allocations:
+            if alloc.strategy_name == strategy_name:
+                return alloc
+        return None
+    
+    @classmethod
+    def create_core_satellite(cls, 
+                             core_target: float = 0.75,
+                             satellite_target: float = 0.25,
+                             core_name: str = "core",
+                             satellite_name: str = "satellite") -> 'AllocationConfig':
+        """
+        Factory method to create traditional core-satellite configuration.
+        This provides backward compatibility with the old hardcoded approach.
+        """
+        return cls(
+            strategy_allocations=[
+                StrategyAllocation(
+                    strategy_name=core_name,
+                    target_weight=core_target,
+                    min_weight=max(0.0, core_target - 0.05),
+                    max_weight=min(1.0, core_target + 0.05),
+                    priority=1
+                ),
+                StrategyAllocation(
+                    strategy_name=satellite_name,
+                    target_weight=satellite_target,
+                    min_weight=max(0.0, satellite_target - 0.05),
+                    max_weight=min(1.0, satellite_target + 0.05),
+                    priority=2
+                )
+            ]
+        )
 
 
 class CapitalAllocator:
@@ -115,8 +188,13 @@ class CapitalAllocator:
         }
 
         logger.info("Initialized CapitalAllocator")
-        logger.info(f"Core allocation: {config.core_target_weight:.1%} ±{config.rebalance_threshold:.1%}")
-        logger.info(f"Satellite allocation: {config.satellite_target_weight:.1%} ±{config.rebalance_threshold:.1%}")
+        logger.info(f"Managing {len(config.strategy_allocations)} strategies:")
+        for alloc in config.strategy_allocations:
+            logger.info(
+                f"  - {alloc.strategy_name}: target={alloc.target_weight:.1%}, "
+                f"range=[{alloc.min_weight:.1%}, {alloc.max_weight:.1%}], "
+                f"priority={alloc.priority}"
+            )
 
     def allocate(self, strategy_signals: Dict[str, List[TradingSignal]],
                  portfolio: Portfolio, total_capital: float) -> Dict[str, List[TradingSignal]]:
@@ -178,60 +256,71 @@ class CapitalAllocator:
                 strategy_values[strategy_name] = 0
             strategy_values[strategy_name] += position_value
 
-        # Create allocation targets for current state
+        # Create allocation targets for current state using configuration
         for strategy_name, value in strategy_values.items():
             weight = value / total_capital
-
-            if 'core' in strategy_name.lower():
+            
+            # Find strategy configuration
+            strategy_config = self.config.get_allocation_for_strategy(strategy_name)
+            
+            if strategy_config:
                 self.current_allocations[strategy_name] = AllocationTarget(
                     strategy_name=strategy_name,
-                    target_weight=self.config.core_target_weight,
-                    min_weight=self.config.core_min_weight,
-                    max_weight=self.config.core_max_weight,
+                    target_weight=strategy_config.target_weight,
+                    min_weight=strategy_config.min_weight,
+                    max_weight=strategy_config.max_weight,
                     current_weight=weight,
                     current_value=value
                 )
-            elif 'satellite' in strategy_name.lower():
-                self.current_allocations[strategy_name] = AllocationTarget(
-                    strategy_name=strategy_name,
-                    target_weight=self.config.satellite_target_weight,
-                    min_weight=self.config.satellite_min_weight,
-                    max_weight=self.config.satellite_max_weight,
-                    current_weight=weight,
-                    current_value=value
+            else:
+                # Strategy not in configuration - log warning
+                logger.warning(
+                    f"Strategy '{strategy_name}' has positions but no allocation config. "
+                    f"Current value: ${value:,.2f} ({weight:.1%})"
                 )
 
     def _calculate_allocation_targets(self, strategy_signals: Dict[str, List[TradingSignal]],
                                     total_capital: float) -> Dict[str, AllocationTarget]:
-        """Calculate optimal allocation targets based on signals."""
+        """Calculate optimal allocation targets based on signals and configuration."""
         targets = {}
 
         for strategy_name, signals in strategy_signals.items():
+            # Find strategy configuration
+            strategy_config = self.config.get_allocation_for_strategy(strategy_name)
+            
+            if not strategy_config:
+                logger.warning(
+                    f"Strategy '{strategy_name}' has signals but no allocation config. "
+                    f"Signals will be ignored."
+                )
+                continue
+            
             if not signals:
+                # No signals for this strategy - use base config
+                targets[strategy_name] = AllocationTarget(
+                    strategy_name=strategy_name,
+                    target_weight=strategy_config.target_weight,
+                    min_weight=strategy_config.min_weight,
+                    max_weight=strategy_config.max_weight
+                )
                 continue
 
             # Calculate signal strength for this strategy
             total_strength = sum(signal.strength for signal in signals)
             avg_strength = total_strength / len(signals) if signals else 0
 
-            # Determine strategy type and target allocation
-            if 'core' in strategy_name.lower():
-                target_weight = self.config.core_target_weight
-                min_weight = self.config.core_min_weight
-                max_weight = self.config.core_max_weight
-            elif 'satellite' in strategy_name.lower():
-                target_weight = self.config.satellite_target_weight
-                min_weight = self.config.satellite_min_weight
-                max_weight = self.config.satellite_max_weight
-            else:
-                # Default to equal allocation
-                target_weight = 0.5
-                min_weight = 0.3
-                max_weight = 0.7
+            # Start with configured target
+            target_weight = strategy_config.target_weight
+            min_weight = strategy_config.min_weight
+            max_weight = strategy_config.max_weight
 
-            # Adjust target based on signal strength
+            # Adjust target based on signal strength (optional dynamic allocation)
             if avg_strength < self.config.min_signal_strength_for_allocation:
                 target_weight *= 0.5  # Reduce allocation for weak signals
+                logger.debug(
+                    f"Reducing allocation for '{strategy_name}' due to weak signals "
+                    f"(avg strength: {avg_strength:.2f})"
+                )
 
             targets[strategy_name] = AllocationTarget(
                 strategy_name=strategy_name,
@@ -352,9 +441,16 @@ class CapitalAllocator:
             },
             'stats': self.allocation_stats.copy(),
             'config': {
-                'core_target': self.config.core_target_weight,
-                'satellite_target': self.config.satellite_target_weight,
-                'rebalance_threshold': self.config.rebalance_threshold
+                'strategies': {
+                    alloc.strategy_name: {
+                        'target_weight': alloc.target_weight,
+                        'min_weight': alloc.min_weight,
+                        'max_weight': alloc.max_weight,
+                        'priority': alloc.priority
+                    } for alloc in self.config.strategy_allocations
+                },
+                'rebalance_threshold': self.config.rebalance_threshold,
+                'cash_buffer': self.config.cash_buffer_weight
             }
         }
 
@@ -382,17 +478,30 @@ class CapitalAllocator:
         """Validate allocator configuration."""
         issues = []
 
+        # Check if we have strategies
+        if not self.config.strategy_allocations:
+            issues.append("No strategy allocations configured")
+            return False, issues
+
         # Check allocation weights sum
-        total_target = self.config.core_target_weight + self.config.satellite_target_weight
-        if total_target > 0.95:  # Allow for cash buffer
-            issues.append(f"Target allocations sum to {total_target:.1%}, should be ≤ 95%")
+        total_target = sum(alloc.target_weight for alloc in self.config.strategy_allocations)
+        if total_target > 1.0 - self.config.cash_buffer_weight:
+            issues.append(
+                f"Target allocations sum to {total_target:.1%}, "
+                f"should be ≤ {(1.0 - self.config.cash_buffer_weight):.1%} "
+                f"(allowing for {self.config.cash_buffer_weight:.1%} cash buffer)"
+            )
 
-        # Check bounds logic
-        if not (self.config.core_min_weight <= self.config.core_target_weight <= self.config.core_max_weight):
-            issues.append("Core allocation bounds are inconsistent")
-
-        if not (self.config.satellite_min_weight <= self.config.satellite_target_weight <= self.config.satellite_max_weight):
-            issues.append("Satellite allocation bounds are inconsistent")
+        # Check each strategy allocation
+        for alloc in self.config.strategy_allocations:
+            # Bounds should already be validated in StrategyAllocation.__post_init__
+            # but double-check here for completeness
+            if not (alloc.min_weight <= alloc.target_weight <= alloc.max_weight):
+                issues.append(
+                    f"Strategy '{alloc.strategy_name}' has inconsistent bounds: "
+                    f"min={alloc.min_weight:.1%}, target={alloc.target_weight:.1%}, "
+                    f"max={alloc.max_weight:.1%}"
+                )
 
         # Check thresholds
         if self.config.rebalance_threshold <= 0 or self.config.rebalance_threshold > 0.5:
@@ -400,5 +509,8 @@ class CapitalAllocator:
 
         if self.config.max_single_position_weight <= 0 or self.config.max_single_position_weight > 1:
             issues.append("max_single_position_weight must be between 0 and 100%")
+        
+        if self.config.cash_buffer_weight < 0 or self.config.cash_buffer_weight > 0.2:
+            issues.append("cash_buffer_weight should be between 0 and 20%")
 
         return len(issues) == 0, issues

@@ -18,7 +18,6 @@ from .allocator import CapitalAllocator, AllocationConfig
 from .compliance import ComplianceMonitor, ComplianceRules, ComplianceReport
 from .executor import TradeExecutor, ExecutionConfig
 from .reporter import PerformanceReporter, ReportConfig
-from ..system_orchestrator import SystemOrchestrator, SystemResult
 
 __all__ = [
     # Strategy coordination
@@ -41,8 +40,4 @@ __all__ = [
     # Performance reporting
     'PerformanceReporter',
     'ReportConfig',
-
-    # System orchestration
-    'SystemOrchestrator',
-    'SystemResult',
 ]
