@@ -76,6 +76,7 @@ from ..types.portfolio import Portfolio
 from ..types.data_types import TradingSignal
 from ..config.system import SystemConfig
 from ..utils.risk import RiskCalculator
+from ..data.stock_classifier import StockClassifier
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +121,7 @@ class SystemOrchestrator:
                  strategies: List[BaseStrategy],
                  allocation_config: AllocationConfig,
                  compliance_rules: Optional[ComplianceRules] = None,
+                 stock_classifier: Optional[StockClassifier] = None,
                  custom_configs: Optional[Dict[str, Any]] = None):
         """
         Initialize System Orchestrator with flexible strategy support.
@@ -132,6 +134,7 @@ class SystemOrchestrator:
             strategies: List of trading strategies (can be 1 or more)
             allocation_config: Capital allocation configuration for all strategies
             compliance_rules: Compliance rules (optional, will be auto-generated from allocation if not provided)
+            stock_classifier: Optional classifier for box-based compliance.
             custom_configs: Custom configuration overrides for components
         
         Raises:
@@ -144,6 +147,7 @@ class SystemOrchestrator:
         self.strategies = strategies
         self.allocation_config = allocation_config
         self.custom_configs = custom_configs or {}
+        self.stock_classifier = stock_classifier  # Store the classifier
         
         # Validate that strategy names match allocation config
         self._validate_configuration()
@@ -238,7 +242,10 @@ class SystemOrchestrator:
         self.allocator = CapitalAllocator(self.allocation_config)
 
         # Compliance Monitor - use the compliance rules (auto-generated or provided)
-        self.compliance_monitor = ComplianceMonitor(self.compliance_rules)
+        self.compliance_monitor = ComplianceMonitor(
+            self.compliance_rules,
+            stock_classifier=self.stock_classifier  # Pass classifier here
+        )
 
         # Trade Executor
         execution_config = ExecutionConfig(

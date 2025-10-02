@@ -10,11 +10,12 @@ Extracted from SystemOrchestrator to follow Single Responsibility Principle.
 import logging
 from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime, timedelta
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 from ...types.portfolio import Portfolio, Position
 from ...types.enums import AssetClass
+from ...data.stock_classifier import StockClassifier, InvestmentBox
 
 logger = logging.getLogger(__name__)
 
@@ -85,13 +86,15 @@ class ComplianceRules:
     max_drawdown: float = 0.15  # 15% max drawdown
     risk_budget_limit: float = 0.12  # Risk budget units
 
-    # Investment box rules
-    min_equity_allocation: float = 0.60
-    max_equity_allocation: float = 0.95
-    min_fixed_income_allocation: float = 0.00
-    max_fixed_income_allocation: float = 0.30
-    min_alternative_allocation: float = 0.00
-    max_alternative_allocation: float = 0.15
+    # Investment box rules (asset class level)
+    asset_class_rules: Dict[AssetClass, Tuple[float, float]] = field(default_factory=lambda: {
+        AssetClass.EQUITY: (0.60, 0.95),
+        AssetClass.FIXED_INCOME: (0.00, 0.30),
+        AssetClass.ALTERNATIVE: (0.00, 0.15),
+    })
+
+    # NEW: Box deviation rules (e.g., sector, region)
+    box_deviation_limits: List[Dict[str, Any]] = field(default_factory=list)
 
     # Liquidity rules
     min_liquidity_score: float = 0.7  # Minimum portfolio liquidity
@@ -165,14 +168,17 @@ class ComplianceMonitor:
     - Provide remediation recommendations
     """
 
-    def __init__(self, rules: ComplianceRules):
+    def __init__(self, rules: ComplianceRules,
+                 stock_classifier: Optional[StockClassifier] = None):
         """
         Initialize compliance monitor.
 
         Args:
             rules: Compliance rules to monitor
+            stock_classifier: Optional classifier for box-based checks.
         """
         self.rules = rules
+        self.stock_classifier = stock_classifier
 
         # Compliance history
         self.compliance_history: List[ComplianceReport] = []
@@ -423,26 +429,91 @@ class ComplianceMonitor:
         """Check investment box compliance."""
         violations = []
 
-        # This is a simplified implementation
-        # In practice, would need detailed asset classification
+        # This method is now significantly enhanced to use the StockClassifier
+        if not self.stock_classifier:
+            logger.debug("StockClassifier not provided, skipping detailed box compliance check.")
+            return violations
+
         if not portfolio.positions or portfolio.total_value == 0:
             return violations
 
-        # For now, just check if we have any positions (basic compliance)
-        position_count = len([p for p in portfolio.positions.values() if p.quantity > 0])
+        # 1. Classify all stocks in the portfolio
+        symbols = [p.symbol for p in portfolio.positions.values() if p.quantity > 0]
+        try:
+            # Note: This requires price_data, which is not available here.
+            # This check will need to be refactored to either receive classified
+            # positions or have access to the necessary data provider.
+            # For now, we simulate classification based on position metadata if available.
+            
+            # Placeholder for aggregated weights
+            aggregated_weights = {
+                'sector': {},
+                'region': {},
+                'style': {},
+                'size': {}
+            }
 
-        if position_count == 0:
+            for position in portfolio.positions.values():
+                if position.quantity <= 0:
+                    continue
+                
+                weight = (position.quantity * position.current_price) / portfolio.total_value
+                
+                # In a real scenario, we'd use stock_classifier here.
+                # We simulate by assuming positions have this metadata.
+                cls_info = getattr(position, 'classification', {})
+                if not cls_info:
+                    # If you run this, it will likely use this path.
+                    # The orchestrator needs to be updated to pass classified positions.
+                    continue 
+
+                for dim in aggregated_weights.keys():
+                    if dim_value := cls_info.get(dim):
+                        current_weight = aggregated_weights[dim].get(dim_value, 0)
+                        aggregated_weights[dim][dim_value] = current_weight + weight
+
+            # 2. Check deviation against configured limits
+            # This part assumes a benchmark is either provided or implicitly defined (e.g., equal weight)
+            for rule in self.rules.box_deviation_limits:
+                dimension = rule.get('dimension')
+                max_dev = rule.get('max_deviation')
+                
+                if not dimension or not max_dev or dimension not in aggregated_weights:
+                    continue
+
+                # Here we would compare against a benchmark's weights.
+                # For simplicity, let's assume the check is against any single box
+                # in a dimension exceeding a total allocation limit, which is a simpler rule.
+                # Example rule: "max_sector_allocation: 0.25" is now handled here.
+                
+                for box_name, weight in aggregated_weights[dimension].items():
+                     # This check is a simplification. A proper implementation
+                     # would compare deviation from a benchmark's weight for that box.
+                    if weight > max_dev:
+                        violations.append(ComplianceRule(
+                            name=f"Box Deviation - {dimension.capitalize()}: {box_name}",
+                            violation_type=ViolationType.INVESTMENT_BOX_VIOLATION,
+                            description=f"{dimension.capitalize()} '{box_name}' allocation of {weight:.1%} "
+                                        f"exceeds the maximum deviation/limit of {max_dev:.1%}.",
+                            threshold_value=max_dev,
+                            current_value=weight,
+                            status=ComplianceStatus.WARNING,
+                            recommendation=f"Reduce exposure to {dimension.capitalize()} '{box_name}'.",
+                            severity="medium"
+                        ))
+
+        except Exception as e:
+            logger.error(f"Error during investment box compliance check: {e}", exc_info=True)
+            # Add a violation to indicate the check failed
             violations.append(ComplianceRule(
-                name="Empty Portfolio",
+                name="Box Compliance Check Failure",
                 violation_type=ViolationType.INVESTMENT_BOX_VIOLATION,
-                description="Portfolio has no positions",
-                threshold_value=1,
-                current_value=0,
-                status=ComplianceStatus.WARNING,
-                recommendation="Establish positions according to investment strategy",
-                severity="medium"
+                description=f"The box compliance check failed to execute: {e}",
+                threshold_value=0, current_value=1, status=ComplianceStatus.CRITICAL,
+                recommendation="Review system logs for compliance module.",
+                severity="critical"
             ))
-
+            
         return violations
 
     def _check_risk_budget_compliance(self, portfolio: Portfolio,

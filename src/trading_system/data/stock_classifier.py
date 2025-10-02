@@ -101,41 +101,15 @@ class StockClassifier(ClassificationProvider):
     Uses technical proxies when fundamental data is unavailable.
     """
 
-    # Market cap thresholds (in billions USD)
-    SIZE_THRESHOLDS = {
-        SizeCategory.LARGE: 10.0,    # > $10B
-        SizeCategory.MID: 2.0,      # $2B - $10B
-        SizeCategory.SMALL: 0.0      # < $2B
-    }
-
-    # Developed market countries (by common ticker suffixes)
-    DEVELOPED_MARKETS = {
-        'US', 'CA', 'GB', 'DE', 'FR', 'IT', 'ES', 'NL', 'CH', 'SE', 'NO', 'DK',
-        'AU', 'NZ', 'JP', 'SG', 'HK', 'TW', 'KR'
-    }
-
-    # Sector mappings for common tickers
-    SECTOR_MAPPINGS = {
-        'Technology': ['AAPL', 'MSFT', 'GOOGL', 'META', 'NVDA', 'TSLA', 'ADBE', 'INTC'],
-        'Healthcare': ['JNJ', 'PFE', 'UNH', 'ABBV', 'MRK', 'T', 'BMY', 'AMGN'],
-        'Financials': ['JPM', 'BAC', 'WFC', 'GS', 'MS', 'C', 'BRK-B', 'BLK'],
-        'Consumer Discretionary': ['AMZN', 'TSLA', 'HD', 'MCD', 'NKE', 'SBUX', 'LOW', 'TGT'],
-        'Consumer Staples': ['PG', 'KO', 'PEP', 'WMT', 'COST', 'MDLZ', 'CL', 'GIS'],
-        'Industrials': ['CAT', 'GE', 'HON', 'UNP', 'BA', 'MMM', 'DE', 'UPS'],
-        'Energy': ['XOM', 'CVX', 'COP', 'SLB', 'EOG', 'PSX', 'VLO', 'MPC'],
-        'Utilities': ['NEE', 'D', 'SO', 'DUK', 'AEP', 'EXC', 'SRE', 'PEG'],
-        'Real Estate': ['SPG', 'AMT', 'PLD', 'EQIX', 'PSA', 'CCI', 'DLR', 'O'],
-        'Materials': ['LIN', 'BHP', 'RIO', 'DD', 'APD', 'ECL', 'FCX', 'NUE'],
-        'Communication Services': ['GOOGL', 'META', 'T', 'VZ', 'DIS', 'NFLX', 'CMCSA', 'TMUS']
-    }
-
-    def __init__(self, yfinance_provider: YFinanceProvider = None,
+    def __init__(self, config: Dict[str, Any],
+                 yfinance_provider: YFinanceProvider = None,
                  max_retries: int = 3, retry_delay: float = 1.0,
                  request_timeout: int = 30, cache_enabled: bool = True):
         """
         Initialize stock classifier.
 
         Args:
+            config: Configuration dictionary for classification rules.
             yfinance_provider: YFinance provider instance
             max_retries: Maximum number of retry attempts
             retry_delay: Delay between retries in seconds
@@ -154,6 +128,48 @@ class StockClassifier(ClassificationProvider):
         self.market_cap_cache = {}
         self.sector_cache = {}
 
+        # Load configuration for classification rules
+        self._load_config(config)
+
+    def _load_config(self, config: Dict[str, Any]):
+        """Load classification rules from config."""
+        logger.info("Loading StockClassifier configuration...")
+
+        # Size config with defaults
+        size_config = config.get('size_config', {})
+        self.size_thresholds = {
+            SizeCategory.LARGE: size_config.get('thresholds', {}).get('large', 10.0),
+            SizeCategory.MID: size_config.get('thresholds', {}).get('mid', 2.0),
+            SizeCategory.SMALL: 0.0
+        }
+        
+        # Region config with defaults
+        region_config = config.get('region_config', {})
+        default_developed_markets = {
+            'US', 'CA', 'GB', 'DE', 'FR', 'IT', 'ES', 'NL', 'CH', 'SE', 'NO', 'DK',
+            'AU', 'NZ', 'JP', 'SG', 'HK', 'TW', 'KR'
+        }
+        self.developed_markets = set(region_config.get('developed_markets', default_developed_markets))
+
+        # Sector config with defaults
+        sector_config = config.get('sector_config', {})
+        default_sector_mappings = {
+            'Technology': ['AAPL', 'MSFT', 'GOOGL', 'META', 'NVDA', 'TSLA', 'ADBE', 'INTC'],
+            'Healthcare': ['JNJ', 'PFE', 'UNH', 'ABBV', 'MRK', 'T', 'BMY', 'AMGN'],
+            'Financials': ['JPM', 'BAC', 'WFC', 'GS', 'MS', 'C', 'BRK-B', 'BLK'],
+            'Consumer Discretionary': ['AMZN', 'TSLA', 'HD', 'MCD', 'NKE', 'SBUX', 'LOW', 'TGT'],
+            'Consumer Staples': ['PG', 'KO', 'PEP', 'WMT', 'COST', 'MDLZ', 'CL', 'GIS'],
+            'Industrials': ['CAT', 'GE', 'HON', 'UNP', 'BA', 'MMM', 'DE', 'UPS'],
+            'Energy': ['XOM', 'CVX', 'COP', 'SLB', 'EOG', 'PSX', 'VLO', 'MPC'],
+            'Utilities': ['NEE', 'D', 'SO', 'DUK', 'AEP', 'EXC', 'SRE', 'PEG'],
+            'Real Estate': ['SPG', 'AMT', 'PLD', 'EQIX', 'PSA', 'CCI', 'DLR', 'O'],
+            'Materials': ['LIN', 'BHP', 'RIO', 'DD', 'APD', 'ECL', 'FCX', 'NUE'],
+            'Communication Services': ['GOOGL', 'META', 'T', 'VZ', 'DIS', 'NFLX', 'CMCSA', 'TMUS']
+        }
+        self.sector_mappings = sector_config.get('mappings', default_sector_mappings)
+        
+        logger.info(f"Size thresholds loaded: LARGE > ${self.size_thresholds[SizeCategory.LARGE]}B")
+    
     def get_data_source(self) -> DataSource:
         """Get the data source enum for this provider."""
         return DataSource.YFINANCE  # Uses YFinance for data
@@ -327,9 +343,9 @@ class StockClassifier(ClassificationProvider):
             # Get market cap
             market_cap = self._get_market_cap(symbol, price_data)
 
-            if market_cap >= self.SIZE_THRESHOLDS[SizeCategory.LARGE]:
+            if market_cap >= self.size_thresholds[SizeCategory.LARGE]:
                 return SizeCategory.LARGE, market_cap
-            elif market_cap >= self.SIZE_THRESHOLDS[SizeCategory.MID]:
+            elif market_cap >= self.size_thresholds[SizeCategory.MID]:
                 return SizeCategory.MID, market_cap
             else:
                 return SizeCategory.SMALL, market_cap
@@ -395,7 +411,7 @@ class StockClassifier(ClassificationProvider):
             # Check for direct country suffixes
             if '.' in symbol_upper:
                 country_code = symbol_upper.split('.')[-1]
-                if country_code in self.DEVELOPED_MARKETS:
+                if country_code in self.developed_markets:
                     return RegionCategory.DEVELOPED
                 else:
                     return RegionCategory.EMERGING
@@ -419,7 +435,7 @@ class StockClassifier(ClassificationProvider):
             symbol_upper = symbol.upper()
 
             # Check direct mappings
-            for sector, sector_symbols in self.SECTOR_MAPPINGS.items():
+            for sector, sector_symbols in self.sector_mappings.items():
                 if symbol_upper in sector_symbols:
                     return sector
 
@@ -665,9 +681,9 @@ class StockClassifier(ClassificationProvider):
             'style_categories': [cat.value for cat in StyleCategory],
             'region_categories': [cat.value for cat in RegionCategory],
             'sector_categories': [cat.value for cat in SectorCategory],
-            'sectors': list(self.SECTOR_MAPPINGS.keys()),
-            'size_thresholds': {cat.value: threshold for cat, threshold in self.SIZE_THRESHOLDS.items()},
-            'developed_markets': self.DEVELOPED_MARKETS,
+            'sectors': list(self.sector_mappings.keys()),
+            'size_thresholds': {cat.value: threshold for cat, threshold in self.size_thresholds.items()},
+            'developed_markets': self.developed_markets,
             'classification_method': 'Technical proxies for fundamental factors',
             'data_sources': ['yfinance', 'technical indicators']
         }

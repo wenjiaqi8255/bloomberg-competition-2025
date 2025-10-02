@@ -32,6 +32,8 @@ from ..feature_engineering.pipeline import FeatureEngineeringPipeline
 from ..models.serving.predictor import ModelPredictor
 from ..utils.position_sizer import PositionSizer
 from .utils.portfolio_calculator import PortfolioCalculator
+from ..data.stock_classifier import StockClassifier
+from ..allocation.box_allocator import BoxAllocator
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +69,8 @@ class BaseStrategy(ABC):
                  feature_pipeline: FeatureEngineeringPipeline,
                  model_predictor: ModelPredictor,
                  position_sizer: PositionSizer,
+                 stock_classifier: Optional[StockClassifier] = None,
+                 box_allocator: Optional[BoxAllocator] = None,
                  **kwargs):
         """
         Initialize unified strategy.
@@ -76,12 +80,16 @@ class BaseStrategy(ABC):
             feature_pipeline: Fitted FeatureEngineeringPipeline
             model_predictor: ModelPredictor with loaded model
             position_sizer: PositionSizer for risk management
+            stock_classifier: Optional StockClassifier for box-based logic.
+            box_allocator: Optional BoxAllocator for box-based allocation.
             **kwargs: Additional strategy-specific parameters
         """
         self.name = name
         self.feature_pipeline = feature_pipeline
         self.model_predictor = model_predictor
         self.position_sizer = position_sizer
+        self.stock_classifier = stock_classifier
+        self.box_allocator = box_allocator
         self.parameters = kwargs
         
         # Signal tracking and diagnostics
@@ -148,9 +156,17 @@ class BaseStrategy(ABC):
                 logger.warning(f"[{self.name}] Model predictions returned empty DataFrame")
                 return pd.DataFrame()
             
-            # Step 3: Apply risk management
-            logger.debug(f"[{self.name}] Step 3: Applying risk management...")
-            final_signals = self._apply_risk_management(predictions, price_data)
+            # Step 3: Apply allocation or risk management
+            if self.box_allocator and self.stock_classifier:
+                logger.debug(f"[{self.name}] Step 3a: Classifying stocks into boxes...")
+                all_symbols = list(price_data.keys())
+                boxes = self.stock_classifier.classify_stocks(all_symbols, price_data, as_of_date=end_date)
+                
+                logger.debug(f"[{self.name}] Step 3b: Applying Box-based allocation...")
+                final_signals = self.box_allocator.allocate(predictions, boxes)
+            else:
+                logger.debug(f"[{self.name}] Step 3: Applying legacy risk management...")
+                final_signals = self._apply_risk_management(predictions, price_data)
             
             # Step 4: Evaluate signal quality (NEW)
             logger.debug(f"[{self.name}] Step 4: Evaluating signal quality...")
@@ -350,11 +366,7 @@ class BaseStrategy(ABC):
             'name': self.name,
             'type': self.__class__.__name__,
             'architecture': 'UnifiedPipeline',
-            'components': {
-                'feature_pipeline': str(type(self.feature_pipeline).__name__),
-                'model_predictor': str(type(self.model_predictor).__name__),
-                'position_sizer': str(type(self.position_sizer).__name__)
-            },
+            'components': self._get_component_info(),
             'pipeline_fitted': getattr(self.feature_pipeline, '_is_fitted', False),
             'model_info': self._get_model_info(),
             'position_sizer_config': {
@@ -364,6 +376,20 @@ class BaseStrategy(ABC):
             'parameters': self.parameters
         }
     
+    def _get_component_info(self) -> Dict[str, str]:
+        """Get information about the strategy's components."""
+        components = {
+            'feature_pipeline': str(type(self.feature_pipeline).__name__),
+            'model_predictor': str(type(self.model_predictor).__name__),
+        }
+        if self.box_allocator:
+            components['allocator'] = str(type(self.box_allocator).__name__)
+            if self.stock_classifier:
+                components['classifier'] = str(type(self.stock_classifier).__name__)
+        else:
+            components['position_sizer'] = str(type(self.position_sizer).__name__)
+        return components
+
     def _get_model_info(self) -> Dict:
         """Get information about the model."""
         model_info = {}

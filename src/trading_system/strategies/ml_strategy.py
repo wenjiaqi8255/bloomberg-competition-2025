@@ -143,18 +143,3 @@ class MLStrategy(BaseStrategy):
         })
         return info
 
-
-# TODO: Verify Required Models
-# -----------------------------
-# This strategy requires ML models to be implemented in:
-#   - models/implementations/random_forest_model.py
-#   - models/implementations/xgboost_model.py
-#   - models/implementations/neural_network_model.py
-#   - etc.
-#
-# All must inherit from BaseModel and implement:
-#   - fit(X, y)
-#   - predict(X)
-#
-# Models should be registered in ModelFactory for easy loading
-

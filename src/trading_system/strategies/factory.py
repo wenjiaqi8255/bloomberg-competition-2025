@@ -18,7 +18,7 @@ Key Insight:
 """
 
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from pathlib import Path
 
 from .base_strategy import BaseStrategy
@@ -30,6 +30,8 @@ from ..feature_engineering.pipeline import FeatureEngineeringPipeline
 from ..feature_engineering.models.data_types import FeatureConfig
 from ..models.serving.predictor import ModelPredictor
 from ..utils.position_sizer import PositionSizer
+from ..data.stock_classifier import StockClassifier
+from ..allocation.box_allocator import BoxAllocator
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +114,10 @@ class StrategyFactory:
         # Step 3: Create PositionSizer
         position_sizer = cls._create_position_sizer(config)
         
-        # Step 4: Get strategy class and create instance
+        # Step 4: Create Box components if configured
+        stock_classifier, box_allocator = cls._create_box_components(config)
+
+        # Step 5: Get strategy class and create instance
         strategy_class = cls._strategy_registry[strategy_type]
         
         # Extract strategy-specific parameters
@@ -124,12 +129,42 @@ class StrategyFactory:
             feature_pipeline=feature_pipeline,
             model_predictor=model_predictor,
             position_sizer=position_sizer,
+            stock_classifier=stock_classifier,
+            box_allocator=box_allocator,
             **strategy_params
         )
         
         logger.info(f"✓ Created {strategy_type} strategy '{name}'")
         return strategy
     
+    @classmethod
+    def _create_box_components(cls, config: Dict[str, Any]) -> (Optional[StockClassifier], Optional[BoxAllocator]):
+        """
+        Create Box-based components if the investment framework is enabled in config.
+        """
+        framework_config = config.get('investment_framework', {})
+        
+        if not framework_config.get('enabled', False):
+            return None, None
+            
+        logger.info("Investment framework enabled. Creating Box components.")
+
+        # Create StockClassifier
+        classification_config = framework_config.get('box_classification')
+        if not classification_config:
+            raise ValueError("Investment framework is enabled, but 'box_classification' config is missing.")
+        stock_classifier = StockClassifier(config=classification_config)
+        logger.info("✓ StockClassifier created.")
+
+        # Create BoxAllocator
+        allocation_config = framework_config.get('allocation')
+        if not allocation_config:
+            raise ValueError("Investment framework is enabled, but 'allocation' config is missing.")
+        box_allocator = BoxAllocator(config=allocation_config)
+        logger.info("✓ BoxAllocator created.")
+        
+        return stock_classifier, box_allocator
+
     @classmethod
     def _create_feature_pipeline(cls, 
                                  strategy_type: str, 
