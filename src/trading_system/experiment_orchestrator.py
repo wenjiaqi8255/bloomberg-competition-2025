@@ -211,6 +211,15 @@ class ExperimentOrchestrator:
             'strategy': strategy_config_obj
         }
         
+        training_symbols = training_params.get('symbols', [])
+        if training_symbols:
+            logger.info(f"Injecting training universe ({len(training_symbols)} symbols) into strategy config.")
+            # Set universe as both attribute and in parameters dict for compatibility
+            backtest_config_objects['strategy'].universe = training_symbols
+            if 'parameters' not in backtest_config_objects['strategy'].__dict__:
+                backtest_config_objects['strategy'].parameters = {}
+            backtest_config_objects['strategy'].parameters['universe'] = training_symbols
+        
         logger.info(f"Updating backtest config to use model_id: {model_id}")
         # The 'parameters' dict is directly on the dataclass
         backtest_config_objects['strategy'].parameters['model_id'] = model_id

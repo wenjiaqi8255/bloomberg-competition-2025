@@ -49,6 +49,7 @@ class ModelMetadata:
     features: list = field(default_factory=list)
     hyperparameters: Dict[str, Any] = field(default_factory=dict)
     performance_metrics: Dict[str, float] = field(default_factory=dict)
+    cv_results: Optional[Dict[str, Any]] = None
     tags: Dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -61,6 +62,7 @@ class ModelMetadata:
             'features': self.features,
             'hyperparameters': self.hyperparameters,
             'performance_metrics': self.performance_metrics,
+            'cv_results': self.cv_results,
             'tags': self.tags
         }
 

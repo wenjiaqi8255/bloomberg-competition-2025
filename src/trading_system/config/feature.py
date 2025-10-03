@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List
+from typing import List, Dict, Any
 from enum import Enum
 
 
@@ -16,6 +16,9 @@ class FeatureType(Enum):
 @dataclass
 class FeatureConfig:
     """Simplified configuration for feature engineering."""
+
+    # Steps-based configuration (for pipeline-style feature engineering)
+    steps: List[Dict[str, Any]] = None
 
     # Time periods
     momentum_periods: List[int] = None

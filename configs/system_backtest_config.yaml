@@ -1,0 +1,67 @@
+# 1. 回测运行的核心参数
+backtest_run:
+  start_date: "2023-01-01"
+  end_date: "2023-12-31"
+  initial_capital: 1000000
+
+# 2. 数据提供方配置 (整个系统共享)
+data_provider:
+  type: "YFinanceProvider"
+  parameters:
+    symbols: ["SPY", "AAPL", "MSFT", "GOOGL", "AMZN"] # 资产池
+    start_date: "2020-01-01" # 需要足够长的历史数据来计算特征
+
+factor_data_provider:
+  type: "FF5DataProvider"
+  parameters:
+    file_path: "data/F-F_Research_Data_5_Factors_2x3_daily.CSV"
+
+# 3. 策略列表：定义系统包含的所有策略
+strategies:
+  - name: "FF5_Core_Strategy"
+    type: "MLStrategy" # 使用通用的策略基类
+    parameters:
+      # IMPORTANT: Replace this with the *new* model ID after re-training
+      model_id: "ff5_regression_20251003_190235"
+    feature_engineering:
+      # This section is now IGNORED if the model above is a trained model ID
+      steps:
+        - type: "FactorFeature"
+          parameters:
+            factor_names: ["MKT", "SMB", "HML", "RMW", "CMA"]
+
+  - name: "ML_Satellite_Strategy"
+    type: "MLStrategy"
+    parameters:
+      # IMPORTANT: Replace this with the *new* model ID after re-training
+      model_id: "xgboost_20251003_191628"
+    feature_engineering:
+      # This section is now IGNORED if the model above is a trained model ID
+      steps:
+        - type: "LagFeature"
+          parameters:
+            lags: [1, 5, 21]
+        - type: "MovingAverageFeature"
+          parameters:
+            windows: [21, 63]
+
+# 4. 资金分配规则
+allocation:
+  strategy_allocations:
+    - strategy_name: "FF5_Core_Strategy"
+      target_weight: 0.70
+      min_weight: 0.60
+      max_weight: 0.80
+      priority: 1 # 优先级高
+    - strategy_name: "ML_Satellite_Strategy"
+      target_weight: 0.30
+      min_weight: 0.20
+      max_weight: 0.40
+      priority: 2
+  rebalance_threshold: 0.05
+  cash_buffer_weight: 0.02
+
+# 5. 合规性规则 (可选，若不提供会自动根据资金分配规则生成)
+compliance:
+  max_single_position_weight: 0.15
+  max_sector_allocation: 0.30

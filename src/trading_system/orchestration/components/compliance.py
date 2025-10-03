@@ -89,7 +89,7 @@ class ComplianceRules:
     # Investment box rules (asset class level)
     asset_class_rules: Dict[AssetClass, Tuple[float, float]] = field(default_factory=lambda: {
         AssetClass.EQUITY: (0.60, 0.95),
-        AssetClass.FIXED_INCOME: (0.00, 0.30),
+        AssetClass.BOND: (0.00, 0.30),
         AssetClass.ALTERNATIVE: (0.00, 0.15),
     })
 

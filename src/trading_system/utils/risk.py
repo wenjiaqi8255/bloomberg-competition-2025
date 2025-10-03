@@ -539,3 +539,88 @@ class RiskCalculator:
             'Kurtosis': f"{risk_metrics.kurtosis:.3f}",
             'Overall Risk Score': f"{risk_metrics.overall_risk_score:.3f}"
         }
+
+from abc import ABC, abstractmethod
+from datetime import datetime, timedelta
+from sklearn.covariance import LedoitWolf
+
+class CovarianceEstimator(ABC):
+    """
+    Abstract base class for covariance matrix estimators.
+    This provides a unified interface for different covariance estimation methods,
+    allowing strategies to easily switch between them.
+    """
+    
+    @abstractmethod
+    def estimate(self, price_data: Dict[str, pd.DataFrame], date: datetime) -> pd.DataFrame:
+        """
+        Estimate the annualized covariance matrix.
+        
+        Args:
+            price_data: Dictionary of historical price data for multiple symbols.
+            date: The date as of which to perform the estimation.
+            
+        Returns:
+            A pandas DataFrame representing the annualized N x N covariance matrix.
+        """
+        pass
+
+    def _get_returns_matrix(self, price_data: Dict, date: datetime, lookback_days: int) -> pd.DataFrame:
+        """Helper to build a returns matrix from price data."""
+        returns_dict = {}
+        end_date = date
+        start_date = end_date - timedelta(days=lookback_days + 5) # buffer for non-trading days
+
+        for symbol, data in price_data.items():
+            # Filter data up to the estimation date and get the required lookback period
+            recent_data = data[(data.index <= end_date) & (data.index >= start_date)].tail(lookback_days)
+            if not recent_data.empty:
+                returns_dict[symbol] = recent_data['Close'].pct_change().dropna()
+        
+        return pd.DataFrame(returns_dict)
+
+
+class SimpleCovarianceEstimator(CovarianceEstimator):
+    """
+    Calculates the sample covariance matrix from historical returns.
+    Serves as a baseline covariance estimation method.
+    """
+    
+    def __init__(self, lookback_days: int = 252):
+        self.lookback_days = lookback_days
+    
+    def estimate(self, price_data: Dict, date: datetime) -> pd.DataFrame:
+        returns_df = self._get_returns_matrix(price_data, date, self.lookback_days)
+        
+        if returns_df.empty or len(returns_df) < 2:
+            return pd.DataFrame()
+            
+        # Sample covariance matrix, annualized
+        cov_matrix = returns_df.cov() * 252
+        return cov_matrix
+
+
+class LedoitWolfCovarianceEstimator(CovarianceEstimator):
+    """
+    Estimates covariance using Ledoit-Wolf shrinkage.
+    This method is robust to estimation errors, especially when the number of assets
+    is large relative to the number of observations.
+    """
+    
+    def __init__(self, lookback_days: int = 252):
+        self.lookback_days = lookback_days
+        
+    def estimate(self, price_data: Dict, date: datetime) -> pd.DataFrame:
+        returns_df = self._get_returns_matrix(price_data, date, self.lookback_days)
+        
+        if returns_df.empty or len(returns_df) < 2:
+            return pd.DataFrame()
+        
+        # Apply Ledoit-Wolf shrinkage
+        lw = LedoitWolf()
+        # The fit method expects observations in rows, features in columns
+        shrunk_cov_daily = lw.fit(returns_df.dropna()).covariance_
+        
+        # Annualize and return as a DataFrame
+        shrunk_cov_annualized = shrunk_cov_daily * 252
+        return pd.DataFrame(shrunk_cov_annualized, index=returns_df.columns, columns=returns_df.columns)

@@ -46,7 +46,8 @@ class PositionSizer:
                  volatility_target: float = 0.15,
                  max_position_weight: float = 0.10,
                  max_leverage: float = 1.0,
-                 min_position_weight: float = 0.01):
+                 min_position_weight: float = 0.01,
+                 kelly_fraction: float = 0.5):
         """
         Initialize position sizer.
         
@@ -55,11 +56,13 @@ class PositionSizer:
             max_position_weight: Maximum weight for any single position
             max_leverage: Maximum total portfolio leverage
             min_position_weight: Minimum position weight (positions below this are zeroed)
+            kelly_fraction: Fraction of Kelly criterion to use for sizing.
         """
         self.volatility_target = volatility_target
         self.max_position_weight = max_position_weight
         self.max_leverage = max_leverage
         self.min_position_weight = min_position_weight
+        self.kelly_fraction = kelly_fraction
         
         logger.debug(f"Initialized PositionSizer: vol_target={volatility_target}, "
                     f"max_weight={max_position_weight}")
@@ -103,6 +106,54 @@ class PositionSizer:
         
         return adjusted_signals
     
+    def adjust_signals_with_covariance(self, 
+                                   raw_signals: pd.DataFrame,
+                                   cov_matrix: pd.DataFrame) -> pd.DataFrame:
+        """
+        Uses the covariance matrix for risk adjustment (based on the Kelly criterion).
+        
+        Args:
+            raw_signals: DataFrame of expected returns.
+            cov_matrix: Covariance matrix of asset returns.
+        
+        Returns:
+            Risk-adjusted position weights.
+        """
+        if cov_matrix.empty or not all(s in cov_matrix.columns for s in raw_signals.columns):
+            logger.warning("Covariance matrix is empty or does not contain all signal symbols. Falling back to simple volatility weighting.")
+            volatilities = pd.Series(np.sqrt(np.diag(cov_matrix)), index=cov_matrix.index) if not cov_matrix.empty else pd.Series()
+            return self.adjust_signals(raw_signals, volatilities)
+
+        try:
+            # Align signals and covariance matrix
+            common_symbols = raw_signals.columns.intersection(cov_matrix.columns)
+            mu = raw_signals[common_symbols].values.flatten()
+            Sigma = cov_matrix.loc[common_symbols, common_symbols].values
+
+            # Kelly criterion: w* = Σ^(-1) * μ
+            kelly_weights_raw = np.linalg.solve(Sigma, mu)
+            
+            # Apply fractional Kelly
+            kelly_weights = kelly_weights_raw * self.kelly_fraction
+            
+            weights_df = pd.DataFrame(
+                kelly_weights.reshape(1, -1),
+                columns=common_symbols,
+                index=raw_signals.index
+            )
+            
+            # Reintroduce symbols that were not in the covariance matrix with zero weight
+            for symbol in raw_signals.columns:
+                if symbol not in weights_df.columns:
+                    weights_df[symbol] = 0
+
+            return weights_df
+            
+        except np.linalg.LinAlgError:
+            logger.error("Covariance matrix is singular. Falling back to simple volatility weighting.")
+            volatilities = pd.Series(np.sqrt(np.diag(cov_matrix.values)), index=cov_matrix.index)
+            return self.adjust_signals(raw_signals, volatilities)
+
     def _apply_position_constraints(self, signals: pd.DataFrame) -> pd.DataFrame:
         """
         Apply maximum and minimum position weight constraints.

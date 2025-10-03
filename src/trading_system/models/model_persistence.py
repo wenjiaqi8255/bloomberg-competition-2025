@@ -72,7 +72,27 @@ class ModelRegistry:
                     joblib.dump(obj, artifact_path)
                     artifact_paths[name] = str(artifact_path.relative_to(self.storage_path))
 
-            # Create and save metadata
+            # Create and save metadata with model's internal metadata
+            model_metadata = {}
+            if hasattr(model, 'metadata') and model.metadata:
+                # Convert model's metadata to dictionary
+                model_metadata = model.metadata.to_dict()
+                # Handle non-serializable values like numpy types
+                import numpy as np
+                def convert_numpy(obj):
+                    if isinstance(obj, dict):
+                        return {k: convert_numpy(v) for k, v in obj.items()}
+                    elif isinstance(obj, (np.integer, np.floating)):
+                        return float(obj)
+                    elif isinstance(obj, np.ndarray):
+                        return obj.tolist()
+                    elif hasattr(obj, 'isoformat'):  # datetime objects
+                        return obj.isoformat()
+                    else:
+                        return obj
+
+                model_metadata = convert_numpy(model_metadata)
+
             metadata = {
                 "model_id": model_id,
                 "model_name": model_name,
@@ -80,7 +100,8 @@ class ModelRegistry:
                 "created_at": datetime.now().isoformat(),
                 "model_path": str(model_path.relative_to(self.storage_path)),
                 "artifact_paths": artifact_paths,
-                "tags": tags or {}
+                "tags": tags or {},
+                "model_metadata": model_metadata  # **新增：包含模型的完整元数据**
             }
             metadata_path = model_dir / "metadata.json"
             with open(metadata_path, 'w') as f:

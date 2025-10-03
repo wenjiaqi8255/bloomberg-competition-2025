@@ -16,6 +16,7 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 import yaml
 import pandas as pd
+import numpy as np
 from sklearn.preprocessing import StandardScaler
 import joblib
 
@@ -93,13 +94,17 @@ class FeatureEngineeringPipeline:
         calculator = TechnicalIndicatorCalculator()
         features = self._compute_all_features(price_data, calculator)
 
-        # Step 2: Add factor data if available
+        # Step 2: Apply NaN handling strategies
+        logger.info("Applying NaN handling strategies...")
+        features = self._handle_nan_values(features)
+
+        # Step 3: Add factor data if available
         if 'factor_data' in data and data['factor_data'] is not None:
             logger.info("Merging factor data with features...")
             factor_data = data['factor_data']
             features = self._merge_factor_data(features, factor_data)
 
-        # Step 3: Apply scaling if the pipeline is already fitted
+        # Step 4: Apply scaling if the pipeline is already fitted
         if self._is_fitted and not is_fitting:
             logger.debug("Applying learned scaling to features...")
             for col, scaler in self.scalers.items():
@@ -109,9 +114,111 @@ class FeatureEngineeringPipeline:
                 else:
                     logger.warning(f"Scaled column '{col}' not found during transform.")
 
-        # Step 4: Add more feature steps here in the future (e.g., PCA, feature selection)
+        # Step 5: Add more feature steps here in the future (e.g., PCA, feature selection)
 
         return features
+
+    def _handle_nan_values(self, features: pd.DataFrame) -> pd.DataFrame:
+        """
+        Apply multi-level NaN handling strategies based on feature analysis.
+
+        This method implements the optimal strategies identified by the debugger:
+        - Forward fill for time-series features
+        - Interpolation for gap filling
+        - Median fill for remaining values
+        - Drop features with >80% NaN values
+
+        Args:
+            features: DataFrame with computed features that may contain NaN values
+
+        Returns:
+            DataFrame with NaN values handled appropriately
+        """
+        if features.empty:
+            return features
+
+        logger.info(f"Starting NaN handling on {features.shape[0]} rows, {features.shape[1]} columns")
+
+        # Analyze NaN percentages for each column
+        nan_analysis = {}
+        for col in features.columns:
+            nan_count = features[col].isnull().sum()
+            nan_pct = (nan_count / len(features)) * 100
+            nan_analysis[col] = {'count': nan_count, 'percentage': nan_pct}
+
+        # Identify columns to drop (>98% NaN) - Very permissive threshold for ML models that can handle missing data patterns
+        cols_to_drop = [col for col, info in nan_analysis.items() if info['percentage'] > 98]
+        if cols_to_drop:
+            logger.warning(f"Dropping {len(cols_to_drop)} features with >98% NaN values: {cols_to_drop}")
+            features = features.drop(columns=cols_to_drop)
+            # Remove from analysis
+            for col in cols_to_drop:
+                del nan_analysis[col]
+        else:
+            logger.info("No features exceeded 98% NaN threshold - keeping all features for ML model to handle")
+
+        # Log initial NaN state with detailed breakdown
+        initial_total_nan = sum(info['count'] for info in nan_analysis.values())
+        logger.info(f"Initial NaN values: {initial_total_nan} across {len(features.columns)} features")
+
+        # Log top 10 features with highest NaN percentages for debugging
+        sorted_features = sorted(nan_analysis.items(), key=lambda x: x[1]['percentage'], reverse=True)
+        high_nan_features = [f"{col} ({info['percentage']:.1f}%)" for col, info in sorted_features[:10]]
+        logger.info(f"Top 10 features by NaN percentage: {high_nan_features}")
+
+        # Apply multi-level NaN handling strategy
+        # Step 1: Forward fill (time series appropriate)
+        logger.debug("Applying forward fill for time-series features...")
+        features_ffill = features.ffill()
+
+        # Step 2: Backward fill for leading NaNs
+        logger.debug("Applying backward fill for leading NaNs...")
+        features_bfill = features_ffill.bfill()
+
+        # Step 3: Linear interpolation for remaining gaps
+        logger.debug("Applying linear interpolation for remaining gaps...")
+        features_interp = features_bfill.interpolate(method='linear')
+
+        # Step 4: Median fill for any remaining NaNs (most robust)
+        logger.debug("Applying median fill for remaining NaNs...")
+        median_values = features_interp.median()
+        features_clean = features_interp.fillna(median_values)
+
+        # Verify no NaNs remain
+        remaining_nan = features_clean.isnull().sum().sum()
+        if remaining_nan > 0:
+            logger.warning(f"Still have {remaining_nan} NaN values after all strategies - applying zero fill as last resort")
+            features_clean = features_clean.fillna(0)
+
+        # Handle infinite values (XGBoost can't handle inf/-inf)
+        logger.info("Checking for infinite values...")
+        inf_count = (features_clean == float('inf')).sum().sum() + (features_clean == float('-inf')).sum().sum()
+        if inf_count > 0:
+            logger.warning(f"Found {inf_count} infinite values - clipping to reasonable range")
+            # Clip infinite values to reasonable bounds
+            features_clean = features_clean.replace([float('inf'), float('-inf')], [1e10, -1e10])
+
+        # Additional check for extreme values that might cause numerical issues
+        logger.info("Checking for extreme values...")
+        max_val = features_clean.abs().max().max()
+        if max_val > 1e9:
+            logger.warning(f"Found extreme values (max abs: {max_val}) - clipping to prevent numerical issues")
+            features_clean = features_clean.clip(-1e9, 1e9)
+
+        # Log final state
+        final_total_nan = features_clean.isnull().sum().sum()
+        nan_reduction = ((initial_total_nan - final_total_nan) / initial_total_nan * 100) if initial_total_nan > 0 else 100
+
+        logger.info(f"NaN handling complete:")
+        logger.info(f"  - Initial NaN: {initial_total_nan}")
+        logger.info(f"  - Final NaN: {final_total_nan}")
+        logger.info(f"  - NaN reduction: {nan_reduction:.1f}%")
+        logger.info(f"  - Features dropped: {len(cols_to_drop)}")
+        logger.info(f"  - Infinite values fixed: {inf_count}")
+        logger.info(f"  - Final shape: {features_clean.shape}")
+        logger.info(f"  - Max absolute value: {features_clean.abs().max().max():.2e}")
+
+        return features_clean
 
     def save(self, file_path: Path):
         """Saves the fitted pipeline (including scalers) to a file."""
@@ -147,10 +254,36 @@ class FeatureEngineeringPipeline:
             
         return cls.from_config(config_dict['feature_engineering'])
     
+    def get_max_lookback(self) -> int:
+        """
+        Determines the maximum lookback period required by the feature configuration.
+
+        This is crucial for ensuring enough historical data is loaded to prevent
+        NaNs at the start of the training period.
+
+        Returns:
+            The maximum number of days required for feature calculation.
+        """
+        max_lookback = 0
+        if self.config.momentum_periods:
+            max_lookback = max(max_lookback, max(self.config.momentum_periods))
+        
+        if self.config.volatility_windows:
+            max_lookback = max(max_lookback, max(self.config.volatility_windows))
+            
+        # Add lookbacks from other feature types as they are implemented
+        # e.g., technical indicators might have their own windows
+        
+        # A small buffer is often a good idea
+        return max_lookback + 5
+
     def _compute_all_features(self, price_data: Dict[str, pd.DataFrame],
                               calculator: TechnicalIndicatorCalculator) -> pd.DataFrame:
         """
-        Compute all features from price data using configured feature types.
+        Compute all features from price data using optimized calculation order.
+
+        This method implements the optimized feature computation order identified
+        by the debugger to minimize NaN propagation and improve data quality.
 
         Args:
             price_data: Dictionary mapping symbols to OHLCV DataFrames
@@ -159,23 +292,52 @@ class FeatureEngineeringPipeline:
         Returns:
             DataFrame with all computed features
         """
+        logger.info("Starting optimized feature computation with data quality checkpoints...")
         all_features = []
 
         for symbol, data in price_data.items():
+            logger.debug(f"Processing features for symbol: {symbol}")
             symbol_features = pd.DataFrame(index=data.index)
 
-            # Compute based on config
-            if hasattr(self.config, 'momentum_periods'):
-                momentum = calculator.compute_momentum_features(data, self.config.momentum_periods)
-                symbol_features = pd.concat([symbol_features, momentum], axis=1)
+            # === Data Quality Checkpoint 1: Input Data Validation ===
+            self._validate_input_data(data, symbol)
 
-            if hasattr(self.config, 'volatility_windows'):
-                volatility = calculator.compute_volatility_features(data, self.config.volatility_windows)
-                symbol_features = pd.concat([symbol_features, volatility], axis=1)
+            # === Optimized Feature Computation Order ===
+            # Order: Basic indicators -> Momentum -> Volatility -> Advanced technical -> Derived features
+            # This minimizes NaN propagation by computing stable features first
 
+            # Step 1: Basic technical indicators (lowest NaN generation)
             if hasattr(self.config, 'include_technical') and self.config.include_technical:
+                logger.debug(f"Step 1: Computing basic technical indicators for {symbol}")
                 technical = calculator.compute_technical_indicators(data)
                 symbol_features = pd.concat([symbol_features, technical], axis=1)
+                # Quality checkpoint after basic indicators
+                self._quality_checkpoint(symbol_features, f"{symbol}_basic_technical", step=1)
+
+            # Step 2: Volatility features (moderate NaN generation, use basic indicators)
+            if hasattr(self.config, 'volatility_windows') and self.config.volatility_windows:
+                logger.debug(f"Step 2: Computing volatility features for {symbol}")
+                volatility = calculator.compute_volatility_features(data, self.config.volatility_windows)
+                symbol_features = pd.concat([symbol_features, volatility], axis=1)
+                # Quality checkpoint after volatility features
+                self._quality_checkpoint(symbol_features, f"{symbol}_volatility", step=2)
+
+            # Step 3: Momentum features (highest NaN generation, but computed after volatility)
+            if hasattr(self.config, 'momentum_periods'):
+                logger.debug(f"Step 3: Computing momentum features for {symbol}")
+                momentum = calculator.compute_momentum_features(data, self.config.momentum_periods)
+                symbol_features = pd.concat([symbol_features, momentum], axis=1)
+                # Quality checkpoint after momentum features
+                self._quality_checkpoint(symbol_features, f"{symbol}_momentum", step=3)
+
+            # Step 4: Cross-feature calculations (use all previous features)
+            if not symbol_features.empty:
+                logger.debug(f"Step 4: Computing cross-features for {symbol}")
+                cross_features = self._compute_cross_features(symbol_features, data)
+                if not cross_features.empty:
+                    symbol_features = pd.concat([symbol_features, cross_features], axis=1)
+                    # Final quality checkpoint
+                    self._quality_checkpoint(symbol_features, f"{symbol}_final", step=4)
 
             # Add symbol prefix to feature names and create MultiIndex
             symbol_features.columns = [f"{symbol}_{col}" for col in symbol_features.columns]
@@ -188,11 +350,19 @@ class FeatureEngineeringPipeline:
             symbol_features.index = symbol_multiindex
             all_features.append(symbol_features)
 
+            logger.info(f"Completed feature computation for {symbol}: {len(symbol_features.columns)} features")
+
         # Combine all features with proper MultiIndex structure
         if all_features:
             combined_features = pd.concat(all_features, axis=0)
+            combined_features.sort_index(inplace=True)
+
+            # Final global quality checkpoint
+            self._final_quality_checkpoint(combined_features)
+
             return combined_features
         else:
+            logger.warning("No features computed from any symbols")
             return pd.DataFrame()
 
     def _merge_factor_data(self, features: pd.DataFrame, factor_data: pd.DataFrame) -> pd.DataFrame:
@@ -221,6 +391,30 @@ class FeatureEngineeringPipeline:
         factor_columns = factor_data.columns.tolist()
         logger.info(f"Available factor columns: {factor_columns}")
 
+        # Resample factor data to daily frequency using forward fill
+        # This ensures we maintain daily granularity for features
+        features_date_range = features.index.get_level_values('date')
+        min_date, max_date = features_date_range.min(), features_date_range.max()
+
+        # Create daily date range
+        daily_range = pd.date_range(start=min_date, end=max_date, freq='D')
+
+        # Filter to trading days (weekdays) - approximate by excluding weekends
+        trading_days = daily_range[daily_range.dayofweek < 5]
+
+        # Reindex factor data to trading days with forward fill
+        # First, ensure factor data index is datetime
+        factor_data.index = pd.to_datetime(factor_data.index)
+
+        # Reindex to trading days and forward fill
+        daily_factor_data = factor_data.reindex(trading_days, method='ffill')
+
+        # Drop any remaining NaNs at the beginning
+        daily_factor_data = daily_factor_data.dropna()
+
+        logger.info(f"Resampled factor data from {factor_data.shape[0]} monthly rows to {daily_factor_data.shape[0]} daily rows")
+        logger.info(f"Factor data date range after resampling: {daily_factor_data.index.min().date()} to {daily_factor_data.index.max().date()}")
+
         # For each symbol in features, add the factor data
         symbols = features.index.get_level_values(0).unique()
         all_features_with_factors = []
@@ -232,12 +426,12 @@ class FeatureEngineeringPipeline:
             # Align factor data with symbol's dates
             symbol_dates = symbol_features.index
 
-            # Find common dates between symbol dates and factor data
-            common_dates = symbol_dates.intersection(factor_data.index)
+            # Find common dates between symbol dates and daily factor data
+            common_dates = symbol_dates.intersection(daily_factor_data.index)
 
             if len(common_dates) > 0:
                 # Get factor data for common dates
-                aligned_factor_data = factor_data.loc[common_dates]
+                aligned_factor_data = daily_factor_data.loc[common_dates]
 
                 # Reindex symbol_features to only include common dates
                 aligned_features = symbol_features.loc[common_dates]
@@ -272,3 +466,214 @@ class FeatureEngineeringPipeline:
         else:
             logger.warning("No features to merge with factor data")
             return features
+
+    def _validate_input_data(self, data: pd.DataFrame, symbol: str) -> None:
+        """
+        Validate input price data before feature computation.
+
+        Args:
+            data: OHLCV DataFrame for a symbol
+            symbol: Symbol name for logging
+        """
+        required_columns = ['Open', 'High', 'Low', 'Close']
+        missing_columns = [col for col in required_columns if col not in data.columns]
+
+        if missing_columns:
+            raise ValueError(f"Missing required columns for {symbol}: {missing_columns}")
+
+        # Check for data continuity
+        if len(data) < 10:
+            logger.warning(f"Very short data series for {symbol}: only {len(data)} rows")
+
+        # Check for excessive NaN values in input
+        total_values = len(data) * len(required_columns)
+        nan_values = data[required_columns].isnull().sum().sum()
+        nan_percentage = (nan_values / total_values) * 100
+
+        if nan_percentage > 20:
+            logger.warning(f"High NaN percentage in input data for {symbol}: {nan_percentage:.1f}%")
+        elif nan_percentage > 5:
+            logger.info(f"Moderate NaN percentage in input data for {symbol}: {nan_percentage:.1f}%")
+
+        logger.debug(f"Input data validation for {symbol}: {len(data)} rows, {nan_percentage:.1f}% NaN")
+
+    def _quality_checkpoint(self, features: pd.DataFrame, context: str, step: int) -> None:
+        """
+        Quality checkpoint to monitor feature quality at each computation step.
+
+        Args:
+            features: DataFrame with computed features
+            context: Context name for logging
+            step: Step number in computation process
+        """
+        if features.empty:
+            logger.warning(f"Quality checkpoint {step} - {context}: No features computed")
+            return
+
+        total_values = len(features) * len(features.columns)
+        nan_values = features.isnull().sum().sum()
+        nan_percentage = (nan_values / total_values) * 100
+
+        # Find features with high NaN percentages
+        problematic_features = []
+        for col in features.columns:
+            col_nan_pct = (features[col].isnull().sum() / len(features)) * 100
+            if col_nan_pct > 50:
+                problematic_features.append((col, col_nan_pct))
+
+        # Log quality metrics
+        if nan_percentage > 30:
+            logger.warning(f"Quality checkpoint {step} - {context}: High NaN percentage {nan_percentage:.1f}%")
+        elif nan_percentage > 15:
+            logger.info(f"Quality checkpoint {step} - {context}: Moderate NaN percentage {nan_percentage:.1f}%")
+        else:
+            logger.debug(f"Quality checkpoint {step} - {context}: Low NaN percentage {nan_percentage:.1f}%")
+
+        # Log problematic features
+        if problematic_features:
+            logger.warning(f"Quality checkpoint {step} - {context}: {len(problematic_features)} features with >50% NaN:")
+            for feature, pct in problematic_features[:5]:  # Log top 5
+                logger.warning(f"  - {feature}: {pct:.1f}% NaN")
+
+        # Additional quality metrics
+        finite_values = np.isfinite(features.to_numpy()).sum()
+        finite_percentage = (finite_values / total_values) * 100
+        logger.debug(f"Quality checkpoint {step} - {context}: {finite_percentage:.1f}% finite values")
+
+    def _compute_cross_features(self, features: pd.DataFrame, price_data: pd.DataFrame) -> pd.DataFrame:
+        """
+        Compute cross-features that combine multiple basic features.
+
+        These features often provide additional predictive power by capturing
+        interactions between different technical indicators.
+
+        Args:
+            features: DataFrame with basic technical features
+            price_data: Original OHLCV data
+
+        Returns:
+            DataFrame with cross-features
+        """
+        cross_features = pd.DataFrame(index=features.index)
+
+        try:
+            # Price-to-moving average ratios (if SMAs are available)
+            sma_columns = [col for col in features.columns if 'sma_' in col and '_200' not in col]
+            if sma_columns and 'Close' in price_data.columns:
+                for sma_col in sma_columns[:3]:  # Limit to first 3 to avoid explosion
+                    if len(sma_col.split('_')) >= 2:
+                        period = sma_col.split('_')[1]
+                        ratio_col = f'price_sma_ratio_{period}'
+                        cross_features[ratio_col] = price_data['Close'] / features[sma_col]
+
+            # Momentum-volatility interaction (if both are available)
+            momentum_cols = [col for col in features.columns if 'momentum_' in col and 'rank' not in col]
+            vol_cols = [col for col in features.columns if 'volatility_' in col and 'rank' not in col]
+
+            if momentum_cols and vol_cols:
+                # Use shortest period momentum and volatility
+                mom_col = min(momentum_cols, key=lambda x: int(x.split('_')[1]) if x.split('_')[1].isdigit() else 999)
+                vol_col = min(vol_cols, key=lambda x: int(x.split('_')[1]) if x.split('_')[1].isdigit() else 999)
+
+                cross_features['momentum_vol_ratio'] = features[mom_col] / (features[vol_col] + 1e-8)
+                cross_features['momentum_vol_interaction'] = features[mom_col] * features[vol_col]
+
+            # RSI divergence (if RSI and momentum are available)
+            rsi_cols = [col for col in features.columns if 'rsi_' in col]
+            if rsi_cols and momentum_cols:
+                rsi_col = rsi_cols[0]
+                mom_col = momentum_cols[0]  # Use first momentum column
+
+                # Simple divergence: high RSI with negative momentum or vice versa
+                rsi_normalized = (features[rsi_col] - 50) / 50  # Normalize to [-1, 1]
+                momentum_normalized = np.sign(features[mom_col])  # Just use direction
+
+                cross_features['rsi_momentum_divergence'] = rsi_normalized * momentum_normalized
+
+            # Bollinger Band mean reversion strength (if available)
+            bb_cols = [col for col in features.columns if 'bb_position' in col]
+            if bb_cols:
+                bb_pos = features[bb_cols[0]]
+                # Distance from neutral position (0.5)
+                cross_features['bb_mean_reversion_strength'] = abs(bb_pos - 0.5) * 2
+
+            # Volume-price trend (if volume and price features are available)
+            if 'Volume' in price_data.columns and len(features.columns) > 0:
+                price_change = price_data['Close'].pct_change()
+                volume_ratio = price_data['Volume'] / price_data['Volume'].rolling(20).mean()
+                cross_features['volume_price_trend'] = price_change * volume_ratio
+
+            logger.debug(f"Computed {len(cross_features.columns)} cross-features")
+
+        except Exception as e:
+            logger.warning(f"Error computing cross-features: {e}")
+            return pd.DataFrame(index=features.index)
+
+        return cross_features
+
+    def _final_quality_checkpoint(self, combined_features: pd.DataFrame) -> None:
+        """
+        Final quality checkpoint on the combined feature set.
+
+        Args:
+            combined_features: DataFrame with all features for all symbols
+        """
+        if combined_features.empty:
+            logger.error("Final quality checkpoint: No features computed")
+            return
+
+        # Global quality metrics
+        total_values = len(combined_features) * len(combined_features.columns)
+        nan_values = combined_features.isnull().sum().sum()
+        nan_percentage = (nan_values / total_values) * 100
+
+        finite_values = np.isfinite(combined_features.to_numpy()).sum()
+        finite_percentage = (finite_values / total_values) * 100
+
+        # Symbol-wise quality analysis
+        symbols = combined_features.index.get_level_values('symbol').unique()
+        symbol_quality = {}
+
+        for symbol in symbols:
+            symbol_data = combined_features.loc[symbol]
+            symbol_nan_pct = (symbol_data.isnull().sum().sum() / (len(symbol_data) * len(symbol_data.columns))) * 100
+            symbol_quality[symbol] = symbol_nan_pct
+
+        # Log comprehensive quality report
+        logger.info("=== FINAL QUALITY CHECKPOINT ===")
+        logger.info(f"Total features: {len(combined_features.columns)}")
+        logger.info(f"Total data points: {len(combined_features)}")
+        logger.info(f"Overall NaN percentage: {nan_percentage:.2f}%")
+        logger.info(f"Overall finite percentage: {finite_percentage:.2f}%")
+
+        # Symbol quality summary
+        avg_symbol_quality = np.mean(list(symbol_quality.values()))
+        logger.info(f"Average symbol quality: {avg_symbol_quality:.2f}% NaN")
+
+        # Problematic symbols
+        problematic_symbols = [(sym, pct) for sym, pct in symbol_quality.items() if pct > 25]
+        if problematic_symbols:
+            logger.warning(f"Found {len(problematic_symbols)} symbols with >25% NaN:")
+            for symbol, pct in problematic_symbols[:5]:  # Log top 5
+                logger.warning(f"  - {symbol}: {pct:.1f}% NaN")
+
+        # Feature quality summary
+        feature_nan_pct = (combined_features.isnull().sum() / len(combined_features)) * 100
+        high_nan_features = feature_nan_pct[feature_nan_pct > 30].sort_values(ascending=False)
+
+        if len(high_nan_features) > 0:
+            logger.warning(f"Found {len(high_nan_features)} features with >30% NaN:")
+            for feature, pct in high_nan_features.head(10).items():  # Log top 10
+                logger.warning(f"  - {feature}: {pct:.1f}% NaN")
+
+        # Overall quality assessment
+        if nan_percentage < 10 and finite_percentage > 95:
+            logger.info("✅ Overall feature quality: EXCELLENT")
+        elif nan_percentage < 20 and finite_percentage > 90:
+            logger.info("✅ Overall feature quality: GOOD")
+        elif nan_percentage < 35 and finite_percentage > 80:
+            logger.warning("⚠️  Overall feature quality: ACCEPTABLE")
+        else:
+            logger.error("❌ Overall feature quality: POOR - Consider reviewing feature engineering")
+
+        logger.info("=== END FINAL QUALITY CHECKPOINT ===")

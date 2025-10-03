@@ -352,7 +352,22 @@ class ModelTrainer:
         """
         try:
             logger.info(f"Calculating metrics for {split_name} split...")
-            
+            logger.info(f"DEBUG: Metrics calculation - X shape: {X.shape}, y shape: {y.shape}")
+            logger.info(f"DEBUG: Metrics calculation - X has NaN: {X.isnull().any().any()}, y has NaN: {y.isnull().any()}")
+            logger.info(f"DEBUG: Metrics calculation - y stats: mean={y.mean():.6f}, std={y.std():.6f}, min={y.min():.6f}, max={y.max():.6f}")
+
+            # Make predictions first to debug them
+            predictions = model.predict(X)
+            logger.info(f"DEBUG: Predictions shape: {predictions.shape}, predictions have NaN: {np.isnan(predictions).any()}")
+            logger.info(f"DEBUG: Prediction stats: mean={np.mean(predictions):.6f}, std={np.std(predictions):.6f}, min={np.min(predictions):.6f}, max={np.max(predictions):.6f}")
+            logger.info(f"DEBUG: Sample predictions (first 10): {predictions[:10]}")
+            logger.info(f"DEBUG: Sample y_true (first 10): {y.values[:10]}")
+
+            # Calculate correlation to understand relationship
+            if len(y) > 1:
+                correlation = np.corrcoef(y, predictions)[0, 1]
+                logger.info(f"DEBUG: Correlation between y_true and predictions: {correlation:.6f}")
+
             # Note: evaluate_model returns more metrics than before.
             # We can filter them here if needed, or just return all of them.
             # For now, returning all seems fine.

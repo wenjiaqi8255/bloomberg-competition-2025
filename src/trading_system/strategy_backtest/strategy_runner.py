@@ -260,9 +260,12 @@ class StrategyRunner:
                 self.providers['data_provider'] = self.data_provider
 
             # Initialize strategy with config objects
-            strategy_config_dict = self.configs['strategy'].parameters
+            strategy_config_dict = self.configs['strategy'].parameters.copy()  # Make a copy to avoid mutation
             strategy_config_dict['type'] = self.configs['strategy'].strategy_type.value
             strategy_config_dict['name'] = self.configs['strategy'].name
+            # Include universe from config object if not already in parameters
+            if 'universe' not in strategy_config_dict and self.configs['strategy'].universe:
+                strategy_config_dict['universe'] = self.configs['strategy'].universe
             
             self.strategy = StrategyFactory.create_from_config(
                 strategy_config_dict, providers=self.providers
@@ -374,9 +377,9 @@ class StrategyRunner:
 
             # Step 3: Generate strategy signals
             strategy_signals = self.strategy.generate_signals(
-                price_data=price_data,
-                start_date=backtest_config.start_date,
-                end_date=backtest_config.end_date
+                price_data,
+                backtest_config.start_date,
+                backtest_config.end_date
             )
 
             # Step 4: Convert signals to unified format and run backtest
@@ -418,7 +421,7 @@ class StrategyRunner:
             # Compile final results (adapted for new architecture)
             self.results = {
                 'experiment_name': experiment_name,
-                'config': self.config_obj,
+                'config': self.configs,
                 'data_statistics': data_stats,
                 'strategy_signals': strategy_signals,
                 'backtest_results': backtest_results,
@@ -748,11 +751,46 @@ class StrategyRunner:
                 import json
                 results_file = os.path.join(results_dir, f"{self.results['experiment_name']}_results.json")
 
-                # Convert numpy types to JSON-serializable
-                results_json = json.loads(json.dumps(self.results, default=str))
+                # Convert numpy types to JSON-serializable with high precision
+                def json_serializer(obj):
+                    """JSON serializer that handles numpy types with high precision."""
+                    import numpy as np
+                    import pandas as pd
+
+                    if isinstance(obj, np.integer):
+                        return int(obj)
+                    elif isinstance(obj, np.floating):
+                        # Convert to float with full precision - don't round small values to zero
+                        return float(obj)
+                    elif isinstance(obj, np.ndarray):
+                        return obj.tolist()
+                    elif isinstance(obj, pd.Timestamp):
+                        return obj.isoformat()
+                    elif hasattr(obj, '__dict__'):
+                        # For custom objects, try to convert to dict
+                        try:
+                            return str(obj)
+                        except:
+                            return None
+                    else:
+                        return str(obj)
+
+                # Create a deep copy and manually format performance metrics to ensure precision
+                import copy
+                results_copy = copy.deepcopy(self.results)
+
+                # Ensure performance metrics retain precision
+                if 'performance_metrics' in results_copy:
+                    for key, value in results_copy['performance_metrics'].items():
+                        if isinstance(value, (int, float)) and abs(value) < 0.0001:
+                            # For very small values, ensure they don't get rounded to zero
+                            results_copy['performance_metrics'][key] = float(value)
+
+                results_json = json.loads(json.dumps(results_copy, default=json_serializer))
 
                 with open(results_file, 'w') as f:
-                    json.dump(results_json, f, indent=2)
+                    # Use high precision for JSON output to prevent small values being rounded to zero
+                    json.dump(results_json, f, indent=2, allow_nan=True)
 
                 logger.info(f"Results saved to {results_file}")
 

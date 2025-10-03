@@ -55,7 +55,7 @@ strategy:
 
   # Model configuration
   model_id: placeholder_model_id  # Will be overwritten by orchestrator
-  min_signal_strength: 0.1       # Minimum signal strength threshold
+  min_signal_strength: 0.00001       # Minimum signal strength threshold
 
   # Position sizing and risk management
   position_sizing:

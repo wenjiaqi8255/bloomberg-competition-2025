@@ -138,12 +138,16 @@ class StrategyFactory:
         data_provider = providers.get('data_provider')
         factor_data_provider = providers.get('factor_data_provider')
         
+        # Get universe from config or strategy_params
+        universe = strategy_params.pop('universe', config.get('universe', []))
+
         # Create strategy with providers
         strategy = strategy_class(
             name=name,
             feature_pipeline=feature_pipeline,
             model_predictor=model_predictor,
             position_sizer=position_sizer,
+            universe=universe,
             stock_classifier=stock_classifier,
             box_allocator=box_allocator,
             data_provider=data_provider,
@@ -271,9 +275,7 @@ class StrategyFactory:
         
         # ModelPredictor no longer takes data providers
         # Data providers are managed at the Strategy level
-        predictor_kwargs = {
-            "enable_monitoring": config.get('enable_monitoring', True)
-        }
+        predictor_kwargs = {}
 
         logger.info(f"Creating ModelPredictor for model '{model_id}'")
         

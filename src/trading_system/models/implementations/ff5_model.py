@@ -143,6 +143,9 @@ class FF5RegressionModel(BaseModel):
             logger.info(f"Successfully fitted FF5 model on {len(y_clean)} samples")
             logger.info(f"Beta estimates: {betas}")
 
+            # Mark model as trained for registration purposes
+            self.is_trained = True
+
             return self
 
         except Exception as e:

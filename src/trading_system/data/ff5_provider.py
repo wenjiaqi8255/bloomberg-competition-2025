@@ -43,7 +43,8 @@ class FF5DataProvider(FactorDataProvider):
 
     def __init__(self, data_frequency: str = "monthly", cache_dir: str = None,
                  max_retries: int = 3, retry_delay: float = 1.0,
-                 request_timeout: int = 30, cache_enabled: bool = True):
+                 request_timeout: int = 30, cache_enabled: bool = True,
+                 file_path: str = None):
         """
         Initialize FF5 data provider.
 
@@ -54,6 +55,7 @@ class FF5DataProvider(FactorDataProvider):
             retry_delay: Delay between retries in seconds
             request_timeout: Request timeout in seconds
             cache_enabled: Whether to enable caching
+            file_path: Path to local FF5 data file (optional)
         """
         super().__init__(
             max_retries=max_retries,
@@ -62,9 +64,10 @@ class FF5DataProvider(FactorDataProvider):
             cache_enabled=cache_enabled,
             rate_limit=1.0  # 1 second between requests for Kenneth French
         )
-        
+
         self.data_frequency = data_frequency.lower()
         self.cache_dir = cache_dir
+        self.file_path = file_path
 
         if self.data_frequency not in ["daily", "monthly"]:
             raise ValueError("data_frequency must be 'daily' or 'monthly'")
@@ -387,6 +390,20 @@ class FF5DataProvider(FactorDataProvider):
         """Get the latest available factor values."""
         factor_data = self.get_factor_returns()
         return factor_data.iloc[-1]
+
+    def get_data(self, start_date: Union[str, datetime] = None,
+                 end_date: Union[str, datetime] = None) -> pd.DataFrame:
+        """
+        Get FF5 factor data for the specified date range.
+
+        Args:
+            start_date: Start date for data (optional)
+            end_date: End date for data (optional)
+
+        Returns:
+            DataFrame with factor returns data
+        """
+        return self.get_factor_returns(start_date=start_date, end_date=end_date)
 
     def get_factor_correlations(self, factor_data: pd.DataFrame = None) -> pd.DataFrame:
         """Calculate factor return correlations."""

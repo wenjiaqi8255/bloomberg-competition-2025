@@ -26,7 +26,8 @@ from contextlib import contextmanager
 
 from ..base.model_factory import ModelFactory
 from ..base.base_model import BaseModel
-from ..serving.monitor import ModelMonitor, PredictionRecord, ModelHealthStatus
+from ..model_persistence import ModelRegistry # Import ModelRegistry
+from .monitor import ModelMonitor, PredictionRecord, ModelHealthStatus
 
 logger = logging.getLogger(__name__)
 
@@ -60,11 +61,9 @@ class ModelPredictor:
 
     def __init__(self,
                  model_id: Optional[str] = None,
-                 model_path: Optional[str] = None,
+                 model_path: Optional[str] = None, # Kept for potential direct path loading
                  model_instance: Optional[BaseModel] = None,
-                 model_registry_path: Optional[str] = None,
-                 enable_monitoring: bool = True,
-                 cache_predictions: bool = True):
+                 model_registry_path: str = "./models/"): # Standardized registry path
         """
         Initialize the model predictor with flexible model loading.
 
@@ -85,40 +84,30 @@ class ModelPredictor:
             ModelPredictor no longer manages data providers. Use PredictionPipeline
             for end-to-end prediction with data acquisition.
         """
-        self.model_registry_path = Path(model_registry_path) if model_registry_path else None
-        self.enable_monitoring = enable_monitoring
-        self.cache_predictions = cache_predictions
+        self.model_registry_path = Path(model_registry_path)
+        self.registry = ModelRegistry(str(self.model_registry_path)) # Initialize registry
 
         # Model management
         self._current_model: Optional[BaseModel] = None
         self._current_model_id: Optional[str] = None
         self._model_lock = threading.RLock()
-
-        # Monitoring (will be initialized when model is loaded)
         self._monitor = None
-        self._enable_monitoring = enable_monitoring
-
-        # Prediction cache (for recent predictions)
-        self._prediction_cache: Dict[str, Any] = {}
-        self._cache_lock = threading.RLock()
 
         # Auto-load model if provided during initialization
         if model_instance is not None:
-            # Mode 3: Direct model injection
             self._current_model = model_instance
-            self._current_model_id = f"{model_instance.model_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            self._current_model_id = f"injected_{model_instance.model_type}"
             logger.info(f"ModelPredictor initialized with injected model: {self._current_model_id}")
-            self._initialize_monitoring()
-        elif model_path is not None:
-            # Mode 2: Load from path
-            self.load_model(model_name="from_path", model_path=model_path)
-            logger.info(f"ModelPredictor initialized by loading model from: {model_path}")
         elif model_id is not None:
-            # Mode 1: Create from factory
-            self.load_model(model_name=model_id)
-            logger.info(f"ModelPredictor initialized by creating model: {model_id}")
+            # Main path for loading models by ID
+            self.load_model(model_id)
+            logger.info(f"ModelPredictor initialized by loading model_id: {model_id}")
+        elif model_path is not None:
+            # Fallback for loading from a direct, full path. The ID is the directory name.
+            self.load_model(Path(model_path).name)
+            logger.info(f"ModelPredictor initialized by loading from direct path: {model_path}")
         else:
-            logger.info("ModelPredictor initialized without model (model must be loaded later)")
+            logger.info("ModelPredictor initialized without a model.")
 
     @property
     def model_id(self) -> Optional[str]:
@@ -127,7 +116,7 @@ class ModelPredictor:
 
     def _initialize_monitoring(self):
         """Initialize model monitoring if enabled."""
-        if self._enable_monitoring and self._current_model_id:
+        if self._current_model_id:
             try:
                 from .monitor import ModelMonitor
                 self._monitor = ModelMonitor(self._current_model_id)
@@ -240,66 +229,61 @@ class ModelPredictor:
         """
         with self._model_lock:
             try:
-                # If no specific path, try to create a new model instance
-                if model_path is None:
+                # If an explicit model_path is provided, use its directory name as the ID
+                effective_model_id = Path(model_path).name if model_path else model_name
+
+                # The logic is now unified: we always try to load by ID.
+                # If the ID exists as a directory, we load it and its artifacts.
+                # If it doesn't exist, we fall back to creating a new model from the factory.
+                model_dir = self.model_registry_path / effective_model_id
+                
+                if model_dir.is_dir():
+                    logger.info(f"Found model directory for '{effective_model_id}'. Loading model and artifacts...")
+                    model = self._load_model_with_artifacts(effective_model_id)
+                    if model is None:
+                         raise ModelLoadError(f"Could not load model from ID: {effective_model_id}")
+                    model_id = effective_model_id
+                else:
+                    logger.info(f"'{model_name}' not found as a model ID. Assuming it's a model type and creating new instance.")
                     model = ModelFactory.create(model_name)
                     model_id = f"{model_name}_new_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-                else:
-                    # Load from specific path
-                    model_path = Path(model_path)
-                    if not model_path.exists():
-                        raise ModelLoadError(f"Model path not found: {model_path}")
-
-                    # Determine model type from metadata and load
-                    model = self._load_model_from_path(model_path)
-                    model_id = f"{model_name}_loaded_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
                 self._current_model = model
                 self._current_model_id = model_id
+                
+                self._initialize_monitoring()
 
-                # Initialize monitoring for new model
-                if self._enable_monitoring:
-                    try:
-                        from .monitor import ModelMonitor
-                        self._monitor = ModelMonitor(model_id)
-                        logger.info(f"Model monitoring initialized for {model_id}")
-                    except ImportError as e:
-                        logger.warning(f"Model monitoring not available: {e}")
-                        self._monitor = None
-
-                logger.info(f"Model loaded: {model_id} ({model_name})")
+                logger.info(f"Model ready: {model_id}")
                 return model_id
 
             except Exception as e:
-                logger.error(f"Failed to load model {model_name}: {e}")
+                logger.error(f"Failed to load or create model '{model_name}': {e}", exc_info=True)
                 raise ModelLoadError(f"Failed to load model {model_name}: {e}")
+
+    def _load_model_with_artifacts(self, model_id: str) -> Optional[BaseModel]:
+        """
+        Loads a model and its artifacts, attaching the feature pipeline to the model object.
+        """
+        loaded = self.registry.load_model_with_artifacts(model_id)
+        if loaded:
+            model, artifacts = loaded
+            if 'feature_pipeline' in artifacts:
+                model.feature_pipeline = artifacts['feature_pipeline']
+                # Mark the model as trained since it's loaded from the registry
+                if hasattr(model, 'is_trained'):
+                    model.is_trained = True
+                logger.info(f"Attached 'feature_pipeline' artifact to loaded model '{model_id}'.")
+            return model
+        logger.warning(f"Loading failed. No model or artifacts found for ID '{model_id}' in registry.")
+        return None
 
     def _load_model_from_path(self, path: Path) -> BaseModel:
         """
-        Load a model from a directory path.
-
-        Args:
-            path: Path to model directory
-
-        Returns:
-            Loaded model instance
+        [DEPRECATED] This method is replaced by _load_model_with_artifacts.
         """
-        # Try to determine model type from metadata
-        metadata_path = path / "metadata.json"
-        if metadata_path.exists():
-            import json
-            with open(metadata_path, 'r') as f:
-                metadata = json.load(f)
-
-            model_type = metadata.get('model_type')
-            if model_type and model_type in ModelFactory._registry:
-                # Use the specific model class to load
-                model_class = ModelFactory._registry[model_type].model_class
-                return model_class.load(path)
-
-        # Fallback: try BaseModel.load
-        return BaseModel.load(path)
-
+        logger.warning("Using deprecated _load_model_from_path. The new loader is now ID-based.")
+        return self._load_model_with_artifacts(path.name)
+        
     def get_current_model(self) -> Optional[BaseModel]:
         """
         Get the currently loaded model.

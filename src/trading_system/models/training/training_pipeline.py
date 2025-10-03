@@ -21,7 +21,8 @@ from pathlib import Path
 import pandas as pd
 
 from .trainer import ModelTrainer, TrainingResult, TrainingConfig
-from ..base.model_factory import ModelFactory, ModelRegistry
+from ..base.model_factory import ModelFactory
+from ..model_persistence import ModelRegistry
 from ...feature_engineering.pipeline import FeatureEngineeringPipeline
 from ...config.feature import FeatureConfig
 
@@ -110,13 +111,26 @@ class TrainingPipeline:
 
         # Generate model name if not provided
         if model_name is None:
-            model_name = f"{self.model_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            model_name = self.model_type
 
         try:
+            # ** THE FIX: Ensure date arguments are datetime objects **
+            if isinstance(start_date, str):
+                start_date = pd.to_datetime(start_date)
+            if isinstance(end_date, str):
+                end_date = pd.to_datetime(end_date)
+
             # Step 1: Load and prepare data
+            # ** THE FIX: Extend the data loading window to accommodate feature lookbacks **
             logger.info("Step 1: Loading data...")
+            # Determine the longest lookback period required by the feature pipeline.
+            max_lookback = self.feature_pipeline.get_max_lookback()
+            extended_start_date = start_date - pd.Timedelta(days=max_lookback * 1.5) # 1.5x buffer for non-trading days
+
+            logger.info(f"Max feature lookback is {max_lookback} days. Extending data loading from {start_date.date()} to {extended_start_date.date()}.")
+            
             price_data, factor_data, target_data = self._load_data(
-                start_date, end_date, symbols, **kwargs
+                extended_start_date, end_date, symbols, **kwargs
             )
             
             # Encapsulate data for the feature pipeline
@@ -129,33 +143,73 @@ class TrainingPipeline:
 
             # Step 3: Prepare training data
             logger.info("Step 3: Preparing training data...")
-            X, y = self._prepare_training_data(features, target_data)
+            logger.info(f"DEBUG: Features shape: {features.shape}, Features date range: {features.index.min()} to {features.index.max()}")
+            logger.info(f"DEBUG: Target data shape: {[len(v) for v in target_data.values()] if isinstance(target_data, dict) else 'N/A'}")
+            if isinstance(target_data, dict) and target_data:
+                first_symbol = list(target_data.keys())[0]
+                logger.info(f"DEBUG: Sample target data for {first_symbol}: shape {target_data[first_symbol].shape}, range {target_data[first_symbol].index.min()} to {target_data[first_symbol].index.max()}")
+                logger.info(f"DEBUG: Target {first_symbol} stats: mean={target_data[first_symbol].mean():.6f}, std={target_data[first_symbol].std():.6f}, min={target_data[first_symbol].min():.6f}, max={target_data[first_symbol].max():.6f}")
+
+            X, y = self._prepare_training_data(features, target_data, start_date, end_date)
+
+            logger.info(f"DEBUG: After _prepare_training_data:")
+            logger.info(f"DEBUG: X shape: {X.shape}, y shape: {y.shape}")
+            logger.info(f"DEBUG: X date range: {X.index.min()} to {X.index.max()}")
+            logger.info(f"DEBUG: y date range: {y.index.min()} to {y.index.max()}")
+            logger.info(f"DEBUG: y stats: mean={y.mean():.6f}, std={y.std():.6f}, min={y.min():.6f}, max={y.max():.6f}")
+            logger.info(f"DEBUG: X has NaN values: {X.isnull().any().any()}, Total NaN count: {X.isnull().sum().sum()}")
+            logger.info(f"DEBUG: y has NaN values: {y.isnull().any()}, NaN count: {y.isnull().sum()}")
+            logger.info(f"DEBUG: X feature types sample: {dict(list(X.dtypes.head(10).items()))}")
 
             # Step 4: Create and train model
             logger.info("Step 4: Training model...")
             model = ModelFactory.create(self.model_type, config=kwargs.get('model_config'))
+            logger.info(f"DEBUG: Created model type: {self.model_type}")
+            logger.info(f"DEBUG: Model config: {kwargs.get('model_config', 'None')}")
+
             training_result = self.trainer.train(model, X, y)
+
+            logger.info(f"DEBUG: Training completed. Training result keys: {training_result.__dict__.keys() if hasattr(training_result, '__dict__') else 'No __dict__'}")
+            if hasattr(training_result, 'validation_metrics') and training_result.validation_metrics:
+                logger.info(f"DEBUG: Training validation metrics: {training_result.validation_metrics}")
+            else:
+                logger.warning("DEBUG: No validation metrics found in training result")
 
             # Step 5: Register model and artifacts
             logger.info("Step 5: Registering model and artifacts...")
-            if hasattr(model, 'status') and model.status == "trained":
-                # Save the model with tags
-                model_id = self.registry.save_model(
-                    model=model,
+            model_id = None
+            if hasattr(training_result.model, 'is_trained') and training_result.model.is_trained:
+                # ** THE FIX: Transfer training metrics to model metadata before saving **
+                if training_result.validation_metrics:
+                    # logger.info(f"DEBUG: Transferring validation metrics to model metadata: {training_result.validation_metrics}")
+                    training_result.model.update_metadata(
+                        performance_metrics=training_result.validation_metrics
+                    )
+
+                # Also store cross-validation results if available
+                if training_result.cv_results:
+                    # logger.info(f"DEBUG: Storing CV results in model metadata: {training_result.cv_results}")
+                    training_result.model.update_metadata(
+                        cv_results=training_result.cv_results
+                    )
+
+                # Re-apply the fix: Use `save_model_with_artifacts` to bundle the pipeline
+                model_id = self.registry.save_model_with_artifacts(
+                    model=training_result.model,
                     model_name=model_name,
+                    artifacts={
+                        'feature_pipeline': self.feature_pipeline,
+                        'training_result': training_result  # Also save the complete training result
+                    },
                     tags={
-                        'pipeline_version': '2.0.0', # Updated version
+                        'pipeline_version': '3.0.0', # Mark new saving format
                         'training_date': datetime.now().isoformat(),
-                        'data_period': f"{start_date}_{end_date}",
+                        'data_period': f"{start_date.date()}_{end_date.date()}",
                         'symbols': ','.join(symbols)
                     }
                 )
-
-                # TODO: Save feature pipeline separately if needed
-                # For now, the feature pipeline is saved with the model if the model supports it
             else:
-                logger.warning("Model not trained, skipping registration")
-                model_id = None
+                logger.warning("Model was not successfully trained, skipping registration.")
 
             # Step 6: Generate report
             logger.info("Step 6: Generating pipeline report...")
@@ -223,152 +277,84 @@ class TrainingPipeline:
 
     def _prepare_training_data(self,
                               features: pd.DataFrame,
-                              target_data: Dict[str, pd.Series]) -> Tuple[pd.DataFrame, pd.Series]:
+                              target_data: Dict[str, pd.Series],
+                              start_date: datetime,
+                              end_date: datetime) -> Tuple[pd.DataFrame, pd.Series]:
         """
-        Prepare training data by aligning features and targets.
-
-        Args:
-            features: Feature DataFrame
-            target_data: Target data by symbol
-
-        Returns:
-            Tuple of (X, y) for training
+        Prepare training data by robustly aligning features and targets.
         """
-        logger.info(f"Features shape: {features.shape}")
-        logger.info(f"Features index type: {type(features.index)}")
-        logger.info(f"Features index sample: {features.index[:5].tolist()}")
-        logger.info(f"Is MultiIndex: {isinstance(features.index, pd.MultiIndex)}")
-        logger.info(f"Available symbols in target data: {list(target_data.keys())}")
+        if not isinstance(features.index, pd.MultiIndex):
+            raise ValueError("Features DataFrame must have a MultiIndex of ('symbol', 'date').")
 
-        # For debugging, check one symbol's target data
-        if target_data:
-            first_symbol = list(target_data.keys())[0]
-            first_target = target_data[first_symbol]
-            logger.info(f"First symbol '{first_symbol}' target shape: {first_target.shape}")
-            logger.info(f"First symbol target index sample: {first_target.index[:5].tolist()}")
+        # Combine all symbol targets into a single Series with a matching MultiIndex
+        all_targets = []
+        for symbol, targets in target_data.items():
+            target_df = targets.to_frame(name='target')
+            target_df['symbol'] = symbol
+            # Ensure the index is a DatetimeIndex before setting the MultiIndex
+            target_df.index.name = 'date'
+            target_df = target_df.set_index('symbol', append=True).reorder_levels(['symbol', 'date'])
+            all_targets.append(target_df)
+        
+        if not all_targets:
+            raise ValueError("No target data could be processed.")
+            
+        y_full = pd.concat(all_targets)['target']
 
-        # The issue is that features and targets use different indexing schemes
-        # Features use a multi-index (symbol-level) while targets are concatenated
-        # Let's create proper alignment by rebuilding targets with the same structure as features
+        # Use an inner merge to perfectly align features and targets
+        # We also need to filter the features to the original requested training period
+        # Adjust end_date to account for forward return window (21 days)
+        adjusted_end_date = end_date - pd.Timedelta(days=21)
+        features_in_period = features.loc[(slice(None), slice(start_date, adjusted_end_date)), :]
+        
+        # --- DETAILED DEBUGGING LOGS ---
+        logger.info("--- Preparing Data Alignment: Debugging Info ---")
+        logger.info(f"Original requested training period: {start_date.date()} to {end_date.date()}")
+        logger.info(f"Adjusted training period (accounting for 21-day forward returns): {start_date.date()} to {adjusted_end_date.date()}")
+        
+        # Log info for features
+        logger.info(f"Features (features_in_period) shape: {features_in_period.shape}")
+        if not features_in_period.empty:
+            logger.info(f"Features head:\n{features_in_period.head()}")
+            logger.info(f"Features tail:\n{features_in_period.tail()}")
+            min_date, max_date = features_in_period.index.get_level_values('date').min(), features_in_period.index.get_level_values('date').max()
+            logger.info(f"Features date range: {min_date.date()} to {max_date.date()}")
 
-        # First, check if features have a multi-index structure (symbol-date)
-        if isinstance(features.index, pd.MultiIndex):
-            logger.info("Features have MultiIndex, aligning targets accordingly")
+        # Log info for targets
+        logger.info(f"Targets (y_full) shape: {y_full.shape}")
+        if not y_full.empty:
+            logger.info(f"Targets head:\n{y_full.head()}")
+            logger.info(f"Targets tail:\n{y_full.tail()}")
+            min_date, max_date = y_full.index.get_level_values('date').min(), y_full.index.get_level_values('date').max()
+            logger.info(f"Targets date range: {min_date.date()} to {max_date.date()}")
+        logger.info("--------------------------------------------------")
 
-            # Rebuild target data to match feature structure
-            all_targets = []
-            for symbol, target_series in target_data.items():
-                if symbol in features.index.get_level_values(0):
-                    # Create MultiIndex entries for this symbol
-                    symbol_indices = features.index.get_level_values(0) == symbol
-                    symbol_dates = features.index[symbol_indices].get_level_values(1)
+        combined_data = features_in_period.merge(y_full.rename('target'), left_index=True, right_index=True, how='inner')
 
-                    # Align target series with these dates for forward return prediction
-                    # target_series contains future returns (shifted -21 days)
-                    # We need to align current features with future targets
-                    # Find target dates that correspond to our feature dates
-                    future_target_dates = symbol_dates + pd.Timedelta(days=21)
+        logger.info(f"After initial merge: {combined_data.shape} samples")
+        logger.info(f"NaN count per column before dropping:\n{combined_data.isnull().sum().head(10)}")
 
-                    # Get target values for these future dates
-                    future_targets = target_series.reindex(future_target_dates)
+        # Drop rows where ALL feature values are NaN (keep rows with partial features)
+        # Also require target to be non-NaN
+        feature_columns = [col for col in combined_data.columns if col != 'target']
+        combined_data = combined_data.dropna(subset=['target'])  # Ensure target is not NaN
+        combined_data = combined_data.dropna(how='all', subset=feature_columns)  # Only drop if ALL features are NaN
 
-                    # Only keep non-NaN targets (where we have future data)
-                    valid_mask = future_targets.notna()
-                    valid_feature_dates = symbol_dates[valid_mask]
-                    valid_targets = future_targets[valid_mask]
+        # Log NaN info after filtering
+        remaining_rows = len(combined_data)
+        logger.info(f"After removing rows with all-NaN features and NaN targets: {remaining_rows} samples")
 
-                    # Create MultiIndex for the valid pairs
-                    aligned_target = pd.Series(
-                        valid_targets.values,
-                        index=pd.MultiIndex.from_product(
-                            [[symbol], valid_feature_dates],
-                            names=['symbol', 'date']
-                        )
-                    )
-                    all_targets.append(aligned_target)
+        if combined_data.empty:
+            raise ValueError("No overlapping data found between features and targets after alignment and NaN removal.")
 
-            if all_targets:
-                y = pd.concat(all_targets).dropna()
-                logger.info(f"MultiIndex y shape: {y.shape}")
-                logger.info(f"MultiIndex y sample: {y.index[:5].tolist()}")
-                logger.info(f"Features index sample: {features.index[:5].tolist()}")
+        y = combined_data['target']
+        X = combined_data.drop(columns=['target'])
 
-                # Check if indices match
-                common_indices = features.index.intersection(y.index)
-                logger.info(f"Common indices count: {len(common_indices)}")
-
-                # Debug: Check index details
-                logger.info(f"Features index names: {features.index.names}")
-                logger.info(f"Y index names: {y.index.names}")
-                logger.info(f"Features index levels: {features.index.levels}")
-                logger.info(f"Y index levels: {y.index.levels}")
-
-                # Try direct index comparison
-                logger.info(f"Index objects equal: {features.index.equals(y.index)}")
-
-                # Use common indices approach - simpler and more reliable
-                common_indices = features.index.intersection(y.index)
-                logger.info(f"Common indices count: {len(common_indices)}")
-
-                if len(common_indices) > 0:
-                    X = features.loc[common_indices]
-                    y = y.loc[common_indices]
-                    logger.info(f"After common index alignment - X shape: {X.shape}, y shape: {y.shape}")
-                else:
-                    raise ValueError("No common indices found between features and targets.")
-            else:
-                raise ValueError("No matching symbols between features and targets")
-        else:
-            # Use the original approach for single-index features
-            all_targets = []
-            for symbol, target_series in target_data.items():
-                target_series.name = symbol
-                all_targets.append(target_series)
-
-            y = pd.concat(all_targets).dropna()
-
-            # For forward return prediction: features at time t predict returns at time t+21
-            # Align features(t) with targets(t+21)
-            target_dates = y.index
-            feature_dates = target_dates - pd.Timedelta(days=21)  # Look back 21 days for features
-
-            # Find matching feature dates
-            valid_feature_dates = features.index.intersection(feature_dates)
-            valid_target_dates = valid_feature_dates + pd.Timedelta(days=21)
-
-            # Get the corresponding target dates that exist
-            final_target_dates = y.index.intersection(valid_target_dates)
-            final_feature_dates = final_target_dates - pd.Timedelta(days=21)
-
-            if len(final_feature_dates) > 0:
-                X = features.loc[final_feature_dates]
-                y = y.loc[final_target_dates]
-            else:
-                raise ValueError("No matching indices between features and targets after forward alignment")
-
-        # Ensure alignment
-        common_index = X.index.intersection(y.index)
-        X = X.loc[common_index]
-        y = y.loc[common_index]
-
-        logger.info(f"After alignment - training data: {len(X)} samples, {len(X.columns)} features")
-        logger.info(f"Target data length: {len(y)}")
-        logger.info(f"X and y have same index: {X.index.equals(y.index)}")
-
-        if len(X) != len(y):
-            logger.error(f"Length mismatch: X={len(X)}, y={len(y)}")
-            logger.error(f"X index type: {type(X.index)}")
-            logger.error(f"y index type: {type(y.index)}")
-            logger.error(f"X index sample: {X.index[:5] if len(X) > 0 else 'empty'}")
-            logger.error(f"y index sample: {y.index[:5] if len(y) > 0 else 'empty'}")
-
-        if len(X) == 0:
-            raise ValueError("No training samples after alignment. Check data structure and index compatibility.")
-
+        logger.info(f"Aligned training data: {len(X)} samples, {len(X.columns)} features.")
         return X, y
 
     def _generate_pipeline_report(self,
-                                 model_id: str,
+                                 model_id: Optional[str],
                                  training_result: TrainingResult,
                                  price_data: Dict[str, pd.DataFrame],
                                  features: pd.DataFrame) -> Dict[str, Any]:
@@ -429,12 +415,14 @@ class TrainingPipeline:
 
     def load_model(self, model_id: str):
         """
-        Load a model from the registry.
-
-        Args:
-            model_id: Model ID to load
-
-        Returns:
-            Loaded model instance
+        Load a model and its artifacts from the registry.
         """
-        return self.registry.load_model(model_id)
+        loaded = self.registry.load_model_with_artifacts(model_id)
+        if loaded:
+            model, artifacts = loaded
+            # Attach artifacts to the model for easy access
+            if 'feature_pipeline' in artifacts:
+                model.feature_pipeline = artifacts['feature_pipeline']
+                logger.info(f"Attached feature_pipeline artifact to model '{model_id}'")
+            return model
+        return None

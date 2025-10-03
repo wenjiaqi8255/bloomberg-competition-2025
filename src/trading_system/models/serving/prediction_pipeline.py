@@ -197,6 +197,98 @@ class PredictionPipeline:
         
         return batch_predictions
     
+    def predict_for_date(self,
+                         prediction_date: datetime,
+                         symbols: List[str],
+                         lookback_start_date: datetime) -> Dict[str, float]:
+        """
+        Generates predictions for a list of symbols for a single specific date.
+
+        This is the primary method used by the backtesting engine. It orchestrates
+        fetching the correct data window, computing features for that window, and
+        returning a dictionary of final prediction values.
+
+        Args:
+            prediction_date: The specific date to generate predictions for.
+            symbols: A list of symbols to predict.
+            lookback_start_date: The start date of the historical data window needed
+                                 to compute all features correctly.
+
+        Returns:
+            A dictionary mapping each symbol to its float prediction value.
+            e.g., {'AAPL': 0.015, 'MSFT': -0.005}
+        """
+        logger.info(f"Executing predict_for_date for {prediction_date.date()} with {len(symbols)} symbols.")
+        
+        try:
+            # Step 1: Fetch historical price data for the required lookback window.
+            if self.data_provider is None:
+                raise ValueError("PredictionPipeline requires a data_provider for this operation.")
+            
+            logger.debug(f"Fetching price data from {lookback_start_date.date()} to {prediction_date.date()}")
+            price_data = self.data_provider.get_data(
+                start_date=lookback_start_date,
+                end_date=prediction_date,
+                symbols=symbols
+            )
+
+            # Step 2: Fetch corresponding factor data if a provider is available.
+            factor_data = None
+            if self.factor_data_provider:
+                logger.debug("Fetching factor data for the same period.")
+                factor_data = self.factor_data_provider.get_data(
+                    start_date=lookback_start_date,
+                    end_date=prediction_date
+                )
+
+            # Step 3: Compute features using the full data window.
+            pipeline_input = {'price_data': price_data}
+            if factor_data is not None and not factor_data.empty:
+                pipeline_input['factor_data'] = factor_data
+            
+            logger.debug("Transforming data through the feature pipeline...")
+            all_features = self.feature_pipeline.transform(pipeline_input)
+
+            if all_features.empty:
+                logger.warning("Feature computation resulted in an empty DataFrame.")
+                return {}
+
+            # Step 4: Iterate through symbols and get the prediction for the specific date.
+            predictions = {}
+            for symbol in symbols:
+                if symbol not in price_data or price_data[symbol].empty:
+                    logger.warning(f"No price data for {symbol} on {prediction_date.date()}, skipping prediction.")
+                    continue
+                
+                # Extract features for the current symbol.
+                symbol_features = self._extract_symbol_features(all_features, symbol)
+                
+                if symbol_features.empty:
+                    logger.warning(f"Could not extract features for {symbol} for {prediction_date.date()}.")
+                    continue
+                
+                # IMPORTANT: Use only the latest row of features for prediction.
+                latest_features = symbol_features.iloc[-1:]
+
+                try:
+                    result = self.model_predictor.predict(
+                        features=latest_features,
+                        symbol=symbol,
+                        prediction_date=prediction_date
+                    )
+                    # The predictor returns a dict, we need the raw prediction value.
+                    predictions[symbol] = result.get('prediction', 0.0)
+                except Exception as e:
+                    logger.error(f"Prediction for symbol {symbol} failed: {e}", exc_info=True)
+                    predictions[symbol] = 0.0 # Assign a neutral prediction on failure
+
+            logger.info(f"Generated predictions for {len(predictions)} symbols for {prediction_date.date()}.")
+            return predictions
+
+        except Exception as e:
+            logger.error(f"An error occurred in predict_for_date: {e}", exc_info=True)
+            return {}
+
     def _fetch_price_data(self,
                          symbols: List[str],
                          end_date: datetime,

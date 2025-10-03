@@ -57,14 +57,28 @@ class PerformanceEvaluator:
         try:
             # Make predictions
             predictions = model.predict(X)
+            logger.info(f"DEBUG: PerformanceEvaluator - predictions shape: {predictions.shape}, y shape: {y.shape}")
+            logger.info(f"DEBUG: PerformanceEvaluator - y stats: mean={y.mean():.6f}, std={y.std():.6f}, min={y.min():.6f}, max={y.max():.6f}")
+            logger.info(f"DEBUG: PerformanceEvaluator - prediction stats: mean={np.mean(predictions):.6f}, std={np.std(predictions):.6f}, min={np.min(predictions):.6f}, max={np.max(predictions):.6f}")
+
+            # Check for data quality issues
+            if np.isnan(predictions).any():
+                logger.warning(f"DEBUG: PerformanceEvaluator - Predictions contain {np.isnan(predictions).sum()} NaN values")
+            if np.isinf(predictions).any():
+                logger.warning(f"DEBUG: PerformanceEvaluator - Predictions contain {np.isinf(predictions).sum()} infinite values")
+            if y.isnull().any():
+                logger.warning(f"DEBUG: PerformanceEvaluator - y contains {y.isnull().sum()} NaN values")
 
             # Determine task type if auto
             if task_type == 'auto':
                 task_type = PerformanceEvaluator._determine_task_type(y)
 
+            logger.info(f"DEBUG: PerformanceEvaluator - determined task type: {task_type}")
+
             # Calculate metrics based on task type
             if task_type == 'regression':
                 metrics = PerformanceEvaluator._regression_metrics(y, predictions, sample_weight)
+                logger.info(f"DEBUG: PerformanceEvaluator - calculated regression metrics, r2: {metrics.get('r2', 'N/A')}")
             elif task_type == 'classification':
                 # For classification, we need class predictions
                 if hasattr(model, 'predict_proba'):
@@ -318,6 +332,28 @@ class PerformanceEvaluator:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
 
+            logger.info(f"DEBUG: _regression_metrics - input shapes: y_true={y_true.shape}, y_pred={y_pred.shape}")
+            logger.info(f"DEBUG: _regression_metrics - y_true stats: mean={y_true.mean():.6f}, std={y_true.std():.6f}")
+            logger.info(f"DEBUG: _regression_metrics - y_pred stats: mean={np.mean(y_pred):.6f}, std={np.std(y_pred):.6f}")
+            logger.info(f"DEBUG: _regression_metrics - y_true range: [{y_true.min():.6f}, {y_true.max():.6f}]")
+            logger.info(f"DEBUG: _regression_metrics - y_pred range: [{np.min(y_pred):.6f}, {np.max(y_pred):.6f}]")
+
+            # Calculate basic variance stats manually to understand R² calculation
+            y_mean = np.mean(y_true)
+            ss_res = np.sum((y_true - y_pred) ** 2)
+            ss_tot = np.sum((y_true - y_mean) ** 2)
+
+            logger.info(f"DEBUG: _regression_metrics - y_mean: {y_mean:.6f}")
+            logger.info(f"DEBUG: _regression_metrics - ss_res (sum of squared residuals): {ss_res:.6f}")
+            logger.info(f"DEBUG: _regression_metrics - ss_tot (total sum of squares): {ss_tot:.6f}")
+
+            if ss_tot > 0:
+                manual_r2 = 1 - (ss_res / ss_tot)
+                logger.info(f"DEBUG: _regression_metrics - manual R² calculation: {manual_r2:.6f}")
+            else:
+                logger.warning(f"DEBUG: _regression_metrics - ss_tot is zero, cannot calculate manual R²")
+                manual_r2 = 0.0
+
             metrics = {
                 'r2': r2_score(y_true, y_pred, sample_weight=sample_weight),
                 'mse': mean_squared_error(y_true, y_pred, sample_weight=sample_weight),
@@ -325,6 +361,14 @@ class PerformanceEvaluator:
                 'mae': mean_absolute_error(y_true, y_pred, sample_weight=sample_weight),
                 'mape': mean_absolute_percentage_error(y_true, y_pred, sample_weight=sample_weight)
             }
+
+            logger.info(f"DEBUG: _regression_metrics - sklearn r2_score: {metrics['r2']:.6f}")
+            logger.info(f"DEBUG: _regression_metrics - manual vs sklearn R² diff: {abs(manual_r2 - metrics['r2']):.6f}")
+
+            if metrics['r2'] < -10:
+                logger.error(f"DEBUG: _regression_metrics - EXTREMELY NEGATIVE R² DETECTED: {metrics['r2']:.6f}")
+                logger.error(f"DEBUG: _regression_metrics - This suggests severe model or data issues")
+                logger.error(f"DEBUG: _regression_metrics - ss_res/ss_tot ratio: {ss_res/ss_tot if ss_tot > 0 else 'inf'}")
 
             # Add correlation-based metrics
             correlation = np.corrcoef(y_true, y_pred)[0, 1]

@@ -25,7 +25,7 @@ The only difference between strategies is:
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, List
 import pandas as pd
 import numpy as np
 
@@ -33,6 +33,7 @@ from ..feature_engineering.pipeline import FeatureEngineeringPipeline
 from ..models.serving.predictor import ModelPredictor
 from ..models.serving.prediction_pipeline import PredictionPipeline
 from ..utils.position_sizer import PositionSizer
+from ..utils.risk import CovarianceEstimator, SimpleCovarianceEstimator, LedoitWolfCovarianceEstimator
 from .utils.portfolio_calculator import PortfolioCalculator
 from ..data.stock_classifier import StockClassifier
 from ..allocation.box_allocator import BoxAllocator
@@ -71,6 +72,8 @@ class BaseStrategy(ABC):
                  feature_pipeline: FeatureEngineeringPipeline,
                  model_predictor: ModelPredictor,
                  position_sizer: PositionSizer,
+                 universe: List[str],  # Add universe parameter
+                 risk_estimator: Optional[CovarianceEstimator] = None,
                  stock_classifier: Optional[StockClassifier] = None,
                  box_allocator: Optional[BoxAllocator] = None,
                  data_provider=None,
@@ -84,16 +87,35 @@ class BaseStrategy(ABC):
             feature_pipeline: Fitted FeatureEngineeringPipeline
             model_predictor: ModelPredictor with loaded model
             position_sizer: PositionSizer for risk management
+            universe: The list of symbols this strategy is allowed to trade.
+            risk_estimator: Optional CovarianceEstimator for risk assessment
             stock_classifier: Optional StockClassifier for box-based logic
             box_allocator: Optional BoxAllocator for box-based allocation
             data_provider: Optional price data provider (for PredictionPipeline)
             factor_data_provider: Optional factor data provider (for PredictionPipeline)
-            **kwargs: Additional strategy-specific parameters
+            **kwargs: Additional strategy-specific parameters, including configs
+                      like 'risk_model_config' and 'position_sizer_config'.
         """
         self.name = name
+        self.universe = universe  # Store the universe
         self.feature_pipeline = feature_pipeline
         self.model_predictor = model_predictor
-        self.position_sizer = position_sizer
+        
+        # Configure PositionSizer from kwargs if config is provided
+        position_sizer_config = kwargs.get('position_sizer_config', {})
+        if position_sizer_config:
+            self.position_sizer = PositionSizer(
+                volatility_target=position_sizer_config.get('volatility_target', position_sizer.volatility_target),
+                max_position_weight=position_sizer_config.get('max_position_weight', position_sizer.max_position_weight),
+                max_leverage=position_sizer_config.get('max_leverage', position_sizer.max_leverage),
+                min_position_weight=position_sizer_config.get('min_position_weight', position_sizer.min_position_weight),
+                kelly_fraction=position_sizer_config.get('kelly_fraction', position_sizer.kelly_fraction)
+            )
+            logger.info(f"Reconfigured PositionSizer from 'position_sizer_config'.")
+        else:
+            self.position_sizer = position_sizer
+
+        self.risk_estimator = risk_estimator or self._create_risk_estimator(kwargs.get('risk_model_config', {}))
         self.stock_classifier = stock_classifier
         self.box_allocator = box_allocator
         self.parameters = kwargs
@@ -126,6 +148,21 @@ class BaseStrategy(ABC):
         
         logger.info(f"Initialized {self.__class__.__name__} '{name}' with unified architecture")
     
+    def _create_risk_estimator(self, risk_config: Dict) -> CovarianceEstimator:
+        """Factory method to create a covariance estimator from config."""
+        estimator_type = risk_config.get('type', 'simple').lower()
+        lookback_days = risk_config.get('lookback_days', 252)
+        
+        if estimator_type == 'ledoit_wolf':
+            logger.info(f"Initializing LedoitWolfCovarianceEstimator with lookback={lookback_days} days.")
+            return LedoitWolfCovarianceEstimator(lookback_days=lookback_days)
+        elif estimator_type == 'simple':
+            logger.info(f"Initializing SimpleCovarianceEstimator with lookback={lookback_days} days.")
+            return SimpleCovarianceEstimator(lookback_days=lookback_days)
+        else:
+            logger.warning(f"Unknown risk estimator type '{estimator_type}'. Defaulting to SimpleCovarianceEstimator.")
+            return SimpleCovarianceEstimator(lookback_days=lookback_days)
+    
     def _validate_components(self):
         """Validate that all required components are provided."""
         if not isinstance(self.feature_pipeline, FeatureEngineeringPipeline):
@@ -140,67 +177,259 @@ class BaseStrategy(ABC):
                         start_date: datetime,
                         end_date: datetime) -> pd.DataFrame:
         """
-        Generate trading signals using the unified pipeline.
+        Main entry point for signal generation, supporting date ranges.
+        This method generates signals for the entire date range by calling
+        the single-date pipeline at regular rebalancing intervals.
+        """
+        logger.info(f"[{self.name}] Generating signals for date range {start_date.date()} to {end_date.date()}.")
+
+        # Generate signals at regular intervals (monthly rebalancing for faster execution)
+        signal_dates = pd.date_range(start=start_date, end=end_date, freq='W')
+
+        all_signals = []
+
+        for signal_date in signal_dates:
+            logger.debug(f"[{self.name}] Generating signals for {signal_date.date()}")
+            result = self.generate_signals_single_date(signal_date)
+            weights_df = result.get('weights', pd.DataFrame())
+
+            if not weights_df.empty:
+                # Update the index to use the signal_date
+                weights_df.index = [signal_date]
+                all_signals.append(weights_df)
+
+        if not all_signals:
+            logger.warning(f"[{self.name}] No signals generated for any date in range")
+            return pd.DataFrame()
+
+        # Combine all signals
+        combined_signals = pd.concat(all_signals, ignore_index=False)
+        logger.info(f"[{self.name}] Generated signals for {len(combined_signals)} dates from {start_date.date()} to {end_date.date()}")
+
+        return combined_signals
+
+    def generate_signals_single_date(self, current_date: datetime) -> Dict:
+        """
+        Orchestrates the full signal generation pipeline for a single date.
         
-        This method implements the standard flow:
-        1. Compute features using FeaturePipeline
-        2. Get predictions from Model
-        3. Apply risk management via PositionSizer
-        
-        Args:
-            price_data: Dictionary mapping symbols to OHLCV DataFrames
-            start_date: Start date for signal generation
-            end_date: End date for signal generation
+        This new implementation follows a clear, multi-step process:
+        1. Generate raw alpha signals (pure prediction).
+        2. Convert alpha to expected returns.
+        3. Estimate the covariance matrix for risk assessment.
+        4. Apply risk adjustments to get target weights.
+        5. Apply final constraints (e.g., max position size, leverage).
         
         Returns:
-            DataFrame with risk-adjusted portfolio weights
+            A dictionary containing the final weights and diagnostic information.
         """
-        if not price_data:
-            logger.warning("Empty price data provided")
-            return pd.DataFrame()
-        
+        from datetime import timedelta
+        logger.info(f"[{self.name}] Generating signals for {current_date.date()} using full pipeline.")
+
         try:
-            logger.info(f"[{self.name}] Generating signals from {start_date} to {end_date}")
+            # Define lookback period for feature calculation
+            lookback_start = current_date - timedelta(days=3 * 365)
+            price_data = self.data_provider.get_data(start_date=lookback_start, end_date=current_date, symbols=self.universe)
+
+            if not price_data:
+                logger.error(f"[{self.name}] Could not retrieve price data for date {current_date.date()}.")
+                return {'weights': pd.DataFrame()}
+
+            # Step 1: Generate raw, z-score normalized alpha signals
+            alpha_scores = self.generate_raw_alpha_signals(price_data, current_date)
+            if alpha_scores.empty:
+                logger.warning(f"[{self.name}] No alpha signals were generated.")
+                return {'weights': pd.DataFrame()}
+
+            # Step 2: Convert alpha scores to expected returns
+            expected_returns = self.alpha_to_expected_returns(alpha_scores)
+
+            # Step 3: Estimate covariance matrix using the configured risk estimator
+            cov_matrix = self.risk_estimator.estimate(price_data, current_date)
+
+            # Step 4: Apply risk adjustment to get initial weights
+            risk_adjusted_weights = self.apply_risk_adjustment(expected_returns, cov_matrix)
+
+            # Step 5: Apply final constraints (e.g., max position size, leverage)
+            final_weights = self._apply_constraints(risk_adjusted_weights)
             
-            # Step 1: Compute features using pipeline
-            logger.debug(f"[{self.name}] Step 1: Computing features...")
-            features = self._compute_features(price_data)
-            
-            if features.empty:
-                logger.warning(f"[{self.name}] Feature computation returned empty DataFrame")
-                return pd.DataFrame()
-            
-            # Step 2: Get model predictions
-            logger.debug(f"[{self.name}] Step 2: Getting model predictions...")
-            predictions = self._get_predictions(features, price_data, start_date, end_date)
-            
-            if predictions.empty:
-                logger.warning(f"[{self.name}] Model predictions returned empty DataFrame")
-                return pd.DataFrame()
-            
-            # Step 3: Apply allocation or risk management
-            if self.box_allocator and self.stock_classifier:
-                logger.debug(f"[{self.name}] Step 3a: Classifying stocks into boxes...")
-                all_symbols = list(price_data.keys())
-                boxes = self.stock_classifier.classify_stocks(all_symbols, price_data, as_of_date=end_date)
-                
-                logger.debug(f"[{self.name}] Step 3b: Applying Box-based allocation...")
-                final_signals = self.box_allocator.allocate(predictions, boxes)
+            # Step 6: Generate signal dataframe with current date
+            # Use current date to ensure price data availability and stay within backtest period
+            # The model prediction logic remains unchanged (predicting future returns)
+            # But signal dates use current date for backtest execution
+
+            # Find the last trading day on or before current_date
+            # This ensures we have price data available for the signal date
+            signal_dates = pd.date_range(end=current_date, periods=5, freq='B')
+            if len(signal_dates) == 0:
+                # If no business days in range, use the date directly
+                signal_date = current_date
             else:
-                logger.debug(f"[{self.name}] No box allocator or stock classifier provided")
-                final_signals = predictions
-            
-            # Step 4: Evaluate signal quality (NEW)
-            logger.debug(f"[{self.name}] Step 4: Evaluating signal quality...")
-            self._evaluate_and_cache_signals(final_signals, price_data)
-            
-            logger.info(f"[{self.name}] Generated signals for {len(final_signals.columns)} assets")
-            return final_signals
-            
+                # Use the most recent business day
+                signal_date = signal_dates[-1]
+
+            final_weights_df = pd.DataFrame(index=[signal_date], columns=final_weights.columns)
+            final_weights_df.loc[signal_date] = final_weights.iloc[0]
+
+            # Step 7: Evaluate signal quality
+            if hasattr(self, '_evaluate_and_cache_signals'):
+                self._evaluate_and_cache_signals(final_weights_df, price_data)
+
+            logger.info(f"[{self.name}] Successfully generated signals for {len(final_weights.columns)} assets.")
+            logger.debug(f"[{self.name}] Returning weights DataFrame with shape: {final_weights_df.shape}, index: {final_weights_df.index}")
+
+            result = {
+                'weights': final_weights_df,
+                'alpha_scores': alpha_scores,
+                'expected_returns': expected_returns,
+                'risk_adjusted_weights': risk_adjusted_weights,
+                'cov_matrix': cov_matrix,
+                'metadata': {
+                    'date': current_date,
+                    'n_positions': (final_weights != 0).T.sum().iloc[0]
+                }
+            }
+            logger.debug(f"[{self.name}] Result keys: {list(result.keys())}, weights empty: {result['weights'].empty}")
+            return result
         except Exception as e:
-            logger.error(f"[{self.name}] Signal generation failed: {e}", exc_info=True)
+            logger.error(f"[{self.name}] Signal generation failed for date {current_date.date()}: {e}", exc_info=True)
+            return {'weights': pd.DataFrame()}
+
+    def generate_raw_alpha_signals(self, price_data: Dict, date: datetime) -> pd.DataFrame:
+        """
+        Generates raw alpha signals from model predictions and normalizes them.
+        This step is purely for prediction; no risk adjustment is applied here.
+        
+        Returns:
+            A DataFrame with z-score normalized alpha scores for each asset.
+        """
+        logger.debug(f"[{self.name}] Step 1: Generating raw alpha signals...")
+        
+        from datetime import timedelta
+        # Reuse the existing prediction logic
+        predictions = self._get_forward_predictions(
+            current_date=date,
+            lookback_start=date - timedelta(days=3*365)
+        )
+        
+        if predictions.empty:
             return pd.DataFrame()
-    
+
+        pred_series = predictions.iloc[0] # Predictions are a single-row DataFrame
+
+        # Debug: Log prediction values
+        logger.info(f"[{self.name}] Raw predictions: {pred_series.to_dict()}")
+        logger.info(f"[{self.name}] Prediction stats - mean: {pred_series.mean():.6f}, std: {pred_series.std():.6f}")
+        logger.info(f"[{self.name}] Prediction range - min: {pred_series.min():.6f}, max: {pred_series.max():.6f}")
+
+        # Normalize predictions to z-scores to create alpha signals, handle no variance case
+        std_dev = pred_series.std()
+        if std_dev > 0:
+            alpha_scores = (pred_series - pred_series.mean()) / std_dev
+            logger.info(f"[{self.name}] Alpha scores (z-scores): {alpha_scores.to_dict()}")
+        else:
+            alpha_scores = pd.Series(0.0, index=pred_series.index) # No signal if no variance
+            logger.warning(f"[{self.name}] All predictions are identical (std={std_dev:.6f}), setting alpha scores to 0")
+
+        return pd.DataFrame([alpha_scores.fillna(0)])
+
+    def alpha_to_expected_returns(self, alpha_scores: pd.DataFrame, scaling_factor: float = 0.02) -> pd.DataFrame:
+        """
+        Converts z-scored alpha signals into expected returns.
+
+        Args:
+            alpha_scores: DataFrame of z-score normalized alpha signals.
+            scaling_factor: The expected return for an alpha score of 1.0 (e.g., 0.02 = 2%).
+        """
+        logger.debug(f"[{self.name}] Step 2: Converting alpha scores to expected returns...")
+
+        # Ensure alpha_scores has a simple numeric index for multiplication
+        if not isinstance(alpha_scores.index, (int, range, type(pd.RangeIndex))):
+            # Reset index to simple numeric index if it has datetime or other index
+            alpha_scores = alpha_scores.reset_index(drop=True)
+
+        return alpha_scores * scaling_factor
+
+    def apply_risk_adjustment(self, expected_returns: pd.DataFrame, cov_matrix: pd.DataFrame) -> pd.DataFrame:
+        """
+        Adjusts expected returns for risk using the covariance matrix.
+        This is where portfolio construction techniques like mean-variance optimization or
+        Kelly criterion are applied via the PositionSizer.
+        """
+        logger.debug(f"[{self.name}] Step 4: Applying risk adjustment...")
+        logger.info(f"[{self.name}] Expected returns before risk adjustment: {expected_returns.iloc[0].to_dict()}")
+        logger.info(f"[{self.name}] Expected returns stats - mean: {expected_returns.iloc[0].mean():.6f}, std: {expected_returns.iloc[0].std():.6f}")
+
+        risk_adjusted = self.position_sizer.adjust_signals_with_covariance(
+            raw_signals=expected_returns,
+            cov_matrix=cov_matrix
+        )
+
+        logger.info(f"[{self.name}] Risk-adjusted weights: {risk_adjusted.iloc[0].to_dict()}")
+        logger.info(f"[{self.name}] Risk-adjusted stats - mean: {risk_adjusted.iloc[0].mean():.6f}, std: {risk_adjusted.iloc[0].std():.6f}")
+
+        return risk_adjusted
+        
+    def _apply_constraints(self, weights: pd.DataFrame) -> pd.DataFrame:
+        """
+        Applies final position constraints, such as max weight and leverage.
+        """
+        logger.debug(f"[{self.name}] Step 5: Applying final constraints...")
+        constrained_weights = self.position_sizer._apply_position_constraints(weights)
+        normalized_weights = self.position_sizer._normalize_weights(constrained_weights)
+        return normalized_weights
+
+    def _get_forward_predictions(self,
+                               current_date: datetime,
+                               lookback_start: datetime) -> pd.DataFrame:
+        """
+        Get forward-looking predictions from the model by delegating to the PredictionPipeline.
+        This method now orchestrates the data fetching and feature engineering for a single point in time.
+        """
+        if not (self.data_provider and self.prediction_pipeline):
+            logger.error(f"[{self.name}] Data provider or prediction pipeline is not available.")
+            return pd.DataFrame()
+
+        try:
+            # Use the strategy's own configured universe of symbols.
+            all_symbols = self.universe
+            if not all_symbols:
+                logger.warning(f"[{self.name}] No symbols defined in strategy universe.")
+                return pd.DataFrame()
+
+            # The prediction pipeline handles fetching data, computing features, and predicting.
+            # It uses the full lookback window to correctly calculate features for the `current_date`.
+            predictions_dict = self.prediction_pipeline.predict_for_date(
+                prediction_date=current_date,
+                symbols=all_symbols,
+                lookback_start_date=lookback_start
+            )
+            
+            if predictions_dict:
+                # Convert the result dict {symbol: prediction_value} to the DataFrame format.
+                predictions_df = pd.DataFrame([predictions_dict])
+                logger.info(f"[{self.name}] Successfully generated predictions for {len(predictions_dict)} symbols.")
+                return predictions_df
+            else:
+                logger.warning(f"[{self.name}] Prediction pipeline returned no predictions.")
+                return pd.DataFrame()
+
+        except Exception as e:
+            logger.error(f"[{self.name}] Forward prediction failed: {e}", exc_info=True)
+            return pd.DataFrame()
+
+    def _apply_forward_position_sizing(self,
+                                      predictions: pd.DataFrame,
+                                      price_data: Dict[str, pd.DataFrame],
+                                      current_date: datetime) -> pd.DataFrame:
+        """
+        DEPRECATED: This method is now replaced by the new pipeline in generate_signals_single_date.
+        This method now redirects to the new pipeline for backward compatibility.
+        """
+        logger.warning(f"[{self.name}] _apply_forward_position_sizing is deprecated. "
+                      f"Redirecting to generate_signals_single_date. The 'predictions' argument will be ignored.")
+        result = self.generate_signals_single_date(current_date)
+        return result.get('weights', pd.DataFrame())
+
     def _compute_features(self, price_data: Dict[str, pd.DataFrame]) -> pd.DataFrame:
         """
         Compute features using the feature pipeline.
@@ -507,7 +736,7 @@ class BaseStrategy(ABC):
         
         Returns:
             Dictionary with position metrics including:
-            - avg_number_of_positions: Average number of positions held
+            - avg_number_of_positions: Average number of positions
             - max_number_of_positions: Maximum number of positions
             - avg_position_weight: Average weight per position
             - max_position_weight: Maximum position weight

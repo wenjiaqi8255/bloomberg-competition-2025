@@ -23,7 +23,7 @@ Position Sizing:
 
 import logging
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 import pandas as pd
 
 from .base_strategy import BaseStrategy
@@ -72,6 +72,7 @@ class MLStrategy(BaseStrategy):
             feature_pipeline=feature_pipeline,
             model_predictor=model_predictor,
             position_sizer=position_sizer,
+            universe=["AAPL", "TSLA", "MSFT"], # Example universe
             min_signal_strength=0.1
         )
         
@@ -84,6 +85,7 @@ class MLStrategy(BaseStrategy):
                  feature_pipeline: FeatureEngineeringPipeline,
                  model_predictor: ModelPredictor,
                  position_sizer: PositionSizer,
+                 universe: List[str],  # Add universe
                  min_signal_strength: float = 0.1,
                  **kwargs):
         """
@@ -94,6 +96,7 @@ class MLStrategy(BaseStrategy):
             feature_pipeline: Fitted feature pipeline (should compute comprehensive features)
             model_predictor: Predictor with ML model loaded
             position_sizer: Position sizing component
+            universe: The list of symbols this strategy trades.
             min_signal_strength: Minimum signal strength to act on
             **kwargs: Additional parameters
         """
@@ -102,6 +105,7 @@ class MLStrategy(BaseStrategy):
             feature_pipeline=feature_pipeline,
             model_predictor=model_predictor,
             position_sizer=position_sizer,
+            universe=universe,  # Pass to parent
             **kwargs
         )
         

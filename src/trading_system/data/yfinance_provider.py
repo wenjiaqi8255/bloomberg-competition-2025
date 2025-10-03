@@ -31,7 +31,8 @@ class YFinanceProvider(PriceDataProvider):
     """
 
     def __init__(self, max_retries: int = 3, retry_delay: float = 1.0,
-                 request_timeout: int = 30, cache_enabled: bool = True):
+                 request_timeout: int = 30, cache_enabled: bool = True,
+                 symbols: Optional[List[str]] = None, start_date: Optional[str] = None):
         """
         Initialize the YFinance provider.
 
@@ -40,6 +41,8 @@ class YFinanceProvider(PriceDataProvider):
             retry_delay: Delay between retries in seconds
             request_timeout: Request timeout in seconds
             cache_enabled: Whether to enable caching
+            symbols: List of symbols to provide data for (optional)
+            start_date: Start date for historical data (optional)
         """
         super().__init__(
             max_retries=max_retries,
@@ -48,6 +51,10 @@ class YFinanceProvider(PriceDataProvider):
             cache_enabled=cache_enabled,
             rate_limit=0.5  # 500ms between requests
         )
+
+        # Store symbols and start_date for later use
+        self.symbols = symbols
+        self.start_date = start_date
 
     def get_data_source(self) -> DataSource:
         """Get the data source enum for this provider."""
@@ -337,6 +344,33 @@ class YFinanceProvider(PriceDataProvider):
         df = data.to_frame()
         filtered_df = self.filter_by_date(df, start_date, end_date)
         return filtered_df.iloc[:, 0]  # Convert back to Series
+
+    def get_data(self, start_date: Union[str, datetime] = None,
+                 end_date: Union[str, datetime] = None,
+                 symbols: Union[str, List[str]] = None) -> Dict[str, pd.DataFrame]:
+        """
+        Get historical data for symbols.
+
+        Args:
+            start_date: Start date for data (uses stored start_date if None)
+            end_date: End date for data (default: today)
+            symbols: Symbols to get data for (uses stored symbols if None)
+
+        Returns:
+            Dictionary mapping symbols to DataFrames
+        """
+        # Use defaults from constructor if not provided
+        if symbols is None:
+            if self.symbols is None:
+                raise ValueError("No symbols provided and no default symbols available")
+            symbols = self.symbols
+
+        if start_date is None:
+            if self.start_date is None:
+                raise ValueError("No start_date provided and no default start_date available")
+            start_date = self.start_date
+
+        return self.get_historical_data(symbols=symbols, start_date=start_date, end_date=end_date)
 
     def validate_symbol(self, symbol: str) -> bool:
         """

@@ -214,7 +214,10 @@ class XGBoostModel(BaseModel):
             })
             
             logger.info(f"Successfully trained XGBoostModel on {len(y_clean)} samples")
-            
+
+            # Mark model as trained for registration purposes
+            self.is_trained = True
+
             return self
         
         except Exception as e:
