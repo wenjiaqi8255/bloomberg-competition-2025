@@ -35,10 +35,11 @@ Usage:
 import pandas as pd
 from typing import Optional, List, Dict
 from .models.data_types import (
-    FeatureType, FeatureConfig, FeatureMetrics, FeatureResult,
-    IFeatureEngine, PriceData, ForwardReturns, FeatureData, ValidationData,
+    FeatureMetrics, FeatureResult,
+    IFeatureEngine, PriceData, ForwardReturns, ValidationData, FeatureData,
     validate_price_data, align_data, create_default_config
 )
+from ..config.feature import FeatureType, FeatureConfig
 from .feature_engine import FeatureEngine, compute_features, create_feature_engine
 from .utils.technical_features import TechnicalIndicatorCalculator
 from .utils.validation import FeatureValidator, validate_features

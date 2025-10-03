@@ -20,10 +20,10 @@ from pathlib import Path
 
 import pandas as pd
 
-from .models import ModelTrainer, TrainingResult, TrainingConfig
-from .models.base.model_factory import ModelFactory, ModelRegistry
-from .feature_engineering.pipeline import FeatureEngineeringPipeline
-from .feature_engineering.utils.technical_features import FeatureConfig
+from .trainer import ModelTrainer, TrainingResult, TrainingConfig
+from ..base.model_factory import ModelFactory, ModelRegistry
+from ...feature_engineering.pipeline import FeatureEngineeringPipeline
+from ...config.feature import FeatureConfig
 
 logger = logging.getLogger(__name__)
 
@@ -61,20 +61,23 @@ class TrainingPipeline:
         self.registry = ModelRegistry(registry_path or "./models/")
         self.trainer = ModelTrainer(self.config)
 
-        # Data provider is configured separately
+        # Data providers are configured separately
         self.data_provider = None
+        self.factor_data_provider = None
 
-    def configure_data(self, data_provider) -> 'TrainingPipeline':
+    def configure_data(self, data_provider, factor_data_provider=None) -> 'TrainingPipeline':
         """
         Configure data sources for the pipeline.
 
         Args:
-            data_provider: Data provider instance
+            data_provider: Price data provider instance
+            factor_data_provider: Optional factor data provider instance
 
         Returns:
             Self for method chaining
         """
         self.data_provider = data_provider
+        self.factor_data_provider = factor_data_provider
         return self
 
     def run_pipeline(self,
@@ -136,18 +139,20 @@ class TrainingPipeline:
             # Step 5: Register model and artifacts
             logger.info("Step 5: Registering model and artifacts...")
             if hasattr(model, 'status') and model.status == "trained":
-                # Now, save the model AND the fitted feature pipeline together
-                model_id = self.registry.save_model_with_artifacts(
+                # Save the model with tags
+                model_id = self.registry.save_model(
                     model=model,
                     model_name=model_name,
-                    artifacts={'feature_pipeline': self.feature_pipeline},
                     tags={
                         'pipeline_version': '2.0.0', # Updated version
                         'training_date': datetime.now().isoformat(),
-                        'data_period': f"{start_date.date()}_{end_date.date()}",
+                        'data_period': f"{start_date}_{end_date}",
                         'symbols': ','.join(symbols)
                     }
                 )
+
+                # TODO: Save feature pipeline separately if needed
+                # For now, the feature pipeline is saved with the model if the model supports it
             else:
                 logger.warning("Model not trained, skipping registration")
                 model_id = None
@@ -183,12 +188,19 @@ class TrainingPipeline:
             Tuple of (price_data, factor_data, target_data)
         """
         # Load price data
-        price_data = self.data_provider.get_price_data(symbols, start_date, end_date)
+        price_data = self.data_provider.get_historical_data(symbols, start_date, end_date)
 
         # Load factor data if needed
         factor_data = {}
         if self.model_type == "ff5_regression" or self.model_type == "residual_predictor":
-            factor_data = self.data_provider.get_factor_data(start_date, end_date)
+            if self.factor_data_provider is not None:
+                logger.info(f"Loading factor data using {type(self.factor_data_provider).__name__}")
+                factor_data = self.factor_data_provider.get_factor_returns(start_date, end_date)
+            elif hasattr(self.data_provider, 'get_factor_returns'):
+                factor_data = self.data_provider.get_factor_returns(start_date, end_date)
+            else:
+                logger.warning(f"No factor data provider available. Factor data will be empty.")
+                factor_data = {}
 
         # Load/calculate target data (forward returns)
         target_data = {}
@@ -223,7 +235,9 @@ class TrainingPipeline:
             Tuple of (X, y) for training
         """
         logger.info(f"Features shape: {features.shape}")
+        logger.info(f"Features index type: {type(features.index)}")
         logger.info(f"Features index sample: {features.index[:5].tolist()}")
+        logger.info(f"Is MultiIndex: {isinstance(features.index, pd.MultiIndex)}")
         logger.info(f"Available symbols in target data: {list(target_data.keys())}")
 
         # For debugging, check one symbol's target data
@@ -249,17 +263,59 @@ class TrainingPipeline:
                     symbol_indices = features.index.get_level_values(0) == symbol
                     symbol_dates = features.index[symbol_indices].get_level_values(1)
 
-                    # Align target series with these dates
-                    aligned_target = target_series.reindex(symbol_dates)
-                    aligned_target.index = pd.MultiIndex.from_product(
-                        [[symbol], symbol_dates],
-                        names=['symbol', 'date']
+                    # Align target series with these dates for forward return prediction
+                    # target_series contains future returns (shifted -21 days)
+                    # We need to align current features with future targets
+                    # Find target dates that correspond to our feature dates
+                    future_target_dates = symbol_dates + pd.Timedelta(days=21)
+
+                    # Get target values for these future dates
+                    future_targets = target_series.reindex(future_target_dates)
+
+                    # Only keep non-NaN targets (where we have future data)
+                    valid_mask = future_targets.notna()
+                    valid_feature_dates = symbol_dates[valid_mask]
+                    valid_targets = future_targets[valid_mask]
+
+                    # Create MultiIndex for the valid pairs
+                    aligned_target = pd.Series(
+                        valid_targets.values,
+                        index=pd.MultiIndex.from_product(
+                            [[symbol], valid_feature_dates],
+                            names=['symbol', 'date']
+                        )
                     )
                     all_targets.append(aligned_target)
 
             if all_targets:
                 y = pd.concat(all_targets).dropna()
-                X = features.loc[y.index].dropna()
+                logger.info(f"MultiIndex y shape: {y.shape}")
+                logger.info(f"MultiIndex y sample: {y.index[:5].tolist()}")
+                logger.info(f"Features index sample: {features.index[:5].tolist()}")
+
+                # Check if indices match
+                common_indices = features.index.intersection(y.index)
+                logger.info(f"Common indices count: {len(common_indices)}")
+
+                # Debug: Check index details
+                logger.info(f"Features index names: {features.index.names}")
+                logger.info(f"Y index names: {y.index.names}")
+                logger.info(f"Features index levels: {features.index.levels}")
+                logger.info(f"Y index levels: {y.index.levels}")
+
+                # Try direct index comparison
+                logger.info(f"Index objects equal: {features.index.equals(y.index)}")
+
+                # Use common indices approach - simpler and more reliable
+                common_indices = features.index.intersection(y.index)
+                logger.info(f"Common indices count: {len(common_indices)}")
+
+                if len(common_indices) > 0:
+                    X = features.loc[common_indices]
+                    y = y.loc[common_indices]
+                    logger.info(f"After common index alignment - X shape: {X.shape}, y shape: {y.shape}")
+                else:
+                    raise ValueError("No common indices found between features and targets.")
             else:
                 raise ValueError("No matching symbols between features and targets")
         else:
@@ -270,7 +326,25 @@ class TrainingPipeline:
                 all_targets.append(target_series)
 
             y = pd.concat(all_targets).dropna()
-            X = features.loc[y.index].dropna()
+
+            # For forward return prediction: features at time t predict returns at time t+21
+            # Align features(t) with targets(t+21)
+            target_dates = y.index
+            feature_dates = target_dates - pd.Timedelta(days=21)  # Look back 21 days for features
+
+            # Find matching feature dates
+            valid_feature_dates = features.index.intersection(feature_dates)
+            valid_target_dates = valid_feature_dates + pd.Timedelta(days=21)
+
+            # Get the corresponding target dates that exist
+            final_target_dates = y.index.intersection(valid_target_dates)
+            final_feature_dates = final_target_dates - pd.Timedelta(days=21)
+
+            if len(final_feature_dates) > 0:
+                X = features.loc[final_feature_dates]
+                y = y.loc[final_target_dates]
+            else:
+                raise ValueError("No matching indices between features and targets after forward alignment")
 
         # Ensure alignment
         common_index = X.index.intersection(y.index)
@@ -278,6 +352,15 @@ class TrainingPipeline:
         y = y.loc[common_index]
 
         logger.info(f"After alignment - training data: {len(X)} samples, {len(X.columns)} features")
+        logger.info(f"Target data length: {len(y)}")
+        logger.info(f"X and y have same index: {X.index.equals(y.index)}")
+
+        if len(X) != len(y):
+            logger.error(f"Length mismatch: X={len(X)}, y={len(y)}")
+            logger.error(f"X index type: {type(X.index)}")
+            logger.error(f"y index type: {type(y.index)}")
+            logger.error(f"X index sample: {X.index[:5] if len(X) > 0 else 'empty'}")
+            logger.error(f"y index sample: {y.index[:5] if len(y) > 0 else 'empty'}")
 
         if len(X) == 0:
             raise ValueError("No training samples after alignment. Check data structure and index compatibility.")

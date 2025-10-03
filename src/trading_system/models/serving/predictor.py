@@ -27,7 +27,6 @@ from contextlib import contextmanager
 from ..base.model_factory import ModelFactory
 from ..base.base_model import BaseModel
 from ..serving.monitor import ModelMonitor, PredictionRecord, ModelHealthStatus
-from ...feature_engineering.feature_engine import FeatureEngine
 
 logger = logging.getLogger(__name__)
 
@@ -65,9 +64,7 @@ class ModelPredictor:
                  model_instance: Optional[BaseModel] = None,
                  model_registry_path: Optional[str] = None,
                  enable_monitoring: bool = True,
-                 cache_predictions: bool = True,
-                 data_provider=None,
-                 ff5_provider=None):
+                 cache_predictions: bool = True):
         """
         Initialize the model predictor with flexible model loading.
 
@@ -83,8 +80,10 @@ class ModelPredictor:
             model_registry_path: Path to model registry directory (for backward compatibility)
             enable_monitoring: Whether to enable prediction monitoring
             cache_predictions: Whether to cache recent predictions
-            data_provider: Optional data provider for price data
-            ff5_provider: Optional FF5 factor data provider
+
+        Note:
+            ModelPredictor no longer manages data providers. Use PredictionPipeline
+            for end-to-end prediction with data acquisition.
         """
         self.model_registry_path = Path(model_registry_path) if model_registry_path else None
         self.enable_monitoring = enable_monitoring
@@ -102,18 +101,6 @@ class ModelPredictor:
         # Prediction cache (for recent predictions)
         self._prediction_cache: Dict[str, Any] = {}
         self._cache_lock = threading.RLock()
-
-        # Feature engineering
-        self._feature_engine = FeatureEngine()
-
-        # Data providers for self-contained operation
-        self._data_provider = data_provider
-        self._ff5_provider = ff5_provider
-
-        # Initialize default providers if none provided (for production use)
-        if self._data_provider is None or self._ff5_provider is None:
-            logger.info("No data providers provided - initializing default providers for self-contained operation")
-            self._initialize_default_providers()
 
         # Auto-load model if provided during initialization
         if model_instance is not None:
@@ -138,22 +125,6 @@ class ModelPredictor:
         """Get the current model ID."""
         return self._current_model_id
 
-    def _initialize_default_providers(self):
-        """Initialize default data providers for self-contained operation."""
-        try:
-            # Initialize YFinance provider for price data
-            from ...data.yfinance_provider import YFinanceProvider
-            self._data_provider = YFinanceProvider()
-
-            # Initialize FF5 provider for factor data
-            from ...data.ff5_provider import FF5DataProvider
-            self._ff5_provider = FF5DataProvider(data_frequency="monthly")
-
-            logger.info("Default data providers initialized successfully")
-        except ImportError as e:
-            logger.warning(f"Failed to initialize default providers: {e}")
-            logger.warning("ModelPredictor will require external market_data for predictions")
-
     def _initialize_monitoring(self):
         """Initialize model monitoring if enabled."""
         if self._enable_monitoring and self._current_model_id:
@@ -166,20 +137,19 @@ class ModelPredictor:
                 self._monitor = None
 
     def predict(self,
-                market_data: Optional[pd.DataFrame] = None,
+                features: pd.DataFrame,
                 symbol: str = None,
-                prediction_date: Optional[datetime] = None,
-                features: Optional[pd.DataFrame] = None) -> Dict[str, float]:
+                prediction_date: Optional[datetime] = None) -> Dict[str, float]:
         """
-        Make prediction for a single symbol.
+        Make prediction for a single symbol using pre-computed features.
 
-        Enhanced to be self-contained - can fetch data automatically if market_data not provided.
+        This method is now simplified to only handle inference. Data acquisition
+        and feature engineering should be done by PredictionPipeline.
 
         Args:
-            market_data: Optional market data DataFrame (if None, will fetch automatically)
-            symbol: Symbol to predict for (required if market_data is None)
-            prediction_date: Date for prediction (if None, uses current date)
-            features: Optional pre-computed features
+            features: Pre-computed features DataFrame
+            symbol: Symbol being predicted (for metadata only)
+            prediction_date: Date for prediction (for metadata only)
 
         Returns:
             Dictionary with prediction results
@@ -190,16 +160,19 @@ class ModelPredictor:
         if self._current_model is None:
             raise PredictionError("No model loaded")
 
+        if features is None or features.empty:
+            raise PredictionError("Features must be provided")
+
         # Use current date if prediction_date not provided
         if prediction_date is None:
             prediction_date = datetime.now()
 
         try:
-            # Prepare features if not provided
-            if features is None:
-                features = self._prepare_features_with_data_acquisition(
-                    market_data, symbol, prediction_date
-                )
+            # Debug: Log model type and features before prediction
+            logger.debug(f"Current model type: {getattr(self._current_model, 'model_type', 'No model_type attribute')}")
+            logger.debug(f"Features shape={features.shape}, columns={features.columns.tolist()}")
+            if len(features) > 0:
+                logger.debug(f"Features sample: {features.iloc[-1].to_dict()}")
 
             # Make prediction
             prediction = self._current_model.predict(features)
@@ -348,15 +321,15 @@ class ModelPredictor:
             return self._current_model_id
 
     def predict_batch(self,
-                     market_data: pd.DataFrame,
-                     symbols: List[str],
+                     features_dict: Dict[str, pd.DataFrame],
                      prediction_date: datetime) -> Dict[str, Dict[str, float]]:
         """
-        Make predictions for multiple symbols efficiently.
+        Make predictions for multiple symbols efficiently using pre-computed features.
+
+        Note: Use PredictionPipeline for end-to-end batch prediction with data acquisition.
 
         Args:
-            market_data: Market data DataFrame
-            symbols: List of symbols to predict for
+            features_dict: Dictionary mapping symbols to their pre-computed features
             prediction_date: Date for predictions
 
         Returns:
@@ -368,159 +341,32 @@ class ModelPredictor:
             raise PredictionError("No model loaded")
 
         try:
-            # Prepare features for all symbols
-            all_features = {}
-            for symbol in symbols:
+            if not features_dict:
+                raise PredictionError("No features provided")
+
+            # Make predictions for each symbol
+            for symbol, features in features_dict.items():
                 try:
-                    features = self._prepare_features(market_data, symbol, prediction_date)
-                    all_features[symbol] = features
-                except Exception as e:
-                    logger.warning(f"Failed to prepare features for {symbol}: {e}")
-                    continue
-
-            if not all_features:
-                raise PredictionError("No valid features prepared for any symbols")
-
-            # Batch prediction
-            # Combine all features into a single DataFrame
-            combined_features = pd.concat(
-                [features.iloc[[-1]] for features in all_features.values()],
-                keys=all_features.keys(),
-                names=['symbol', 'date']
-            )
-
-            # Make batch prediction
-            batch_predictions = self._current_model.predict(combined_features)
-
-            # Process results
-            for i, (symbol, features) in enumerate(all_features.items()):
-                if i < len(batch_predictions):
-                    prediction_value = float(batch_predictions[i])
-
-                    result = {
-                        'symbol': symbol,
-                        'prediction': prediction_value,
-                        'prediction_date': prediction_date,
-                        'model_id': self._current_model_id,
-                        'timestamp': datetime.now()
-                    }
-
+                    result = self.predict(
+                        features=features,
+                        symbol=symbol,
+                        prediction_date=prediction_date
+                    )
                     results[symbol] = result
-
-                    # Log prediction for monitoring
-                    if self._monitor:
-                        prediction_record = PredictionRecord(
-                            timestamp=datetime.now(),
-                            model_id=self._current_model_id,
-                            prediction_id=str(uuid.uuid4()),
-                            features=features.iloc[-1].to_dict(),
-                            prediction=prediction_value,
-                            metadata={
-                                'symbol': symbol,
-                                'prediction_date': prediction_date.isoformat(),
-                                'batch_prediction': True
-                            }
-                        )
-                        self._monitor.log_prediction(
-                    features=prediction_record.features,
-                    prediction=prediction_record.prediction,
-                    confidence=prediction_record.confidence,
-                    metadata=prediction_record.metadata
-                )
 
                     # Cache prediction if enabled
                     if self.cache_predictions:
                         self._cache_prediction(symbol, prediction_date, result)
+
+                except Exception as e:
+                    logger.warning(f"Failed to predict for {symbol}: {e}")
+                    continue
 
             return results
 
         except Exception as e:
             logger.error(f"Batch prediction failed: {e}")
             raise PredictionError(f"Batch prediction failed: {e}")
-
-    def _prepare_features(self,
-                         market_data: pd.DataFrame,
-                         symbol: str,
-                         prediction_date: datetime) -> pd.DataFrame:
-        """
-        Prepare features for prediction.
-
-        Args:
-            market_data: Market data DataFrame
-            symbol: Symbol to prepare features for
-            prediction_date: Date for prediction
-
-        Returns:
-            Features DataFrame
-        """
-        try:
-            # Check if model needs factor data (FF5)
-            if hasattr(self._current_model, 'model_type'):
-                if self._current_model.model_type == "ff5_regression":
-                    # For FF5 model, use factor columns directly
-                    factor_columns = ['MKT', 'SMB', 'HML', 'RMW', 'CMA']
-                    if all(col in market_data.columns for col in factor_columns):
-                        # Return the most recent row of factor data
-                        return market_data[factor_columns].iloc[[-1]]
-
-            # For technical feature models, use feature engineering
-            # Filter data for the symbol
-            if 'symbol' in market_data.columns:
-                symbol_data = market_data[market_data['symbol'] == symbol]
-            elif symbol in market_data.columns:
-                # Symbol-based column (return data)
-                symbol_data = market_data[[symbol]].copy()
-                symbol_data.rename(columns={symbol: 'close'}, inplace=True)
-                # Add missing OHLCV columns if needed
-                for col in ['high', 'low', 'open', 'volume']:
-                    if col not in symbol_data.columns:
-                        symbol_data[col] = symbol_data['close']  # Simple fallback
-            else:
-                # Assume this is already price data for the symbol
-                symbol_data = market_data.copy()
-
-            # Sort by date
-            if 'date' in symbol_data.columns:
-                symbol_data = symbol_data.sort_values('date')
-
-            # Standardize column names to match feature engineering expectations
-            column_mapping = {
-                'open': 'Open',
-                'high': 'High',
-                'low': 'Low',
-                'close': 'Close',
-                'volume': 'Volume'
-            }
-            symbol_data = symbol_data.rename(columns=column_mapping)
-
-            # Ensure we have all required columns
-            required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
-            for col in required_columns:
-                if col not in symbol_data.columns:
-                    # Create missing columns from Close price as fallback
-                    if col == 'Volume':
-                        symbol_data[col] = 1_000_000  # Default volume
-                    else:
-                        symbol_data[col] = symbol_data['Close']
-
-            # Use feature engine to compute features
-            from ...feature_engineering.models.data_types import PriceData
-            # PriceData is a type alias: Dict[str, pd.DataFrame] (Symbol -> OHLCV DataFrame)
-            price_data = {symbol: symbol_data}
-
-            feature_result = self._feature_engine.compute_features(price_data)
-            features = feature_result.features
-
-            # Ensure we have features for the prediction date
-            if len(features) == 0:
-                raise ValueError(f"No features computed for {symbol}")
-
-            # Return the most recent features
-            return features.iloc[[-1]]
-
-        except Exception as e:
-            logger.error(f"Failed to prepare features for {symbol}: {e}")
-            raise ValueError(f"Failed to prepare features for {symbol}: {e}")
 
     def _cache_prediction(self,
                          symbol: str,
@@ -598,65 +444,6 @@ class ModelPredictor:
             List of available model type names
         """
         return list(ModelFactory._registry.keys())
-
-
-    def _prepare_features_with_data_acquisition(self,
-                                                market_data: Optional[pd.DataFrame],
-                                                symbol: str,
-                                                prediction_date: datetime) -> pd.DataFrame:
-        """
-        Prepare features with automatic data acquisition if needed.
-
-        This method makes the ModelPredictor self-contained by fetching data
-        automatically when market_data is not provided.
-
-        Args:
-            market_data: Optional market data DataFrame (if None, will fetch automatically)
-            symbol: Symbol to prepare features for
-            prediction_date: Date for prediction
-
-        Returns:
-            Features DataFrame ready for prediction
-        """
-        # If market_data is provided, use existing feature preparation
-        if market_data is not None:
-            return self._prepare_features(market_data, symbol, prediction_date)
-
-        # Otherwise, fetch data automatically
-        if symbol is None:
-            raise ValueError("Symbol is required when market_data is not provided")
-
-        try:
-            # Fetch price data
-            if self._data_provider is None:
-                raise PredictionError("No data provider available and no market_data provided")
-
-            # Calculate date range for data fetch (need lookback data for features)
-            end_date = prediction_date
-            start_date = end_date - timedelta(days=365)  # 1 year lookback for technical indicators
-
-            # Fetch price data for the symbol
-            price_data_dict = self._data_provider.get_price_data(
-                symbols=[symbol],
-                start_date=start_date,
-                end_date=end_date
-            )
-
-            if symbol not in price_data_dict or price_data_dict[symbol].empty:
-                raise PredictionError(f"No price data available for {symbol}")
-
-            price_data = price_data_dict[symbol]
-
-            # Prepare market_data
-            market_data_auto = price_data.copy()
-            market_data_auto['symbol'] = symbol
-
-            # Use the existing feature preparation logic
-            return self._prepare_features(market_data_auto, symbol, prediction_date)
-
-        except Exception as e:
-            logger.error(f"Failed to prepare features with data acquisition for {symbol}: {e}")
-            raise PredictionError(f"Failed to prepare features: {e}")
 
     def get_model_info(self, model_type: str) -> Optional[Dict[str, Any]]:
         """

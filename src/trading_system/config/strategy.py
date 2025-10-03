@@ -18,6 +18,7 @@ class StrategyType(Enum):
     """Supported strategy types."""
     DUAL_MOMENTUM = "dual_momentum"
     FAMA_FRENCH = "fama_french"
+    FAMA_FRENCH_5 = "fama_french_5"
     ML = "ml"
     CORE_SATELLITE = "core_satellite"
     SATELLITE = "satellite"

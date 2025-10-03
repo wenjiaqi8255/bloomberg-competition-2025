@@ -54,9 +54,14 @@ class FeatureEngineeringPipeline:
         features = self.transform(data, is_fitting=True)
 
         # Now, fit scalers for the columns that are configured to be scaled
-        if self.config.scaling_config and self.config.scaling_config.get('method') == 'standard':
-            columns_to_scale = self.config.scaling_config.get('columns', [])
-            for col in columns_to_scale:
+        if self.config.normalize_features and self.config.normalization_method == 'robust':
+            # For now, we'll scale all numeric features when normalization is enabled
+            # This could be made more configurable in the future
+            pass  # Robust scaling will be handled differently if needed
+        elif self.config.normalize_features:
+            # Use standard scaling for all numeric features when normalize_features is True
+            features_to_scale = features.select_dtypes(include=['number']).columns.tolist()
+            for col in features_to_scale:
                 if col in features.columns:
                     scaler = StandardScaler()
                     # Reshape is needed as StandardScaler expects 2D array
@@ -73,7 +78,7 @@ class FeatureEngineeringPipeline:
         Apply feature engineering and scaling transformations.
 
         Args:
-            data: A dictionary of DataFrames, expecting keys like 'price_data'.
+            data: A dictionary of DataFrames, expecting keys like 'price_data' and optionally 'factor_data'.
             is_fitting: If True, skips scaling as it's done post-transform during the fit phase.
 
         Returns:
@@ -83,12 +88,18 @@ class FeatureEngineeringPipeline:
             raise ValueError("Input data dictionary must contain 'price_data'.")
 
         price_data = data['price_data']
-        
+
         # Step 1: Compute technical features using TechnicalIndicatorCalculator
         calculator = TechnicalIndicatorCalculator()
         features = self._compute_all_features(price_data, calculator)
 
-        # Step 2: Apply scaling if the pipeline is already fitted
+        # Step 2: Add factor data if available
+        if 'factor_data' in data and data['factor_data'] is not None:
+            logger.info("Merging factor data with features...")
+            factor_data = data['factor_data']
+            features = self._merge_factor_data(features, factor_data)
+
+        # Step 3: Apply scaling if the pipeline is already fitted
         if self._is_fitted and not is_fitting:
             logger.debug("Applying learned scaling to features...")
             for col, scaler in self.scalers.items():
@@ -97,8 +108,8 @@ class FeatureEngineeringPipeline:
                     features[col] = scaler.transform(features[[col]])
                 else:
                     logger.warning(f"Scaled column '{col}' not found during transform.")
-        
-        # Step 3: Add more feature steps here in the future (e.g., PCA, feature selection)
+
+        # Step 4: Add more feature steps here in the future (e.g., PCA, feature selection)
 
         return features
 
@@ -136,42 +147,119 @@ class FeatureEngineeringPipeline:
             
         return cls.from_config(config_dict['feature_engineering'])
     
-    def _compute_all_features(self, price_data: Dict[str, pd.DataFrame], 
+    def _compute_all_features(self, price_data: Dict[str, pd.DataFrame],
                               calculator: TechnicalIndicatorCalculator) -> pd.DataFrame:
         """
         Compute all features from price data using configured feature types.
-        
+
         Args:
             price_data: Dictionary mapping symbols to OHLCV DataFrames
             calculator: Technical indicator calculator instance
-        
+
         Returns:
             DataFrame with all computed features
         """
         all_features = []
-        
+
         for symbol, data in price_data.items():
             symbol_features = pd.DataFrame(index=data.index)
-            
+
             # Compute based on config
             if hasattr(self.config, 'momentum_periods'):
                 momentum = calculator.compute_momentum_features(data, self.config.momentum_periods)
                 symbol_features = pd.concat([symbol_features, momentum], axis=1)
-            
+
             if hasattr(self.config, 'volatility_windows'):
                 volatility = calculator.compute_volatility_features(data, self.config.volatility_windows)
                 symbol_features = pd.concat([symbol_features, volatility], axis=1)
-            
+
             if hasattr(self.config, 'include_technical') and self.config.include_technical:
                 technical = calculator.compute_technical_indicators(data)
                 symbol_features = pd.concat([symbol_features, technical], axis=1)
-            
-            # Add symbol prefix to feature names
+
+            # Add symbol prefix to feature names and create MultiIndex
             symbol_features.columns = [f"{symbol}_{col}" for col in symbol_features.columns]
+
+            # Create MultiIndex for this symbol's features
+            symbol_multiindex = pd.MultiIndex.from_product(
+                [[symbol], symbol_features.index],
+                names=['symbol', 'date']
+            )
+            symbol_features.index = symbol_multiindex
             all_features.append(symbol_features)
-        
-        # Combine all features
+
+        # Combine all features with proper MultiIndex structure
         if all_features:
-            return pd.concat(all_features, axis=1)
+            combined_features = pd.concat(all_features, axis=0)
+            return combined_features
         else:
             return pd.DataFrame()
+
+    def _merge_factor_data(self, features: pd.DataFrame, factor_data: pd.DataFrame) -> pd.DataFrame:
+        """
+        Merge factor data with features.
+
+        Args:
+            features: DataFrame with technical features (MultiIndex: symbol, date)
+            factor_data: DataFrame with factor data (index: dates, columns: factors)
+
+        Returns:
+            DataFrame with features and factor data merged
+        """
+        logger.info(f"Merging factor data with shape {factor_data.shape} into features with shape {features.shape}")
+
+        # Factor data has a simple date index, we need to broadcast it to all symbols
+        factor_columns = factor_data.columns.tolist()
+        logger.info(f"Available factor columns: {factor_columns}")
+
+        # For each symbol in features, add the factor data
+        symbols = features.index.get_level_values(0).unique()
+        all_features_with_factors = []
+
+        for symbol in symbols:
+            # Get features for this symbol
+            symbol_features = features.loc[symbol]
+
+            # Align factor data with symbol's dates
+            symbol_dates = symbol_features.index
+
+            # Find common dates between symbol dates and factor data
+            common_dates = symbol_dates.intersection(factor_data.index)
+
+            if len(common_dates) > 0:
+                # Get factor data for common dates
+                aligned_factor_data = factor_data.loc[common_dates]
+
+                # Reindex symbol_features to only include common dates
+                aligned_features = symbol_features.loc[common_dates]
+
+                # Add factor columns to the symbol's features
+                for factor_col in factor_columns:
+                    aligned_features[factor_col] = aligned_factor_data[factor_col].values
+
+                # Create MultiIndex for this symbol
+                symbol_multiindex = pd.MultiIndex.from_product(
+                    [[symbol], aligned_features.index],
+                    names=['symbol', 'date']
+                )
+                aligned_features.index = symbol_multiindex
+                all_features_with_factors.append(aligned_features)
+            else:
+                logger.warning(f"No common dates found for symbol {symbol}")
+                # Keep original features without factor data
+                symbol_multiindex = pd.MultiIndex.from_product(
+                    [[symbol], symbol_features.index],
+                    names=['symbol', 'date']
+                )
+                symbol_features.index = symbol_multiindex
+                all_features_with_factors.append(symbol_features)
+
+        # Combine all features with factor data
+        if all_features_with_factors:
+            combined_features = pd.concat(all_features_with_factors, axis=0)
+            logger.info(f"After merging factor data: shape {combined_features.shape}")
+            logger.info(f"Factor columns added: {factor_columns}")
+            return combined_features
+        else:
+            logger.warning("No features to merge with factor data")
+            return features

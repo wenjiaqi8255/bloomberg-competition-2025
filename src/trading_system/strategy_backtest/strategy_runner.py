@@ -62,7 +62,7 @@ from ..data.yfinance_provider import YFinanceProvider
 # New backtesting architecture
 from ..backtesting import BacktestEngine
 from ..config.backtest import BacktestConfig
-from ..strategies import StrategyFactory
+from ..strategies.factory import StrategyFactory
 from ..utils.experiment_tracking import (
     ExperimentTrackerInterface,
     ExperimentConfig,
@@ -76,13 +76,17 @@ logger = logging.getLogger(__name__)
 
 
 def create_strategy_runner(config_path: str = None,
-                          experiment_tracker: ExperimentTrackerInterface = None,
-                          use_wandb: bool = True) -> 'StrategyRunner':
+                           config_obj: Dict[str, Any] = None,
+                           providers: Dict[str, Any] = None,
+                           experiment_tracker: ExperimentTrackerInterface = None,
+                           use_wandb: bool = True) -> 'StrategyRunner':
     """
     Factory function to create StrategyRunner with desired experiment tracking.
 
     Args:
         config_path: Path to configuration file
+        config_obj: A dictionary of configuration objects (e.g., from orchestrator)
+        providers: A dictionary of pre-initialized data providers.
         experiment_tracker: Custom experiment tracker instance
         use_wandb: Whether to use WandB tracker (ignored if experiment_tracker is provided)
 
@@ -90,7 +94,12 @@ def create_strategy_runner(config_path: str = None,
         StrategyRunner instance with configured experiment tracking
     """
     if experiment_tracker is not None:
-        return StrategyRunner(config_path=config_path, experiment_tracker=experiment_tracker)
+        return StrategyRunner(
+            config_path=config_path,
+            config_obj=config_obj,
+            providers=providers,
+            experiment_tracker=experiment_tracker
+        )
 
     if use_wandb:
         try:
@@ -98,13 +107,23 @@ def create_strategy_runner(config_path: str = None,
                 project_name='bloomberg-competition',
                 fail_silently=True
             )
-            return StrategyRunner(config_path=config_path, experiment_tracker=wandb_tracker)
+            return StrategyRunner(
+                config_path=config_path,
+                config_obj=config_obj,
+                providers=providers,
+                experiment_tracker=wandb_tracker
+            )
         except Exception:
             logger.warning("Failed to create WandB tracker, using null tracker")
 
     # Default to null tracker
     null_tracker = NullExperimentTracker()
-    return StrategyRunner(config_path=config_path, experiment_tracker=null_tracker)
+    return StrategyRunner(
+        config_path=config_path,
+        config_obj=config_obj,
+        providers=providers,
+        experiment_tracker=null_tracker
+    )
 
 
 class StrategyRunner:
@@ -122,23 +141,34 @@ class StrategyRunner:
        backtesting, and logging of results.
     """
 
-    def __init__(self, config_path: str = None, experiment_tracker: ExperimentTrackerInterface = None):
+    def __init__(self,
+                 config_path: str = None,
+                 config_obj: Dict[str, Any] = None,
+                 providers: Dict[str, Any] = None,
+                 experiment_tracker: ExperimentTrackerInterface = None):
         """
         Initialize the StrategyRunner.
 
         Args:
             config_path: Path to the main YAML configuration file.
+            config_obj: A dictionary of configuration objects, used in priority over config_path.
+            providers: A dictionary of pre-initialized data providers.
             experiment_tracker: An instance of an experiment tracker (e.g., WandB).
-                                If not provided, one will be created.
+                               If not provided, one will be created.
         """
-        if config_path:
+        if config_obj:
+            logger.info("Initializing StrategyRunner from configuration object.")
+            self.configs = config_obj
+        elif config_path:
+            logger.info(f"Initializing StrategyRunner from configuration file: {config_path}")
             self.configs = ConfigFactory.load_all_configs(config_path)
         else:
-            # Use default configs
+            logger.warning("No configuration provided. Using default empty configs.")
             self.configs = {}
 
         # Initialize components
-        self.data_provider = None
+        self.data_provider = providers.get('data_provider') if providers else None
+        self.providers = providers or {}
         self.strategy = None
         self.backtest_engine = None
         self.experiment_tracker = experiment_tracker
@@ -148,12 +178,13 @@ class StrategyRunner:
         self.results = {}
         self.is_initialized = False
 
-    def _convert_signals_to_unified_format(self, strategy_signals: pd.DataFrame) -> Dict[datetime, List[TradingSignal]]:
+    def _convert_signals_to_unified_format(self, strategy_signals: pd.DataFrame, price_data: Dict[str, pd.DataFrame] = None) -> Dict[datetime, List[TradingSignal]]:
         """
         Convert DataFrame strategy signals to unified format Dict[datetime, List[TradingSignal]].
 
         Args:
             strategy_signals: DataFrame with strategy signals (old format)
+            price_data: Dictionary of price data for getting signal prices
 
         Returns:
             Dictionary mapping dates to lists of TradingSignal objects (new format)
@@ -178,12 +209,31 @@ class StrategyRunner:
                 # Determine signal type
                 signal_type = SignalType.BUY if signal_value > 0 else SignalType.SELL
 
+                # Get price for the signal - use closing price on signal date
+                signal_price = 0.0
+                if price_data and symbol in price_data and date in price_data[symbol].index:
+                    signal_price = float(price_data[symbol].loc[date, 'Close'])
+                elif price_data and symbol in price_data:
+                    # If exact date not found, use the closest previous date
+                    symbol_data = price_data[symbol]
+                    available_dates = symbol_data.index[symbol_data.index <= date]
+                    if len(available_dates) > 0:
+                        closest_date = available_dates.max()
+                        signal_price = float(symbol_data.loc[closest_date, 'Close'])
+                    else:
+                        logger.warning(f"No price data available for {symbol} on or before {date}, using default price 1.0")
+                        signal_price = 1.0
+                else:
+                    logger.warning(f"No price data available for {symbol}, using default price 1.0")
+                    signal_price = 1.0
+
                 # Create TradingSignal object
                 trading_signal = TradingSignal(
                     symbol=symbol,
                     signal_type=signal_type,
                     strength=abs(float(signal_value)),
                     timestamp=date,
+                    price=signal_price,
                     confidence=abs(float(signal_value))  # Use strength as confidence
                 )
 
@@ -199,40 +249,27 @@ class StrategyRunner:
         try:
             logger.info("Initializing strategy runner components...")
 
-            # Initialize data provider with defaults
-            self.data_provider = YFinanceProvider(
-                max_retries=3,
-                retry_delay=1.0,
-                request_timeout=30
-            )
+            # Initialize data provider if not already provided
+            if self.data_provider is None:
+                logger.info("Data provider not pre-initialized. Creating default YFinanceProvider.")
+                self.data_provider = YFinanceProvider(
+                    max_retries=3,
+                    retry_delay=1.0,
+                    request_timeout=30
+                )
+                self.providers['data_provider'] = self.data_provider
 
             # Initialize strategy with config objects
-            strategy_config = self.configs.get('strategy')
-            backtest_config = self.configs.get('backtest')
-
-            if not strategy_config:
-                raise ValueError("Strategy configuration not found")
-
-            # Use the StrategyFactory to create the strategy instance
-            # This replaces the old if/elif block and makes the runner extensible
-            strategy_type = strategy_config.strategy_type.value
-            strategy_params = {
-                "name": strategy_config.name,
-                **strategy_config.parameters
-            }
+            strategy_config_dict = self.configs['strategy'].parameters
+            strategy_config_dict['type'] = self.configs['strategy'].strategy_type.value
+            strategy_config_dict['name'] = self.configs['strategy'].name
             
-            # For MLStrategy, we need to inject dependencies
-            if strategy_type == 'ml':
-                from ..models.model_persistence import ModelRegistry
-                strategy_params['model_registry'] = ModelRegistry()
-                # model_id is expected to be in parameters from the config
-            
-            self.strategy = StrategyFactory.create(
-                strategy_type=strategy_type,
-                **strategy_params
+            self.strategy = StrategyFactory.create_from_config(
+                strategy_config_dict, providers=self.providers
             )
 
             # Initialize backtest engine using config object
+            backtest_config = self.configs.get('backtest')
             if not backtest_config:
                 raise ValueError("Backtest configuration not found")
 
@@ -261,7 +298,7 @@ class StrategyRunner:
             logger.info("Strategy runner initialized successfully")
 
         except Exception as e:
-            logger.error(f"Failed to initialize strategy runner: {e}")
+            logger.error(f"Failed to initialize strategy runner: {e}", exc_info=True)
             raise
 
     def run_strategy(self, experiment_name: str = None) -> Dict[str, Any]:
@@ -338,12 +375,12 @@ class StrategyRunner:
             # Step 3: Generate strategy signals
             strategy_signals = self.strategy.generate_signals(
                 price_data=price_data,
-                start_date=datetime.strptime(backtest_config['start_date'], '%Y-%m-%d'),
-                end_date=datetime.strptime(backtest_config['end_date'], '%Y-%m-%d')
+                start_date=backtest_config.start_date,
+                end_date=backtest_config.end_date
             )
 
             # Step 4: Convert signals to unified format and run backtest
-            unified_strategy_signals = self._convert_signals_to_unified_format(strategy_signals)
+            unified_strategy_signals = self._convert_signals_to_unified_format(strategy_signals, price_data)
 
             backtest_results = self.backtest_engine.run_backtest(
                 strategy_signals=unified_strategy_signals,
@@ -381,7 +418,7 @@ class StrategyRunner:
             # Compile final results (adapted for new architecture)
             self.results = {
                 'experiment_name': experiment_name,
-                'config': self.config,
+                'config': self.config_obj,
                 'data_statistics': data_stats,
                 'strategy_signals': strategy_signals,
                 'backtest_results': backtest_results,
@@ -601,10 +638,10 @@ class StrategyRunner:
         # Calculate P&L for each trade
         trades_with_pnl = []
         for trade in trades:
-            trade_copy = trade.copy()
+            trade_dict = trade.__dict__.copy()
             # Simple P&L calculation (would need more sophisticated calculation in practice)
-            trade_copy['pnl'] = 0  # Placeholder
-            trades_with_pnl.append(trade_copy)
+            trade_dict['pnl'] = 0  # Placeholder
+            trades_with_pnl.append(trade_dict)
 
         return pd.DataFrame(trades_with_pnl)
 

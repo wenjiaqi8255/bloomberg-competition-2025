@@ -14,7 +14,7 @@ Key Features:
 """
 
 from .trainer import ModelTrainer, TrainingResult, TrainingConfig
-from .pipeline import TrainingPipeline
+from .training_pipeline import TrainingPipeline
 from .experiment_manager import TrainingExperimentManager, ExperimentMetadata
 
 __all__ = [

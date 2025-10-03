@@ -13,10 +13,11 @@ import pandas as pd
 from datetime import datetime
 
 from .models.data_types import (
-    IFeatureEngine, FeatureConfig, FeatureResult, FeatureMetrics,
+    IFeatureEngine, FeatureResult, FeatureMetrics,
     PriceData, ForwardReturns, FeatureData, ValidationData,
-    FeatureType, validate_price_data, align_data, create_default_config
+    validate_price_data, align_data, create_default_config
 )
+from ..config.feature import FeatureType, FeatureConfig
 from .utils.technical_features import TechnicalIndicatorCalculator
 from .utils.validation import FeatureValidator
 

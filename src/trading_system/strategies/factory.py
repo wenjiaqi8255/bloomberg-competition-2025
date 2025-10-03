@@ -59,7 +59,7 @@ class StrategyFactory:
     }
     
     @classmethod
-    def create_from_config(cls, config: Dict[str, Any]) -> BaseStrategy:
+    def create_from_config(cls, config: Dict[str, Any], **kwargs) -> BaseStrategy:
         """
         Create a strategy from configuration with automatic component creation.
         
@@ -105,11 +105,21 @@ class StrategyFactory:
         
         logger.info(f"Creating {strategy_type} strategy '{name}' with model '{model_id}'")
         
-        # Step 1: Create FeatureEngineeringPipeline
-        feature_pipeline = cls._create_feature_pipeline(strategy_type, config)
+        # Step 1: Get or Create FeatureEngineeringPipeline
+        # Check if a fitted pipeline is provided (e.g., from training)
+        providers = kwargs.get('providers', {})
+        feature_pipeline = providers.get('feature_pipeline')
         
-        # Step 2: Create ModelPredictor
-        model_predictor = cls._create_model_predictor(model_id, config)
+        if feature_pipeline is not None:
+            logger.info("Using provided fitted FeatureEngineeringPipeline from training")
+            if not feature_pipeline._is_fitted:
+                logger.warning("Provided feature_pipeline is not fitted!")
+        else:
+            logger.info("Creating new FeatureEngineeringPipeline from config")
+            feature_pipeline = cls._create_feature_pipeline(strategy_type, config)
+        
+        # Step 2: Create ModelPredictor, passing along any extra context like providers
+        model_predictor = cls._create_model_predictor(model_id, config, **kwargs)
         
         # Step 3: Create PositionSizer
         position_sizer = cls._create_position_sizer(config)
@@ -123,7 +133,12 @@ class StrategyFactory:
         # Extract strategy-specific parameters
         strategy_params = cls._extract_strategy_params(strategy_type, config)
         
-        # Create strategy
+        # Extract data providers from kwargs to pass to strategy
+        # (providers dict was already extracted in Step 1)
+        data_provider = providers.get('data_provider')
+        factor_data_provider = providers.get('factor_data_provider')
+        
+        # Create strategy with providers
         strategy = strategy_class(
             name=name,
             feature_pipeline=feature_pipeline,
@@ -131,10 +146,12 @@ class StrategyFactory:
             position_sizer=position_sizer,
             stock_classifier=stock_classifier,
             box_allocator=box_allocator,
+            data_provider=data_provider,
+            factor_data_provider=factor_data_provider,
             **strategy_params
         )
         
-        logger.info(f"✓ Created {strategy_type} strategy '{name}'")
+        logger.info(f"✓ Created {strategy_type} strategy '{name}' with data providers")
         return strategy
     
     @classmethod
@@ -225,7 +242,8 @@ class StrategyFactory:
     @classmethod
     def _create_model_predictor(cls,
                                 model_id: str,
-                                config: Dict[str, Any]) -> ModelPredictor:
+                                config: Dict[str, Any],
+                                **kwargs) -> ModelPredictor:
         """
         Create model predictor with specified model.
         
@@ -251,6 +269,12 @@ class StrategyFactory:
         model_path = config.get('model_path')
         model_config = config.get('model_config', {})
         
+        # ModelPredictor no longer takes data providers
+        # Data providers are managed at the Strategy level
+        predictor_kwargs = {
+            "enable_monitoring": config.get('enable_monitoring', True)
+        }
+
         logger.info(f"Creating ModelPredictor for model '{model_id}'")
         
         # Mode 1: Load from registry path (pre-trained model)
@@ -261,7 +285,7 @@ class StrategyFactory:
                 predictor = ModelPredictor(
                     model_path=str(full_model_path),
                     model_registry_path=model_registry_path,
-                    enable_monitoring=config.get('enable_monitoring', True)
+                    **predictor_kwargs
                 )
                 logger.info(f"✓ Model '{model_id}' loaded from registry")
                 return predictor
@@ -276,7 +300,7 @@ class StrategyFactory:
                 predictor = ModelPredictor(
                     model_path=model_path,
                     model_registry_path=model_registry_path,
-                    enable_monitoring=config.get('enable_monitoring', True)
+                    **predictor_kwargs
                 )
                 logger.info(f"✓ Model '{model_id}' loaded from path")
                 return predictor
@@ -286,71 +310,64 @@ class StrategyFactory:
         # Mode 3: Create new model instance from factory (for rule-based or fresh models)
         logger.info(f"Mode 3: Creating new model instance from factory")
         
-        # Check if model_id is a registered model type
-        if ModelFactory.is_registered(model_id):
-            # Create model instance with provided config
-            logger.info(f"Creating model '{model_id}' with config: {model_config}")
-            model = ModelFactory.create(model_id, config=model_config)
+        # Use the inferred type to handle versioned model_ids like 'ff5_regression_v1.2'
+        model_type_to_create = inferred_model_type
+        
+        if ModelFactory.is_registered(model_type_to_create):
+            logger.info(f"Creating model '{model_type_to_create}' with config: {model_config}")
+            model = ModelFactory.create(model_type_to_create, config=model_config)
             
-            # For rule-based models (like momentum_ranking), we can initialize without training data
-            # The model will be "trained" (status set to TRAINED) when fit() is called
-            # even if it doesn't actually learn from data
-            logger.info(f"Model '{model_id}' created (status: {model.status})")
+            logger.info(f"Model '{model_type_to_create}' created (status: {model.status})")
             
             # Create predictor with direct model injection
             predictor = ModelPredictor(
                 model_instance=model,
                 model_registry_path=model_registry_path,
-                enable_monitoring=config.get('enable_monitoring', True)
+                **predictor_kwargs
             )
             
-            logger.info(f"✓ Model '{model_id}' created and injected into predictor")
+            logger.info(f"✓ Model '{model_type_to_create}' created and injected into predictor")
             return predictor
         else:
-            # Try to infer model type from model_id
-            # e.g., 'ff5_regression_v1' -> 'ff5_regression'
-            inferred_type = cls._infer_model_type(model_id)
-            
-            if ModelFactory.is_registered(inferred_type):
-                logger.info(f"Inferred model type '{inferred_type}' from '{model_id}'")
-                model = ModelFactory.create(inferred_type, config=model_config)
-                
-                predictor = ModelPredictor(
-                    model_instance=model,
-                    model_registry_path=model_registry_path,
-                    enable_monitoring=config.get('enable_monitoring', True)
-                )
-                
-                logger.info(f"✓ Model '{inferred_type}' created and injected into predictor")
-                return predictor
-            else:
-                raise ValueError(
-                    f"Cannot load or create model '{model_id}'. "
-                    f"Not found in registry, path, or factory. "
-                    f"Available model types: {ModelFactory.list_models().keys()}"
-                )
+            raise ValueError(
+                f"Cannot load or create model for id '{model_id}' (inferred type: '{model_type_to_create}'). "
+                f"Not found in registry, path, or factory. "
+                f"Available model types: {list(ModelFactory.list_models().keys())}"
+            )
     
     @classmethod
     def _infer_model_type(cls, model_id: str) -> str:
         """
         Infer model type from model ID.
-        
+
         Handles cases like:
         - 'ff5_regression_v1' -> 'ff5_regression'
+        - 'ff5_regression_20251003_001418_v1.0.0' -> 'ff5_regression'
         - 'momentum_ranking' -> 'momentum_ranking'
-        
+
         Args:
             model_id: Model identifier
-        
+
         Returns:
             Inferred model type
         """
         # Remove version suffix if present
         if '_v' in model_id:
-            return model_id.split('_v')[0]
-        
-        # Return as-is
-        return model_id
+            base_part = model_id.split('_v')[0]
+        else:
+            base_part = model_id
+
+        # Handle case where model_name includes timestamp
+        # e.g., 'ff5_regression_20251003_001418' -> 'ff5_regression'
+        if '_' in base_part:
+            # Try to match known model types
+            known_types = ['ff5_regression', 'momentum_ranking', 'xgboost', 'lstm']
+            for model_type in known_types:
+                if base_part.startswith(model_type + '_'):
+                    return model_type
+
+        # Return as-is if no special handling needed
+        return base_part
     
     @classmethod
     def _create_position_sizer(cls, config: Dict[str, Any]) -> PositionSizer:

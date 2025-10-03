@@ -1,0 +1,72 @@
+# End-to-End Fama-French 5-Factor Experiment Configuration
+# ==========================================================
+# This single file configures the entire workflow: model training followed by strategy backtesting.
+
+# Part 1: Training Pipeline Configuration
+# ----------------------------------------
+# Defines how the FF5 model should be trained.
+data_provider:
+  type: "YFinanceProvider"  # Specifies which data provider to use.
+  parameters:
+    max_retries: 3
+    retry_delay: 1.0
+
+# NEW: Add configuration for the factor data provider needed by the FF5 model.
+factor_data_provider:
+  type: "FF5DataProvider"
+  parameters:
+    data_frequency: "monthly" # or "daily"
+
+training_setup:
+  model:
+    model_type: "ff5_regression" # Must match the model type in the model factory.
+    config:
+      regularization: 'none'
+      standardize: false
+
+  feature_engineering:
+    # For the FF5 model, feature engineering is minimal as the model
+    # directly uses the provided factor data. This section is a placeholder.
+    enabled_features: ['momentum'] # Example, not used by FF5 model itself
+
+  # Parameters for the training pipeline execution
+  parameters:
+    start_date: "2018-01-01"
+    end_date: "2019-12-31"
+    symbols: 
+      - AAPL
+      - MSFT
+      - GOOGL
+      - AMZN
+      - META
+      - TSLA
+      - NVDA
+      - JPM
+      - V
+      - WMT
+
+# Part 2: Backtesting Configuration
+# ---------------------------------
+# Defines how to backtest the strategy that uses the newly trained model.
+backtest:
+  name: "FF5_Backtest"
+  start_date: "2020-01-01"
+  end_date: "2023-12-31"
+  initial_capital: 1000000
+  benchmark_symbol: "SPY"
+  commission_rate: 0.001
+  slippage_rate: 0.0005
+  rebalance_frequency: "weekly"
+  position_limit: 0.10
+  rebalance_threshold: 0.001  # Lower threshold to allow smaller trades (0.1% instead of 1%)
+
+strategy:
+  name: "FF5_Strategy_Backtest"
+  type: "fama_french_5" # Must match the strategy type in the strategy factory.
+
+  # This model_id is a placeholder. The orchestrator will overwrite it
+  # with the ID of the model it just trained.
+  parameters:
+    model_id: "placeholder_model_id"
+    lookback_days: 252
+    risk_free_rate: 0.02

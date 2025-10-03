@@ -66,3 +66,30 @@ model_training:
   validation_split: 0.2
   test_size: 0.1
 
+# NEW: Investment Framework for Box-based classification and allocation
+investment_framework:
+  enabled: true # Master switch for the entire box mechanism
+
+  box_classification:
+    # Rules for the StockClassifier
+    size_config:
+      method: "market_cap_thresholds"
+      thresholds:
+        large: 10.0  # in billions USD
+        mid: 2.0
+    style_config:
+      # Currently uses technical proxies, so no specific thresholds here yet.
+      # This section is for future expansion (e.g., using P/B ratios).
+      method: "technical_proxies"
+    region_config:
+      # List of country codes/suffixes considered "developed"
+      developed_markets: ['US', 'CA', 'GB', 'DE', 'FR', 'JP', 'AU', 'CH']
+
+  allocation:
+    # Rules for the BoxAllocator
+    method: "tilt"  # Can be "equal" or "tilt"
+    stocks_per_box: 3
+    tilt_config:
+      # This section is used only if method is "tilt"
+      max_deviation: 0.06 # Max active weight deviation per box (e.g., ±6%)
+

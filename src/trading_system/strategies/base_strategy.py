@@ -4,14 +4,14 @@ Unified Base Strategy - All Strategies Follow the Same Architecture
 This is the new base class that enforces a consistent architecture across
 all trading strategies:
 
-    FeatureEngineeringPipeline → ModelPredictor → PositionSizer
+    PredictionPipeline (Data + Features) → ModelPredictor → PositionSizer
 
 Key Design Principles:
 ----------------------
 1. **Consistency**: All strategies follow the exact same flow
 2. **Separation of Concerns**: 
-   - Pipeline: Feature computation
-   - Model: Prediction/ranking logic
+   - PredictionPipeline: Data acquisition & feature computation
+   - ModelPredictor: Inference only
    - PositionSizer: Risk management
 3. **Trainability**: All strategies can be "trained" (even rule-based ones)
 4. **Composability**: Easy to swap components
@@ -19,6 +19,7 @@ Key Design Principles:
 The only difference between strategies is:
 - Feature pipeline configuration (what features to compute)
 - Model type (ML model vs linear model vs rule-based model)
+- Data providers (price, factors, fundamentals, etc.)
 """
 
 import logging
@@ -30,6 +31,7 @@ import numpy as np
 
 from ..feature_engineering.pipeline import FeatureEngineeringPipeline
 from ..models.serving.predictor import ModelPredictor
+from ..models.serving.prediction_pipeline import PredictionPipeline
 from ..utils.position_sizer import PositionSizer
 from .utils.portfolio_calculator import PortfolioCalculator
 from ..data.stock_classifier import StockClassifier
@@ -71,6 +73,8 @@ class BaseStrategy(ABC):
                  position_sizer: PositionSizer,
                  stock_classifier: Optional[StockClassifier] = None,
                  box_allocator: Optional[BoxAllocator] = None,
+                 data_provider=None,
+                 factor_data_provider=None,
                  **kwargs):
         """
         Initialize unified strategy.
@@ -80,8 +84,10 @@ class BaseStrategy(ABC):
             feature_pipeline: Fitted FeatureEngineeringPipeline
             model_predictor: ModelPredictor with loaded model
             position_sizer: PositionSizer for risk management
-            stock_classifier: Optional StockClassifier for box-based logic.
-            box_allocator: Optional BoxAllocator for box-based allocation.
+            stock_classifier: Optional StockClassifier for box-based logic
+            box_allocator: Optional BoxAllocator for box-based allocation
+            data_provider: Optional price data provider (for PredictionPipeline)
+            factor_data_provider: Optional factor data provider (for PredictionPipeline)
             **kwargs: Additional strategy-specific parameters
         """
         self.name = name
@@ -91,6 +97,22 @@ class BaseStrategy(ABC):
         self.stock_classifier = stock_classifier
         self.box_allocator = box_allocator
         self.parameters = kwargs
+        
+        # Data providers for prediction pipeline
+        self.data_provider = data_provider
+        self.factor_data_provider = factor_data_provider
+        
+        # Create PredictionPipeline if providers are available
+        # This enables automatic data acquisition for predictions
+        self.prediction_pipeline = None
+        if data_provider is not None:
+            self.prediction_pipeline = PredictionPipeline(
+                model_predictor=model_predictor,
+                feature_pipeline=feature_pipeline,
+                data_provider=data_provider,
+                factor_data_provider=factor_data_provider
+            )
+            logger.info(f"Created PredictionPipeline with data providers for {name}")
         
         # Signal tracking and diagnostics
         self._last_signals = None
@@ -165,8 +187,8 @@ class BaseStrategy(ABC):
                 logger.debug(f"[{self.name}] Step 3b: Applying Box-based allocation...")
                 final_signals = self.box_allocator.allocate(predictions, boxes)
             else:
-                logger.debug(f"[{self.name}] Step 3: Applying legacy risk management...")
-                final_signals = self._apply_risk_management(predictions, price_data)
+                logger.debug(f"[{self.name}] No box allocator or stock classifier provided")
+                final_signals = predictions
             
             # Step 4: Evaluate signal quality (NEW)
             logger.debug(f"[{self.name}] Step 4: Evaluating signal quality...")
@@ -193,6 +215,44 @@ class BaseStrategy(ABC):
             # Prepare data in format expected by pipeline
             pipeline_data = {'price_data': price_data}
             
+            # Add factor data if available and needed
+            if self.factor_data_provider is not None:
+                logger.debug(f"[{self.name}] Fetching factor data for feature computation")
+                try:
+                    # Get date range from price data
+                    all_dates = []
+                    for symbol_data in price_data.values():
+                        if hasattr(symbol_data.index, 'tolist'):
+                            all_dates.extend(symbol_data.index.tolist())
+                    
+                    if all_dates:
+                        start_date = min(all_dates)
+                        end_date = max(all_dates)
+                        
+                        # Fetch factor data for the same period
+                        if hasattr(self.factor_data_provider, 'get_factor_data'):
+                            factor_data = self.factor_data_provider.get_factor_data(
+                                start_date=start_date.strftime('%Y-%m-%d') if hasattr(start_date, 'strftime') else str(start_date),
+                                end_date=end_date.strftime('%Y-%m-%d') if hasattr(end_date, 'strftime') else str(end_date)
+                            )
+                        elif hasattr(self.factor_data_provider, 'get_factor_returns'):
+                            factor_data = self.factor_data_provider.get_factor_returns(
+                                start_date=start_date,
+                                end_date=end_date
+                            )
+                        else:
+                            logger.warning(f"Factor data provider has no recognized method")
+                            factor_data = None
+                        
+                        if factor_data is not None and not factor_data.empty:
+                            pipeline_data['factor_data'] = factor_data
+                            logger.debug(f"[{self.name}] Added factor data: shape={factor_data.shape}")
+                        else:
+                            logger.warning(f"[{self.name}] No factor data returned")
+                
+                except Exception as e:
+                    logger.warning(f"[{self.name}] Failed to fetch factor data: {e}")
+            
             # Transform using fitted pipeline
             features = self.feature_pipeline.transform(pipeline_data)
             
@@ -209,11 +269,11 @@ class BaseStrategy(ABC):
                         start_date: datetime,
                         end_date: datetime) -> pd.DataFrame:
         """
-        Get predictions from the model.
+        Get predictions from the model using pre-computed features.
         
         Args:
             features: Computed features
-            price_data: Original price data
+            price_data: Original price data (for symbol list)
             start_date: Start date
             end_date: End date
         
@@ -229,10 +289,10 @@ class BaseStrategy(ABC):
                 symbol_features = self._extract_symbol_features(features, symbol)
                 
                 if symbol_features.empty:
+                    logger.warning(f"[{self.name}] No features for {symbol}, skipping prediction")
                     continue
                 
-                # Get prediction from model
-                # Model should return expected return or signal strength
+                # Get prediction from model (simplified interface - only needs features)
                 result = self.model_predictor.predict(
                     features=symbol_features,
                     symbol=symbol,
@@ -255,12 +315,15 @@ class BaseStrategy(ABC):
             return predictions_df
             
         except Exception as e:
-            logger.error(f"[{self.name}] Prediction failed: {e}")
+            logger.error(f"[{self.name}] Prediction failed: {e}", exc_info=True)
             return pd.DataFrame()
     
     def _extract_symbol_features(self, features: pd.DataFrame, symbol: str) -> pd.DataFrame:
         """
-        Extract features for a specific symbol.
+        Extract features for a specific symbol, including both symbol-specific and global features.
+        
+        Symbol-specific features have prefixes (e.g., 'AAPL_momentum_21d')
+        Global features (like FF5 factors) have no prefix (e.g., 'MKT', 'SMB')
         
         Args:
             features: Full feature DataFrame
@@ -269,83 +332,51 @@ class BaseStrategy(ABC):
         Returns:
             Features for the symbol
         """
+        # Check if features have MultiIndex structure (symbol, date)
+        if isinstance(features.index, pd.MultiIndex) and 'symbol' in features.index.names:
+            try:
+                # Extract features for this symbol from MultiIndex
+                symbol_features = features.xs(symbol, level='symbol')
+                logger.debug(f"Extracted features for {symbol} from MultiIndex: shape={symbol_features.shape}")
+                return symbol_features
+            except KeyError:
+                logger.warning(f"Symbol {symbol} not found in MultiIndex features")
+                return pd.DataFrame()
+        
         # Features may have symbol prefix (e.g., 'AAPL_momentum_21d')
         symbol_cols = [col for col in features.columns if col.startswith(f"{symbol}_")]
         
-        if symbol_cols:
-            symbol_features = features[symbol_cols].copy()
-            # Remove symbol prefix
-            symbol_features.columns = [col.replace(f"{symbol}_", "") for col in symbol_cols]
+        # Also get columns without any symbol prefix (global features like FF5 factors)
+        # These are columns that don't contain any known symbol prefix
+        all_symbols = set()
+        for col in features.columns:
+            for s in ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'TSLA', 'NVDA', 'JPM', 'V', 'WMT', 'SPY', 'QQQ', 'IWM']:
+                if col.startswith(f"{s}_"):
+                    all_symbols.add(s)
+                    break
+        
+        global_cols = [col for col in features.columns 
+                      if not any(col.startswith(f"{s}_") for s in all_symbols)]
+        
+        if symbol_cols or global_cols:
+            # Combine symbol-specific and global features
+            cols_to_extract = symbol_cols + global_cols
+            symbol_features = features[cols_to_extract].copy()
+            
+            # Remove symbol prefix from symbol-specific features
+            new_columns = []
+            for col in cols_to_extract:
+                if col in symbol_cols:
+                    new_columns.append(col.replace(f"{symbol}_", ""))
+                else:
+                    new_columns.append(col)  # Keep global feature names as-is
+            
+            symbol_features.columns = new_columns
+            logger.debug(f"Extracted {len(symbol_cols)} symbol-specific + {len(global_cols)} global features for {symbol}")
             return symbol_features
         
-        # If no prefix, return all features (assume single symbol)
+        # If no prefix structure, return all features (assume single symbol)
         return features
-    
-    def _apply_risk_management(self,
-                               raw_signals: pd.DataFrame,
-                               price_data: Dict[str, pd.DataFrame]) -> pd.DataFrame:
-        """
-        Apply position sizing and risk management.
-        
-        Args:
-            raw_signals: Raw predictions/signals from model
-            price_data: Price data for volatility calculation
-        
-        Returns:
-            Risk-adjusted position weights
-        """
-        try:
-            # Calculate asset volatilities
-            asset_volatilities = self._calculate_volatilities(price_data)
-            
-            # Apply position sizer to each date
-            adjusted_signals = raw_signals.copy()
-            
-            for date in raw_signals.index:
-                signal_row = raw_signals.loc[date]
-                
-                # Convert to DataFrame format expected by PositionSizer
-                signal_frame = signal_row.to_frame().T
-                
-                # Get volatilities for active positions
-                relevant_vols = asset_volatilities.reindex(signal_row.index).fillna(0.15)
-                
-                # Apply position sizing
-                adjusted_row = self.position_sizer.adjust_signals(signal_frame, relevant_vols)
-                
-                if not adjusted_row.empty:
-                    adjusted_signals.loc[date] = adjusted_row.iloc[0]
-            
-            logger.debug(f"[{self.name}] Applied risk management")
-            return adjusted_signals
-            
-        except Exception as e:
-            logger.error(f"[{self.name}] Risk management failed: {e}")
-            return raw_signals  # Return unadjusted if fails
-    
-    def _calculate_volatilities(self, price_data: Dict[str, pd.DataFrame]) -> pd.Series:
-        """
-        Calculate annualized volatility for each asset.
-        
-        Args:
-            price_data: Dictionary of price DataFrames
-        
-        Returns:
-            Series mapping symbols to volatilities
-        """
-        volatilities = {}
-        
-        for symbol, data in price_data.items():
-            if 'Close' in data.columns and len(data) > 1:
-                returns = data['Close'].pct_change().dropna()
-                if len(returns) > 0:
-                    volatilities[symbol] = returns.std() * np.sqrt(252)
-                else:
-                    volatilities[symbol] = 0.15
-            else:
-                volatilities[symbol] = 0.15
-        
-        return pd.Series(volatilities)
     
     def get_name(self) -> str:
         """Get strategy name."""
