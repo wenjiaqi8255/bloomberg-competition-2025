@@ -189,3 +189,4 @@ class ExperimentLogger:
             self.tracker.finish_run(exit_code=1)
         except Exception as e:
             logger.warning(f"Failed to log experiment failure: {e}")
+

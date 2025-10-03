@@ -60,3 +60,4 @@ class TrainingResult:
             'test_metrics': self.test_metrics,
             'best_params': self.best_params
         }
+

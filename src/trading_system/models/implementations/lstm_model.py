@@ -279,13 +279,19 @@ class LSTMModel(BaseModel):
             # Validate input data
             self.validate_data(X, y)
             
-            # Clean data
-            aligned_data = pd.concat([y, X], axis=1).dropna()
-            if len(aligned_data) == 0:
-                raise ValueError("No valid data points after alignment")
-            
-            y_clean = aligned_data.iloc[:, 0]
-            X_clean = aligned_data.iloc[:, 1:]
+            # Clean data - first drop rows where target is NaN
+            combined_data = pd.concat([y, X], axis=1)
+            combined_data = combined_data.dropna(subset=[combined_data.columns[0]])  # Only drop rows where target is NaN
+
+            if len(combined_data) == 0:
+                raise ValueError("No valid data points after target alignment")
+
+            # For remaining rows, handle feature NaNs by filling with median or 0
+            y_clean = combined_data.iloc[:, 0]
+            X_clean = combined_data.iloc[:, 1:]
+
+            # Fill NaN values in features - use 0 for technical indicators (similar to XGBoost approach)
+            X_clean = X_clean.fillna(0)
             
             # Store feature names
             self._feature_names = list(X_clean.columns)

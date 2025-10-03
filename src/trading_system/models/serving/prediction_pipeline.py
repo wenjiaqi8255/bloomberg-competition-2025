@@ -340,3 +340,4 @@ class PredictionPipeline:
             'has_factor_provider': self.factor_data_provider is not None
         }
 
+
