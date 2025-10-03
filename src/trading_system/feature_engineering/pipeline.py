@@ -206,6 +206,15 @@ class FeatureEngineeringPipeline:
         Returns:
             DataFrame with features and factor data merged
         """
+        # Check if factor_data is valid (not None, not empty dict, has proper structure)
+        if factor_data is None or not isinstance(factor_data, pd.DataFrame):
+            logger.info("No factor data available or factor_data is not a DataFrame, skipping merge")
+            return features
+
+        if factor_data.empty:
+            logger.info("Factor data is empty DataFrame, skipping merge")
+            return features
+
         logger.info(f"Merging factor data with shape {factor_data.shape} into features with shape {features.shape}")
 
         # Factor data has a simple date index, we need to broadcast it to all symbols

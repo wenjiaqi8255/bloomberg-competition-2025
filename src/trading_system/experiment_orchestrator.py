@@ -184,6 +184,11 @@ class ExperimentOrchestrator:
             'strategy': self.full_config.get('strategy', {})
         }
 
+        # Add universe to strategy config if it exists as a separate section
+        universe = self.full_config.get('universe', [])
+        if universe:
+            backtest_configs['strategy']['universe'] = universe
+
         # The ConfigFactory needs a file path, so we'll simulate one.
         # A better long-term solution is to allow it to parse a dict.
         # For now, let's dump the relevant sections to a string and load from there.
