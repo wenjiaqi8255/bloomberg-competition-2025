@@ -63,12 +63,15 @@ class StrategyAllocationRule:
 class ComplianceRules:
     """
     Complete set of compliance rules - supports flexible strategy allocations.
-    
+
     Instead of hardcoded core/satellite rules, uses a list of strategy allocation rules
     that can be configured for any number of strategies.
     """
     # Strategy allocation rules - flexible for multiple strategies
     strategy_allocation_rules: List[StrategyAllocationRule] = None
+
+    # Investment box exposure limits (e.g., sector limits, region limits)
+    box_exposure_limits: Dict[str, Dict[str, float]] = None
     
     # Cash allocation rules
     cash_min_weight: float = 0.00

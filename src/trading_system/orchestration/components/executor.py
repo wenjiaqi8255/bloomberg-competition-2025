@@ -50,7 +50,7 @@ class ExecutionConfig: #TODO: read from config
     """Configuration for trade execution."""
     # Order preferences
     default_order_type: OrderType = OrderType.MARKET
-    max_order_size_percent: float = 0.05  # Max 5% of portfolio per order
+    max_order_size_percent: float = 1.0  # Max 100% of portfolio per order (for portfolio optimization)
     min_order_size_usd: float = 1000  # Minimum order size $1,000
 
     # Execution timing
@@ -233,9 +233,6 @@ class TradeExecutor:
         if signal.strength <= 0:
             return None
 
-        # Determine order side
-        side = OrderSide.BUY if signal.signal_type == SignalType.BUY else OrderSide.SELL
-
         # Calculate order quantity
         current_position = portfolio.positions.get(signal.symbol)
         current_quantity = current_position.quantity if current_position else 0
@@ -269,6 +266,10 @@ class TradeExecutor:
         if not self._check_cooling_period(signal.symbol):
             logger.debug(f"Order {signal.symbol} blocked by cooling period")
             return None
+
+        # Determine order side based on final order_quantity (not signal type)
+        # This ensures consistency between quantity and side after all constraints are applied
+        side = OrderSide.BUY if order_quantity > 0 else OrderSide.SELL
 
         # Create order
         order = Order(
@@ -320,7 +321,7 @@ class TradeExecutor:
             if order.side == OrderSide.BUY:
                 required_cash = order.quantity * order.price if order.price else order.quantity * 100  # Simplified
                 available_cash = portfolio.cash_balance
-                if required_cash > available_cash * 0.95:  # Keep 5% buffer
+                if required_cash > available_cash * 1.001:  # Allow 0.1% overdraft for commission costs
                     logger.debug(f"Insufficient cash for {order.symbol}: need ${required_cash:.2f}, have ${available_cash:.2f}")
                     continue
 
@@ -387,13 +388,12 @@ class TradeExecutor:
         # Create trade record
         trade = Trade(
             symbol=order.symbol,
+            side=order.side.value.lower(),  # Convert OrderSide.BUY -> 'buy'
             quantity=order.quantity,
             price=execution_price,
             timestamp=datetime.now(),
-            trade_type=order.side.value,
             commission=commission,
-            strategy_name=order.strategy_name,
-            order_id=order.id
+            trade_id=order.id
         )
 
         # Update order status

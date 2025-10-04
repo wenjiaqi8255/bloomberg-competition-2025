@@ -40,12 +40,9 @@ from .models.data_types import (
     validate_price_data, align_data, create_default_config
 )
 from ..config.feature import FeatureType, FeatureConfig
-from .feature_engine import FeatureEngine, compute_features, create_feature_engine
 from .utils.technical_features import TechnicalIndicatorCalculator
 from .utils.validation import FeatureValidator, validate_features
 
-# Create default engine instance for convenience
-_default_engine = FeatureEngine()
 
 # ============================================================================
 # Public API - Simplified Interface
@@ -246,32 +243,6 @@ def create_production_config() -> FeatureConfig:
 
 
 # ============================================================================
-# Backward Compatibility (for existing code)
-# ============================================================================
-
-# Legacy names for backward compatibility
-FeatureEngine = FeatureEngine
-compute_features = compute_features
-
-# Try to import from the old system for compatibility
-try:
-    from .feature_engine import FeatureEngine as OldFeatureEngine
-    from .technical_features import AcademicTechnicalFeatures
-    LEGACY_AVAILABLE = True
-except ImportError:
-    LEGACY_AVAILABLE = False
-
-
-def create_legacy_feature_engine(**kwargs):
-    """Create legacy feature engine if available, otherwise use new engine."""
-    if LEGACY_AVAILABLE:
-        return OldFeatureEngine(**kwargs)
-    else:
-        logger.warning("Legacy feature engine not available, using new implementation")
-        return FeatureEngine()
-
-
-# ============================================================================
 # Version Info
 # ============================================================================
 
@@ -281,7 +252,6 @@ __author__ = "Bloomberg Competition Team"
 # Export main classes and functions
 __all__ = [
     # Core classes
-    'FeatureEngine',
     'FeatureConfig',
     'FeatureType',
     'FeatureResult',
@@ -292,7 +262,6 @@ __all__ = [
     # Main functions
     'compute_technical_features',
     'compute_features',
-    'create_feature_engine',
     'validate_feature_performance',
     'get_feature_summary',
 
@@ -313,11 +282,6 @@ __all__ = [
     'ForwardReturns',
     'FeatureData',
     'ValidationData',
-
-    # Legacy compatibility
-    'create_legacy_feature_engine',
-    'FeatureEngine',
-    'compute_features',
 
     # Version
     '__version__',

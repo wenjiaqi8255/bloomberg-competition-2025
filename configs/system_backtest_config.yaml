@@ -45,7 +45,14 @@ strategies:
           parameters:
             windows: [21, 63]
 
-# 4. 资金分配规则
+# 4. Meta-Model Configuration (NEW)
+meta_model:
+  method: "equal" # Can be 'equal', 'lasso', 'ridge'
+  parameters:
+    # Lasso/Ridge alpha (regularization strength)
+    # alpha: 0.01
+
+# 5. 资金分配规则
 allocation:
   strategy_allocations:
     - strategy_name: "FF5_Core_Strategy"
@@ -61,7 +68,7 @@ allocation:
   rebalance_threshold: 0.05
   cash_buffer_weight: 0.02
 
-# 5. 合规性规则 (可选，若不提供会自动根据资金分配规则生成)
+# 6. 合规性规则 (可选，若不提供会自动根据资金分配规则生成)
 compliance:
   max_single_position_weight: 0.15
   max_sector_allocation: 0.30

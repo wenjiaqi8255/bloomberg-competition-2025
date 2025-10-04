@@ -31,7 +31,7 @@ from ..feature_engineering.models.data_types import FeatureConfig
 from ..models.serving.predictor import ModelPredictor
 from ..utils.position_sizer import PositionSizer
 from ..data.stock_classifier import StockClassifier
-from ..allocation.box_allocator import BoxAllocator
+# from ..allocation.box_allocator import BoxAllocator  # File removed - functionality deprecated
 
 logger = logging.getLogger(__name__)
 
@@ -159,15 +159,15 @@ class StrategyFactory:
         return strategy
     
     @classmethod
-    def _create_box_components(cls, config: Dict[str, Any]) -> (Optional[StockClassifier], Optional[BoxAllocator]):
+    def _create_box_components(cls, config: Dict[str, Any]) -> (Optional[StockClassifier], Optional[Any]):
         """
         Create Box-based components if the investment framework is enabled in config.
         """
         framework_config = config.get('investment_framework', {})
-        
+
         if not framework_config.get('enabled', False):
             return None, None
-            
+
         logger.info("Investment framework enabled. Creating Box components.")
 
         # Create StockClassifier
@@ -177,14 +177,14 @@ class StrategyFactory:
         stock_classifier = StockClassifier(config=classification_config)
         logger.info("✓ StockClassifier created.")
 
-        # Create BoxAllocator
-        allocation_config = framework_config.get('allocation')
-        if not allocation_config:
-            raise ValueError("Investment framework is enabled, but 'allocation' config is missing.")
-        box_allocator = BoxAllocator(config=allocation_config)
-        logger.info("✓ BoxAllocator created.")
-        
-        return stock_classifier, box_allocator
+        # BoxAllocator functionality has been deprecated
+        # allocation_config = framework_config.get('allocation')
+        # if not allocation_config:
+        #     raise ValueError("Investment framework is enabled, but 'allocation' config is missing.")
+        # box_allocator = BoxAllocator(config=allocation_config)
+        # logger.info("✓ BoxAllocator created.")
+
+        return stock_classifier, None  # Return None for allocator since it's deprecated
 
     @classmethod
     def _create_feature_pipeline(cls, 

@@ -14,6 +14,7 @@ Key Features:
 import logging
 from typing import List, Dict, Any, Optional
 from pathlib import Path
+from datetime import datetime
 import yaml
 import pandas as pd
 import numpy as np
@@ -22,6 +23,8 @@ import joblib
 
 from .models.data_types import FeatureConfig
 from .utils.technical_features import TechnicalIndicatorCalculator
+from .cache_provider import FeatureCacheProvider
+from .local_cache_provider import LocalCacheProvider
 
 logger = logging.getLogger(__name__)
 
@@ -31,16 +34,29 @@ class FeatureEngineeringPipeline:
     Orchestrates the entire feature engineering process, ensuring consistency.
     """
 
-    def __init__(self, config: FeatureConfig):
+    def __init__(self, config: FeatureConfig, feature_cache: Optional[FeatureCacheProvider] = None):
         """
         Initialize the pipeline with a feature configuration.
 
         Args:
             config: A FeatureConfig object detailing which features to compute.
+            feature_cache: Optional cache provider for feature caching
         """
         self.config = config
         self.scalers: Dict[str, StandardScaler] = {}
         self._is_fitted = False
+
+        # 使用提供的缓存，或创建默认的本地缓存
+        self.feature_cache = feature_cache or LocalCacheProvider()
+
+        # 定义哪些特征是"慢变"的，需要缓存
+        self.SLOW_FEATURES = {
+            'sma_200', 'sma_50', 'ema_200', 'ema_50',
+            'volatility_60d', 'volatility_30d',
+            'bb_upper_20', 'bb_lower_20', 'bb_middle_20'
+        }
+
+        logger.info(f"Initialized pipeline with {self.feature_cache.__class__.__name__}")
 
     def fit(self, data: Dict[str, pd.DataFrame]):
         """
@@ -306,19 +322,65 @@ class FeatureEngineeringPipeline:
             # Order: Basic indicators -> Momentum -> Volatility -> Advanced technical -> Derived features
             # This minimizes NaN propagation by computing stable features first
 
-            # Step 1: Basic technical indicators (lowest NaN generation)
+            # Step 1: Basic technical indicators (lowest NaN generation) - with caching
             if hasattr(self.config, 'include_technical') and self.config.include_technical:
                 logger.debug(f"Step 1: Computing basic technical indicators for {symbol}")
-                technical = calculator.compute_technical_indicators(data)
-                symbol_features = pd.concat([symbol_features, technical], axis=1)
+
+                # Try to compute technical indicators with caching for individual features
+                technical_cached = pd.DataFrame(index=data.index)
+
+                # Try to get individual technical features from cache
+                for feature_name in ['sma_200', 'sma_50', 'ema_200', 'ema_50', 'rsi_14', 'bb_upper_20', 'bb_lower_20', 'bb_middle_20']:
+                    cached_feature = self._get_single_feature_cached(symbol, feature_name, data.index[0], data.index[-1])
+                    if cached_feature is not None:
+                        technical_cached[feature_name] = cached_feature['value']
+                        logger.debug(f"Used cached {feature_name} for {symbol}")
+
+                # Compute remaining features that weren't cached
+                if len(technical_cached.columns) < 8:  # If not all features were cached
+                    technical = calculator.compute_technical_indicators(data)
+                    # Cache individual features that are in SLOW_FEATURES
+                    for feature_name in self.SLOW_FEATURES:
+                        if feature_name in technical.columns and feature_name not in technical_cached.columns:
+                            self._cache_single_feature(symbol, feature_name, technical[feature_name])
+
+                    # Combine cached and newly computed features
+                    symbol_features = pd.concat([symbol_features, technical], axis=1)
+                else:
+                    # Use all cached features
+                    symbol_features = pd.concat([symbol_features, technical_cached], axis=1)
+
                 # Quality checkpoint after basic indicators
                 self._quality_checkpoint(symbol_features, f"{symbol}_basic_technical", step=1)
 
-            # Step 2: Volatility features (moderate NaN generation, use basic indicators)
+            # Step 2: Volatility features (moderate NaN generation) - with caching
             if hasattr(self.config, 'volatility_windows') and self.config.volatility_windows:
                 logger.debug(f"Step 2: Computing volatility features for {symbol}")
-                volatility = calculator.compute_volatility_features(data, self.config.volatility_windows)
-                symbol_features = pd.concat([symbol_features, volatility], axis=1)
+                volatility_cached = pd.DataFrame(index=data.index)
+
+                # Try to get volatility features from cache
+                for window in self.config.volatility_windows:
+                    feature_name = f'volatility_{window}d'
+                    cached_feature = self._get_single_feature_cached(symbol, feature_name, data.index[0], data.index[-1])
+                    if cached_feature is not None:
+                        volatility_cached[feature_name] = cached_feature['value']
+                        logger.debug(f"Used cached {feature_name} for {symbol}")
+
+                # Compute remaining volatility features
+                missing_windows = [w for w in self.config.volatility_windows
+                                 if f'volatility_{w}d' not in volatility_cached.columns]
+                if missing_windows:
+                    volatility = calculator.compute_volatility_features(data, missing_windows)
+                    # Cache individual volatility features
+                    for window in missing_windows:
+                        feature_name = f'volatility_{window}d'
+                        if feature_name in volatility.columns:
+                            self._cache_single_feature(symbol, feature_name, volatility[feature_name])
+
+                    symbol_features = pd.concat([symbol_features, volatility], axis=1)
+                else:
+                    symbol_features = pd.concat([symbol_features, volatility_cached], axis=1)
+
                 # Quality checkpoint after volatility features
                 self._quality_checkpoint(symbol_features, f"{symbol}_volatility", step=2)
 
@@ -677,3 +739,80 @@ class FeatureEngineeringPipeline:
             logger.error("❌ Overall feature quality: POOR - Consider reviewing feature engineering")
 
         logger.info("=== END FINAL QUALITY CHECKPOINT ===")
+
+    # Cache-related methods
+    def _get_single_feature_cached(
+        self,
+        symbol: str,
+        feature_name: str,
+        start_date: datetime,
+        end_date: datetime
+    ) -> Optional[pd.DataFrame]:
+        """尝试从缓存获取单个特征"""
+        # 只缓存慢变特征
+        if feature_name not in self.SLOW_FEATURES:
+            return None
+
+        return self.feature_cache.get(symbol, feature_name, start_date, end_date)
+
+    def _cache_single_feature(
+        self,
+        symbol: str,
+        feature_name: str,
+        data: pd.Series
+    ) -> None:
+        """缓存单个特征"""
+        if feature_name not in self.SLOW_FEATURES:
+            return
+
+        # 转换为 DataFrame
+        df = data.to_frame(name='value')
+        self.feature_cache.set(symbol, feature_name, df)
+        logger.debug(f"Cached {feature_name} for {symbol}")
+
+    def clear_cache(self, symbol: Optional[str] = None):
+        """清空特征缓存"""
+        self.feature_cache.clear(symbol)
+        logger.info(f"Feature cache cleared{' for ' + symbol if symbol else ''}")
+
+    def _compute_feature_with_cache(
+        self,
+        symbol: str,
+        data: pd.DataFrame,
+        feature_name: str,
+        compute_func: callable
+    ) -> Optional[pd.DataFrame]:
+        """
+        使用缓存计算单个特征
+
+        Args:
+            symbol: 股票代码
+            data: 价格数据
+            feature_name: 特征名称
+            compute_func: 计算函数，接受data返回DataFrame
+
+        Returns:
+            包含特征的DataFrame，或None如果计算失败
+        """
+        start_date = data.index[0]
+        end_date = data.index[-1]
+
+        # 尝试从缓存获取
+        cached_feature = self._get_single_feature_cached(symbol, feature_name, start_date, end_date)
+        if cached_feature is not None:
+            logger.debug(f"Using cached {feature_name} for {symbol}")
+            return cached_feature
+
+        # 缓存未命中，计算特征
+        try:
+            computed_features = compute_func(data)
+            if computed_features is not None and not computed_features.empty:
+                if feature_name in computed_features.columns:
+                    # 缓存这个特征
+                    self._cache_single_feature(symbol, feature_name, computed_features[feature_name])
+                    logger.debug(f"Computed and cached {feature_name} for {symbol}")
+                    return computed_features[[feature_name]]
+        except Exception as e:
+            logger.warning(f"Failed to compute {feature_name} for {symbol}: {e}")
+
+        return None

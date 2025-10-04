@@ -1,0 +1,164 @@
+# MetaModel End-to-End Experiment Configuration
+# ==========================================
+# This configuration defines a complete MetaModel training and evaluation workflow
+# that integrates with the existing experiment orchestrator infrastructure
+
+# 1. Experiment Metadata
+experiment:
+  name: "metamodel_core_satellite_experiment"
+  description: "Complete MetaModel training for Core+Satellite strategy combination"
+  tags: ["metamodel", "core_satellite", "ridge_regression"]
+  log_to_wandb: true
+
+# 2. MetaModel Training Configuration
+metamodel_training:
+  # Training method and parameters
+  method: "ridge"  # Options: equal, lasso, ridge, dynamic
+  alpha: 0.5  # Regularization strength for ridge/lasso
+  positive_weights: true
+  weight_sum_constraint: 1.0
+
+  # Strategy configuration (strategies to combine)
+  strategies:
+    - "DualMomentumStrategy"
+    - "MLStrategy"
+    - "FF5Strategy"
+
+  # Data collection parameters
+  data_source: "synthetic"  # Options: backtest, synthetic, live
+  start_date: "2022-01-01"
+  end_date: "2023-12-31"
+  target_benchmark: "SPY"  # Optional benchmark for target returns
+
+  # Training parameters
+  use_cross_validation: true
+  cv_folds: 5
+  validation_split: 0.2
+
+  # Experiment tracking
+  experiment_name: "metamodel_core_satellite"
+  track_strategy_correlation: true
+  track_contribution_analysis: true
+
+# 3. Strategy Data Generation (for synthetic data)
+synthetic_strategy_config:
+  # Define synthetic strategy characteristics
+  DualMomentumStrategy:
+    annual_return: 0.10
+    annual_volatility: 0.15
+    correlation_factor: 0.3
+
+  MLStrategy:
+    annual_return: 0.12
+    annual_volatility: 0.18
+    correlation_factor: 0.25
+
+  FF5Strategy:
+    annual_return: 0.08
+    annual_volatility: 0.12
+    correlation_factor: 0.4
+
+# 4. Model Registry Configuration
+model_registry:
+  base_path: "./models"
+  save_model: true
+  model_name_template: "metamodel_{method}_{date}"
+  artifacts:
+    include_training_data: true
+    include_feature_pipeline: true
+    include_performance_metrics: true
+
+# 5. Validation and Testing
+validation:
+  # Out-of-sample testing period
+  test_start_date: "2024-01-01"
+  test_end_date: "2024-06-30"
+
+  # Performance metrics to compute
+  metrics:
+    - "r2"
+    - "mse"
+    - "mae"
+    - "sharpe_ratio"
+    - "max_drawdown"
+    - "volatility"
+
+  # Benchmark comparison
+  benchmark_comparison:
+    enabled: true
+    benchmark: "equal_weighted"
+    compare_metrics: ["sharpe_ratio", "volatility", "max_drawdown"]
+
+# 6. System Integration Testing
+system_integration:
+  # Test with SystemOrchestrator after training
+  enabled: true
+
+  # Test configuration
+  initial_capital: 1000000
+  test_period:
+    start_date: "2024-01-01"
+    end_date: "2024-03-31"
+
+  # Assets to test with
+  universe:
+    symbols: ["SPY", "AAPL", "MSFT", "GOOGL", "AMZN"]
+
+  # Expected strategy behavior
+  expected_behaviors:
+    weight_stability: 0.1  # Max weight change per rebalance
+    min_active_strategies: 2  # Minimum strategies with non-zero weights
+    max_concentration: 0.6  # Maximum weight in single strategy
+
+# 7. Reporting and Output
+reporting:
+  # Generate comprehensive report
+  generate_report: true
+  output_format: ["html", "json"]
+
+  # Report sections
+  sections:
+    - "training_summary"
+    - "weight_analysis"
+    - "strategy_contributions"
+    - "performance_attribution"
+    - "risk_metrics"
+    - "integration_test_results"
+
+  # Visualizations
+  plots:
+    - "weight_evolution"
+    - "strategy_correlation_heatmap"
+    - "performance_comparison"
+    - "risk_return_scatter"
+
+# 8. Advanced Configuration
+advanced:
+  # Hyperparameter optimization (optional)
+  hyperparameter_optimization:
+    enabled: false
+    method: "grid_search"
+    parameters:
+      alpha: [0.1, 0.5, 1.0, 2.0]
+      method: ["ridge", "lasso"]
+    cv_folds: 3
+    scoring: "r2"
+
+  # Ensemble methods (optional)
+  ensemble:
+    enabled: false
+    methods:
+      - method: "ridge"
+        weight: 0.5
+      - method: "lasso"
+        weight: 0.3
+      - method: "equal"
+        weight: 0.2
+
+  # Robustness testing
+  robustness_tests:
+    enabled: true
+    tests:
+      - "data_corruption"
+      - "parameter_sensitivity"
+      - "outlier_impact"

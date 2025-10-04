@@ -308,8 +308,8 @@ class StockClassifier(ClassificationProvider):
             # 1. Classify by Size (market capitalization)
             size_category, market_cap = self._classify_by_size(symbol, data_up_to_date)
 
-            # 2. Classify by Style (value vs growth using technical proxies)
-            style_category, style_score = self._classify_by_style(data_up_to_date)
+            # 2. Classify by Style (value vs growth using fundamental data + technical proxies)
+            style_category, style_score = self._classify_by_style(symbol, data_up_to_date)
 
             # 3. Classify by Region
             region_category = self._classify_by_region(symbol)
@@ -354,49 +354,128 @@ class StockClassifier(ClassificationProvider):
             logger.debug(f"Size classification failed for {symbol}: {e}")
             return SizeCategory.MID, 5.0  # Default to mid-cap
 
-    def _classify_by_style(self, price_data: pd.DataFrame) -> Tuple[StyleCategory, float]:
+    def _classify_by_style(self, symbol: str, price_data: pd.DataFrame) -> Tuple[StyleCategory, float]:
         """
-        Classify stock by style using technical proxies for value/growth.
+        Classify stock by style using fundamental data when available,
+        supplemented with technical proxies for value/growth.
 
-        Without P/B and ROE data, we use:
+        Fundamental indicators:
+        - P/E ratio: Low PE = value, high PE = growth
+        - P/B ratio: Low PB = value, high PB = growth
+
+        Technical proxies (when fundamental data unavailable):
         - Momentum as value proxy (contrarian indicator)
         - Volatility as growth proxy (growth stocks tend to be more volatile)
         """
         try:
-            # Calculate technical indicators
+            # 1. Try to get fundamental data first
+            fundamental_score = self._get_fundamental_style_score(symbol)
+
+            if fundamental_score is not None:
+                # Use fundamental data for classification
+                if fundamental_score < 0.3:
+                    return StyleCategory.VALUE, fundamental_score
+                elif fundamental_score > 0.7:
+                    return StyleCategory.GROWTH, fundamental_score
+                else:
+                    # Mixed style - use technical indicators as tiebreaker
+                    technical_score = self._get_technical_style_score(price_data)
+                    combined_score = (fundamental_score + technical_score) / 2
+                    return StyleCategory.GROWTH if combined_score > 0.5 else StyleCategory.VALUE, combined_score
+
+            # Fallback to technical indicators
+            technical_score = self._get_technical_style_score(price_data)
+            return StyleCategory.GROWTH if technical_score > 0.5 else StyleCategory.VALUE, technical_score
+
+        except Exception as e:
+            logger.debug(f"Style classification failed for {symbol}: {e}")
+            return StyleCategory.GROWTH, 0.5  # Default to growth
+
+    def _get_fundamental_style_score(self, symbol: str) -> Optional[float]:
+        """
+        Get style score based on fundamental indicators.
+
+        Returns:
+            Float between 0 (value) and 1 (growth), or None if data unavailable
+        """
+        try:
+            ticker = yf.Ticker(symbol)
+            info = ticker.info
+
+            pe_ratio = info.get('trailingPE')
+            pb_ratio = info.get('priceToBook')
+            book_value = info.get('bookValue')
+
+            if pe_ratio is None and pb_ratio is None:
+                return None
+
+            # Calculate style scores (0 = value, 1 = growth)
+            pe_score = 0
+            pb_score = 0
+
+            if pe_ratio is not None:
+                # PE ratio: < 15 = value, > 25 = growth
+                if pe_ratio < 15:
+                    pe_score = 0.0
+                elif pe_ratio > 25:
+                    pe_score = 1.0
+                else:
+                    pe_score = (pe_ratio - 15) / 10  # Linear interpolation
+
+            if pb_ratio is not None:
+                # PB ratio: < 1.5 = value, > 3.5 = growth
+                if pb_ratio < 1.5:
+                    pb_score = 0.0
+                elif pb_ratio > 3.5:
+                    pb_score = 1.0
+                else:
+                    pb_score = (pb_ratio - 1.5) / 2.0  # Linear interpolation
+
+            # Combine scores (average available indicators)
+            if pe_score > 0 and pb_score > 0:
+                return (pe_score + pb_score) / 2
+            elif pe_score > 0:
+                return pe_score
+            elif pb_score > 0:
+                return pb_score
+            else:
+                return None
+
+        except Exception as e:
+            logger.debug(f"Fundamental style score calculation failed for {symbol}: {e}")
+            return None
+
+    def _get_technical_style_score(self, price_data: pd.DataFrame) -> float:
+        """
+        Get style score based on technical indicators (fallback method).
+
+        Returns:
+            Float between 0 (value) and 1 (growth)
+        """
+        try:
             returns = price_data['Close'].pct_change().dropna()
 
             if len(returns) < 20:
-                return StyleCategory.GROWTH, 0.5  # Default
+                return 0.5  # Default
 
             # 1. Momentum indicators (value proxy - low momentum = value)
             short_term_momentum = returns.tail(21).mean()  # 1 month
-            long_term_momentum = returns.tail(252).mean()  # 1 year
 
-            # Value score: negative momentum (contrarian) + low volatility
-            momentum_score = -short_term_momentum * 10  # Negative for value
+            # Value score: negative momentum (contrarian)
+            momentum_score = max(0, min(1, -short_term_momentum * 50 + 0.5))  # Normalize to 0-1
 
             # 2. Volatility (growth proxy - high volatility = growth)
             volatility = returns.std() * np.sqrt(252)
-            volatility_score = volatility / 0.3  # Normalize by 30% vol
+            volatility_score = max(0, min(1, volatility / 0.4))  # Normalize by 40% vol
 
             # 3. Price momentum relative to long-term trend
             current_price = price_data['Close'].iloc[-1]
             sma_200 = price_data['Close'].rolling(200).mean().iloc[-1]
-            price_trend_score = (sma_200 - current_price) / sma_200  # Below trend = value
+            price_trend_score = max(0, min(1, (sma_200 - current_price) / sma_200 + 0.5))  # Normalize
 
-            # Combine scores for style classification
-            value_score = momentum_score * 0.4 + price_trend_score * 0.4 + (1 - volatility_score) * 0.2
-
-            # Determine style category
-            if value_score > 0.1:
-                style = StyleCategory.VALUE
-                style_score = min(1.0, value_score + 0.5)
-            else:
-                style = StyleCategory.GROWTH
-                style_score = max(0.0, 0.5 - value_score)
-
-            return style, style_score
+            # Combine scores
+            technical_score = (momentum_score + volatility_score + price_trend_score) / 3
+            return technical_score
 
         except Exception as e:
             logger.debug(f"Style classification failed: {e}")

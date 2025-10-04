@@ -39,8 +39,8 @@ except ImportError:
     Study = None
 
 # Local imports
-from .trainer import ModelTrainer, TrainingResult, TrainingConfig
-from .experiment_manager import TrainingExperimentManager
+from ..training.trainer import ModelTrainer, TrainingResult, TrainingConfig
+from ..training.experiment_manager import TrainingExperimentManager
 from ..base.base_model import BaseModel
 from ..utils.performance_evaluator import PerformanceEvaluator
 
@@ -236,9 +236,100 @@ class HyperparameterOptimizer:
         Create default search spaces for common model types.
 
         Args:
-            model_type: Type of model ("xgboost", "lightgbm", "random_forest", etc.)
+            model_type: Type of model ("xgboost", "lightgbm", "random_forest", "metamodel", "strategy")
         """
-        if model_type.lower() == "xgboost":
+        if model_type.lower() == "metamodel":
+            # MetaModel-specific search spaces
+            search_spaces = {
+                "method": SearchSpace(
+                    name="method",
+                    type="categorical",
+                    choices=["equal", "lasso", "ridge"]
+                ),
+                "alpha": SearchSpace(
+                    name="alpha",
+                    type="loguniform",
+                    low=0.01,
+                    high=10.0,
+                    log=True
+                ),
+                "min_weight": SearchSpace(
+                    name="min_weight",
+                    type="float",
+                    low=0.0,
+                    high=0.1,
+                    step=0.01
+                ),
+                "max_weight": SearchSpace(
+                    name="max_weight",
+                    type="float",
+                    low=0.3,
+                    high=1.0,
+                    step=0.05
+                ),
+                "weight_sum_constraint": SearchSpace(
+                    name="weight_sum_constraint",
+                    type="float",
+                    low=0.8,
+                    high=1.2,
+                    step=0.05
+                )
+            }
+        elif model_type.lower() == "strategy":
+            # Trading strategy parameter optimization
+            search_spaces = {
+                # Dual Momentum strategy parameters
+                "lookback_period": SearchSpace(
+                    name="lookback_period",
+                    type="int",
+                    low=20,
+                    high=252,
+                    step=10
+                ),
+                "volatility_lookback": SearchSpace(
+                    name="volatility_lookback",
+                    type="int",
+                    low=10,
+                    high=60,
+                    step=5
+                ),
+                "momentum_threshold": SearchSpace(
+                    name="momentum_threshold",
+                    type="float",
+                    low=0.0,
+                    high=0.05,
+                    step=0.005
+                ),
+                # Risk management parameters
+                "max_position_size": SearchSpace(
+                    name="max_position_size",
+                    type="float",
+                    low=0.02,
+                    high=0.2,
+                    step=0.01
+                ),
+                "stop_loss_threshold": SearchSpace(
+                    name="stop_loss_threshold",
+                    type="float",
+                    low=0.02,
+                    high=0.15,
+                    step=0.01
+                ),
+                # Rebalancing parameters
+                "rebalance_frequency": SearchSpace(
+                    name="rebalance_frequency",
+                    type="categorical",
+                    choices=["daily", "weekly", "monthly"]
+                ),
+                "rebalance_threshold": SearchSpace(
+                    name="rebalance_threshold",
+                    type="float",
+                    low=0.01,
+                    high=0.1,
+                    step=0.01
+                )
+            }
+        elif model_type.lower() == "xgboost":
             search_spaces = {
                 "n_estimators": SearchSpace(
                     name="n_estimators",
@@ -418,7 +509,7 @@ class HyperparameterOptimizer:
         return ExperimentConfig(
             project_name=f"{self.config.trial_project_prefix}_{self.config.study_name}",
             experiment_name=f"trial_{trial_number:04d}",
-            run_type="hyperparameter_optimization",
+            run_type="hyperparameter_trial",
             tags=["hpo", f"trial_{trial_number}"],
             hyperparameters=params,
             metadata={
@@ -524,14 +615,17 @@ class HyperparameterOptimizer:
         """
         Evaluate hyperparameters using real model training and evaluation.
 
-        This implementation is designed to integrate with the existing
-        PerformanceEvaluator for consistent model evaluation following DRY principles.
+        This implementation supports multiple evaluation types:
+        - Standard ML models (using PerformanceEvaluator)
+        - MetaModel optimization (using MetaModelTrainingPipeline)
+        - Strategy parameter optimization (using backtesting)
 
         The evaluation flow should be:
-        1. Create model with suggested hyperparameters
-        2. Train model using ModelTrainer
-        3. Evaluate using PerformanceEvaluator.evaluate_model()
-        4. Return primary metric (e.g., 'ic', 'r2', 'accuracy')
+        1. Determine evaluation type based on search space context
+        2. Create appropriate model/strategy with suggested hyperparameters
+        3. Train/execute using appropriate pipeline
+        4. Evaluate using appropriate evaluator
+        5. Return primary metric
 
         Args:
             params: Suggested hyperparameters
@@ -547,6 +641,138 @@ class HyperparameterOptimizer:
             "hyperparameters": params
         })
 
+        # Determine evaluation type based on search space
+        evaluation_type = self._determine_evaluation_type(params)
+
+        if evaluation_type == "metamodel":
+            return self._evaluate_metamodel_params(params, tracker, trial_number)
+        elif evaluation_type == "strategy":
+            return self._evaluate_strategy_params(params, tracker, trial_number)
+        else:
+            # Default ML model evaluation
+            return self._evaluate_ml_params(params, tracker, trial_number)
+
+    def _determine_evaluation_type(self, params: Dict[str, Any]) -> str:
+        """Determine evaluation type based on hyperparameters."""
+        if "method" in params and params.get("method") in ["equal", "lasso", "ridge"]:
+            return "metamodel"
+        elif any(param in params for param in ["lookback_period", "momentum_threshold", "rebalance_frequency"]):
+            return "strategy"
+        else:
+            return "ml"
+
+    def _evaluate_metamodel_params(self, params: Dict[str, Any], tracker: ExperimentTrackerInterface, trial_number: int) -> float:
+        """Evaluate MetaModel hyperparameters."""
+        try:
+            # Import MetaModel components here to avoid circular imports
+            from ...models.training.metamodel_config import MetaModelTrainingConfig
+            from ...models.training.metamodel_pipeline import MetaModelTrainingPipeline
+            from datetime import datetime
+
+            # Create MetaModel config with suggested parameters
+            config = MetaModelTrainingConfig(
+                method=params.get("method", "ridge"),
+                alpha=params.get("alpha", 1.0),
+                min_weight=params.get("min_weight", 0.0),
+                max_weight=params.get("max_weight", 1.0),
+                weight_sum_constraint=params.get("weight_sum_constraint", 1.0),
+                strategies=['DualMomentumStrategy', 'MLStrategy', 'FF5Strategy'],
+                start_date=datetime(2022, 1, 1),
+                end_date=datetime(2023, 12, 31),
+                data_source='synthetic',
+                use_cross_validation=False,  # Disable CV for faster optimization
+                experiment_name=f'hpo_metamodel_trial_{trial_number}'
+            )
+
+            # Create and run pipeline
+            pipeline = MetaModelTrainingPipeline(config, registry_path="./models/hpo")
+            result = pipeline.run_metamodel_pipeline(f"hpo_metamodel_{trial_number}")
+
+            # Extract validation metrics
+            metrics = result['training_results']['validation_metrics']
+            score = metrics.get('r2', 0.0)
+
+            # Log additional MetaModel-specific metrics
+            weight_analysis = result['performance_analysis']['weight_distribution']
+            additional_metrics = {
+                'effective_strategies': weight_analysis['effective_n'],
+                'weight_concentration': weight_analysis['max'],
+                'strategy_weights': result['model_weights']
+            }
+
+            tracker.log_metrics(additional_metrics)
+
+            logger.info(f"MetaModel trial {trial_number}: R² = {score:.4f}, Effective strategies = {weight_analysis['effective_n']:.2f}")
+
+            return score
+
+        except Exception as e:
+            logger.error(f"MetaModel evaluation failed for trial {trial_number}: {e}")
+            return 0.0
+
+    def _evaluate_strategy_params(self, params: Dict[str, Any], tracker: ExperimentTrackerInterface, trial_number: int) -> float:
+        """Evaluate trading strategy parameters."""
+        try:
+            # Import strategy components
+            from ...backtesting.backtest_engine import BacktestEngine
+            from ...strategies.dual_momentum_strategy import DualMomentumStrategy
+            from datetime import datetime
+
+            # Create strategy with suggested parameters
+            strategy_config = {
+                'lookback_period': params.get('lookback_period', 60),
+                'volatility_lookback': params.get('volatility_lookback', 20),
+                'momentum_threshold': params.get('momentum_threshold', 0.0),
+                'max_position_size': params.get('max_position_size', 0.1),
+                'stop_loss_threshold': params.get('stop_loss_threshold', 0.05),
+                'rebalance_frequency': params.get('rebalance_frequency', 'weekly'),
+                'rebalance_threshold': params.get('rebalance_threshold', 0.05)
+            }
+
+            strategy = DualMomentumStrategy(**strategy_config)
+
+            # Create backtest engine with short test period for speed
+            engine = BacktestEngine(
+                initial_capital=100000,
+                start_date=datetime(2023, 1, 1),
+                end_date=datetime(2023, 6, 30),  # 6 months for faster evaluation
+                commission=0.001,
+                slippage=0.0005
+            )
+
+            # Run backtest
+            universe = ['SPY', 'AAPL', 'MSFT', 'GOOGL', 'AMZN']
+            results = engine.run_backtest(strategy, universe)
+
+            # Calculate performance metrics
+            performance = results['performance_metrics']
+
+            # Primary metric: Sharpe ratio (annualized)
+            total_return = performance.get('total_return', 0)
+            volatility = performance.get('volatility', 0.01)
+            sharpe_ratio = (total_return / volatility) if volatility > 0 else 0
+
+            # Additional metrics for logging
+            additional_metrics = {
+                'total_return': total_return,
+                'volatility': volatility,
+                'max_drawdown': performance.get('max_drawdown', 0),
+                'win_rate': performance.get('win_rate', 0),
+                'num_trades': performance.get('num_trades', 0)
+            }
+
+            tracker.log_metrics(additional_metrics)
+
+            logger.info(f"Strategy trial {trial_number}: Sharpe = {sharpe_ratio:.3f}, Return = {total_return:.3f}")
+
+            return sharpe_ratio
+
+        except Exception as e:
+            logger.error(f"Strategy evaluation failed for trial {trial_number}: {e}")
+            return 0.0
+
+    def _evaluate_ml_params(self, params: Dict[str, Any], tracker: ExperimentTrackerInterface, trial_number: int) -> float:
+        """Evaluate standard ML model hyperparameters (original implementation)."""
         # In production implementation, this would be:
         # model = ModelFactory.create(self.model_type, config=params)
         # result = self.model_trainer.train(model, X_train, y_train, X_val, y_val)

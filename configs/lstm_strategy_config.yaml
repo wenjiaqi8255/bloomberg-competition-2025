@@ -68,11 +68,6 @@ strategy:
   model_id: placeholder_model_id  # Will be overwritten by orchestrator
   min_signal_strength: 0.1       # Minimum signal strength threshold
 
-  # Position sizing and risk management
-  position_sizing:
-    volatility_target: 0.15
-    max_position_weight: 0.10
-
 # Part 4: Backtesting Configuration
 # --------------------------------
 backtest:

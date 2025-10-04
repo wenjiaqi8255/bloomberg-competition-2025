@@ -26,6 +26,7 @@ dependencies = [
     "vulture (>=2.14,<3.0)",
     "psutil (>=7.1.0,<8.0.0)",
     "torch (>=2.0.0,<2.5.0)",
+    "pyarrow (>=21.0.0,<22.0.0)",
 ]
 
 [tool.poetry.group.dev.dependencies]

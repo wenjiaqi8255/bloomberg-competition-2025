@@ -427,8 +427,8 @@ class PerformanceReporter:
             'total_commission_usd': total_commission,
             'most_traded_symbol': most_traded_symbol,
             'unique_symbols': len(symbol_counts),
-            'buy_trades': len([t for t in trades if t.trade_type == 'buy']),
-            'sell_trades': len([t for t in trades if t.trade_type == 'sell'])
+            'buy_trades': len([t for t in trades if t.side == 'buy']),
+            'sell_trades': len([t for t in trades if t.side == 'sell'])
         }
 
     def _create_benchmark_comparison(self, metrics: ReportPerformanceMetrics, period_days: int) -> Dict[str, Any]:

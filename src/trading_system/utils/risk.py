@@ -13,8 +13,10 @@ Replaces:
 import logging
 import numpy as np
 import pandas as pd
+import statsmodels.api as sm
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from ..types import PortfolioSnapshot as Portfolio, Position
 
 logger = logging.getLogger(__name__)
@@ -624,3 +626,423 @@ class LedoitWolfCovarianceEstimator(CovarianceEstimator):
         # Annualize and return as a DataFrame
         shrunk_cov_annualized = shrunk_cov_daily * 252
         return pd.DataFrame(shrunk_cov_annualized, index=returns_df.columns, columns=returns_df.columns)
+
+
+class FactorModelCovarianceEstimator(CovarianceEstimator):
+    """
+    Covariance estimation using factor models.
+
+    Implements the Barra-style factor model:
+        Σ = B × F × B^T + D
+
+    Where:
+        B: Factor loading matrix (N × K)
+        F: Factor covariance matrix (K × K)
+        D: Specific risk diagonal matrix (N × N)
+
+    This reduces the number of parameters from O(N²) to O(N×K), where K is the number of factors.
+    """
+
+    def __init__(self, factor_data_provider, lookback_days: int = 252, min_regression_obs: int = 24):
+        """
+        Initialize factor model covariance estimator.
+
+        Args:
+            factor_data_provider: Provider for factor returns (e.g., FF5DataProvider)
+            lookback_days: Number of days to use for estimation
+            min_regression_obs: Minimum observations required for regression (reduced for monthly data)
+        """
+        self.factor_provider = factor_data_provider
+        self.lookback_days = lookback_days
+        self.min_regression_obs = min_regression_obs
+        self._factor_cache = {}  # Cache factor returns to avoid repeated fetches
+
+    def estimate(self, price_data: Dict[str, pd.DataFrame], date: datetime) -> pd.DataFrame:
+        """
+        Estimate covariance matrix using factor model.
+
+        Args:
+            price_data: Dictionary of historical price data for multiple symbols
+            date: The date as of which to perform the estimation
+
+        Returns:
+            A pandas DataFrame representing the annualized N × N covariance matrix
+        """
+        try:
+            # Step 1: Get returns matrix. Factor models require a longer lookback.
+            # We use 3 years of daily data to ensure enough monthly observations for regression.
+            factor_model_lookback_days = 3 * 252
+            returns_df = self._get_returns_matrix(price_data, date, factor_model_lookback_days)
+
+            if returns_df.empty or len(returns_df) < self.min_regression_obs:
+                logger.warning(f"Insufficient data for factor model: {len(returns_df)} observations")
+                return pd.DataFrame()
+
+            # Step 2: Get factor returns data
+            factor_returns = self._get_factor_returns(date)
+
+            if factor_returns.empty:
+                logger.warning("No factor returns available, falling back to simple covariance")
+                simple_estimator = SimpleCovarianceEstimator(self.lookback_days)
+                return simple_estimator.estimate(price_data, date)
+
+            # Step 3: Forward fill factor returns to daily frequency
+            # FF5 provides monthly data at month start, we forward fill to daily
+            aligned_data = self._align_daily_data(returns_df, factor_returns)
+            aligned_returns = aligned_data['stock_returns']
+            aligned_factors = aligned_data['factor_returns']
+
+            # Step 5: Estimate factor loadings (Betas) for each stock
+            factor_loadings, specific_risks = self._estimate_factor_loadings(
+                aligned_returns, aligned_factors
+            )
+
+            if not factor_loadings:
+                logger.warning("Failed to estimate factor loadings")
+                return pd.DataFrame()
+
+            # Save factor loadings and specific risks for later access
+            self._last_factor_loadings = factor_loadings
+            self._last_specific_risks = specific_risks
+
+            # Step 6: Build factor covariance matrix (F)
+            factor_cov_matrix = self._estimate_factor_covariance(aligned_factors)
+
+            # Step 7: Build final covariance matrix: Σ = B × F × B^T + D
+            cov_matrix = self._build_final_covariance_matrix(
+                factor_loadings, specific_risks, factor_cov_matrix,
+                list(returns_df.columns)
+            )
+
+            logger.debug(f"Factor model covariance estimated successfully for {len(returns_df.columns)} assets")
+            return cov_matrix
+
+        except Exception as e:
+            logger.error(f"Factor model covariance estimation failed: {e}", exc_info=True)
+            # Fallback to simple covariance
+            logger.info("Falling back to simple covariance estimation")
+            simple_estimator = SimpleCovarianceEstimator(self.lookback_days)
+            return simple_estimator.estimate(price_data, date)
+
+    def _get_factor_returns(self, date: datetime) -> pd.DataFrame:
+        """
+        Get factor returns data with caching.
+
+        Args:
+            date: Estimation date
+
+        Returns:
+            DataFrame with factor returns
+        """
+        cache_key = date.strftime('%Y-%m')
+
+        if cache_key not in self._factor_cache:
+            try:
+                # Use longer window for monthly data (5 years for sufficient observations)
+                start_date = date - timedelta(days=5*365)
+
+                factor_data = self.factor_provider.get_factor_returns(
+                    start_date=start_date,
+                    end_date=date
+                )
+
+                if factor_data is not None and not factor_data.empty:
+                    # Ensure we have the required FF5 factors
+                    required_factors = ['MKT', 'SMB', 'HML', 'RMW', 'CMA']
+                    available_factors = [f for f in required_factors if f in factor_data.columns]
+
+                    if len(available_factors) >= 3:  # At least 3 factors needed
+                        self._factor_cache[cache_key] = factor_data[available_factors]
+                        logger.debug(f"Cached factor returns for {cache_key}: {len(available_factors)} factors")
+                    else:
+                        logger.warning(f"Insufficient factors available: {available_factors}")
+                        return pd.DataFrame()
+                else:
+                    logger.warning("No factor data returned from provider")
+                    return pd.DataFrame()
+
+            except Exception as e:
+                logger.error(f"Failed to fetch factor returns: {e}")
+                return pd.DataFrame()
+
+        return self._factor_cache[cache_key].copy()
+
+    def _align_daily_data(self, stock_returns: pd.DataFrame, factor_returns: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+        """
+        Align daily stock returns with monthly factor returns using forward fill.
+
+        FF5 factor data is monthly (at month start). We forward fill to daily frequency
+        to maintain the daily resolution of stock returns.
+
+        Args:
+            stock_returns: Daily stock returns DataFrame
+            factor_returns: Monthly factor returns DataFrame
+
+        Returns:
+            Dictionary with aligned daily data
+        """
+        # Create a daily date range covering the stock returns period
+        start_date = stock_returns.index.min()
+        end_date = stock_returns.index.max()
+        daily_dates = pd.date_range(start=start_date, end=end_date, freq='D')
+
+        # Filter to trading days (weekdays) - stock returns are already on trading days
+        trading_days = stock_returns.index
+
+        # Reindex factor returns to daily frequency and forward fill
+        # First, ensure factor data covers the required range
+        factor_start = factor_returns.index.min()
+        factor_end = factor_returns.index.max()
+
+        if factor_start > start_date:
+            logger.warning(f"Factor data starts after stock data: {factor_start} vs {start_date}")
+
+        if factor_end < end_date:
+            logger.warning(f"Factor data ends before stock data: {factor_end} vs {end_date}")
+
+        # Forward fill factor returns to daily frequency
+        daily_factors = factor_returns.reindex(trading_days, method='ffill')
+
+        # Find valid dates where both stock and factor data are available
+        valid_dates = stock_returns.index.intersection(daily_factors.dropna().index)
+
+        if len(valid_dates) < self.min_regression_obs:
+            logger.warning(f"Insufficient aligned daily observations: {len(valid_dates)}")
+            return {'stock_returns': pd.DataFrame(), 'factor_returns': pd.DataFrame()}
+
+        # Align the data
+        aligned_stocks = stock_returns.loc[valid_dates]
+        aligned_factors = daily_factors.loc[valid_dates]
+
+        # Remove any remaining rows with NaN values
+        valid_mask = ~(aligned_stocks.isna().any(axis=1) | aligned_factors.isna().any(axis=1))
+
+        if valid_mask.sum() < self.min_regression_obs:
+            logger.warning(f"Insufficient valid observations after NaN removal: {valid_mask.sum()}")
+            return {'stock_returns': pd.DataFrame(), 'factor_returns': pd.DataFrame()}
+
+        logger.info(f"Aligned {len(valid_dates)} daily observations with forward-filled factor data")
+
+        return {
+            'stock_returns': aligned_stocks[valid_mask],
+            'factor_returns': aligned_factors[valid_mask]
+        }
+
+    def _align_data(self, stock_returns: pd.DataFrame, factor_returns: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+        """
+        Legacy method for monthly alignment. Kept for backward compatibility.
+        """
+        # For FF5 monthly data, the date represents the start of the month
+        # We need to shift it to month-end to align with stock monthly returns
+        factor_returns_aligned = factor_returns.copy()
+        factor_returns_aligned.index = factor_returns_aligned.index + pd.offsets.MonthEnd(1)
+
+        # Find common dates
+        common_dates = stock_returns.index.intersection(factor_returns_aligned.index)
+
+        if len(common_dates) < self.min_regression_obs:
+            logger.warning(f"Insufficient aligned dates: {len(common_dates)}")
+            return {'stock_returns': pd.DataFrame(), 'factor_returns': pd.DataFrame()}
+
+        aligned_stocks = stock_returns.loc[common_dates]
+        aligned_factors = factor_returns_aligned.loc[common_dates]
+
+        # Remove any rows with NaN values
+        valid_mask = ~(aligned_stocks.isna().any(axis=1) | aligned_factors.isna().any(axis=1))
+
+        if valid_mask.sum() < self.min_regression_obs:
+            logger.warning(f"Insufficient valid observations after NaN removal: {valid_mask.sum()}")
+            return {'stock_returns': pd.DataFrame(), 'factor_returns': pd.DataFrame()}
+
+        return {
+            'stock_returns': aligned_stocks[valid_mask],
+            'factor_returns': aligned_factors[valid_mask]
+        }
+
+    def _estimate_factor_loadings(self, stock_returns: pd.DataFrame, factor_returns: pd.DataFrame) -> Tuple[Dict, Dict]:
+        """
+        Estimate factor loadings (betas) for each stock using OLS regression.
+
+        Model: R_i = α + β₁·MKT + β₂·SMB + β₃·HML + β₄·RMW + β₅·CMA + ε
+
+        Args:
+            stock_returns: Stock returns DataFrame (T × N)
+            factor_returns: Factor returns DataFrame (T × K)
+
+        Returns:
+            Tuple of (factor_loadings_dict, specific_risks_dict)
+        """
+        from sklearn.linear_model import LinearRegression
+
+        factor_loadings = {}
+        specific_risks = {}
+
+        factors_matrix = factor_returns.values
+        factor_names = factor_returns.columns.tolist()
+
+        for symbol in stock_returns.columns:
+            stock_series = stock_returns[symbol].dropna()
+
+            # Skip if insufficient data
+            if len(stock_series) < self.min_regression_obs:
+                logger.warning(f"Insufficient data for {symbol}: {len(stock_series)} observations")
+                continue
+
+            try:
+                # Align stock returns with factor returns
+                common_dates = stock_series.index.intersection(factor_returns.index)
+                if len(common_dates) < self.min_regression_obs:
+                    continue
+
+                y = stock_series.loc[common_dates].values
+                X = factor_returns.loc[common_dates].values
+
+                # OLS regression
+                reg = LinearRegression(fit_intercept=True)
+                reg.fit(X, y)
+
+                # Store factor loadings (betas)
+                betas = reg.coef_.tolist()
+                factor_loadings[symbol] = dict(zip(factor_names, betas))
+
+                # Calculate specific risk (residual variance)
+                y_pred = reg.predict(X)
+                residuals = y - y_pred
+                specific_variance = np.var(residuals, ddof=1)  # Unbiased estimator
+
+                # Annualize specific variance from daily data
+                specific_risks[symbol] = specific_variance * 252
+
+            except Exception as e:
+                logger.warning(f"Failed to estimate factor loadings for {symbol}: {e}")
+                continue
+
+        return factor_loadings, specific_risks
+
+    def _estimate_factor_covariance(self, factor_returns: pd.DataFrame) -> pd.DataFrame:
+        """
+        Estimate factor covariance matrix from historical factor returns.
+
+        Args:
+            factor_returns: Factor returns DataFrame (T × K)
+
+        Returns:
+            Factor covariance matrix (K × K)
+        """
+        # Sample covariance of factor returns, annualized from daily data
+        factor_cov = factor_returns.cov() * 252
+
+        # Apply Ledoit-Wolf shrinkage to factor covariance for stability
+        try:
+            from sklearn.covariance import LedoitWolf
+            lw = LedoitWolf()
+            shrunk_cov_daily = lw.fit(factor_returns.dropna()).covariance_
+            shrunk_cov_annualized = shrunk_cov_daily * 252
+            return pd.DataFrame(shrunk_cov_annualized,
+                             index=factor_cov.index,
+                             columns=factor_cov.columns)
+        except Exception as e:
+            logger.warning(f"Factor covariance shrinkage failed: {e}, using sample covariance")
+            return factor_cov
+
+    def _build_final_covariance_matrix(self, factor_loadings: Dict, specific_risks: Dict,
+                                     factor_cov_matrix: pd.DataFrame, symbols: List[str]) -> pd.DataFrame:
+        """
+        Build the final covariance matrix: Σ = B × F × B^T + D
+
+        Args:
+            factor_loadings: Dictionary of factor loadings for each symbol
+            specific_risks: Dictionary of specific variances for each symbol
+            factor_cov_matrix: Factor covariance matrix (K × K)
+            symbols: List of all symbols
+
+        Returns:
+            Final covariance matrix (N × N)
+        """
+        n_assets = len(symbols)
+        cov_matrix = np.zeros((n_assets, n_assets))
+
+        # Get factor names and create loading matrix B (N × K)
+        factor_names = list(factor_cov_matrix.columns)
+        n_factors = len(factor_names)
+
+        # Build factor loading matrix B
+        B = np.zeros((n_assets, n_factors))
+        D = np.zeros(n_assets)  # Specific risks diagonal
+
+        for i, symbol in enumerate(symbols):
+            if symbol in factor_loadings:
+                # Extract betas in the correct order
+                betas = [factor_loadings[symbol].get(factor, 0.0) for factor in factor_names]
+                B[i, :] = betas
+                D[i] = specific_risks.get(symbol, 0.01)  # Default specific risk
+            else:
+                # If no factor loadings available, use high specific risk
+                D[i] = 0.04  # 20% annual specific volatility (0.2²)
+
+        try:
+            # Compute B × F × B^T
+            systematic_cov = B @ factor_cov_matrix.values @ B.T
+
+            # Add specific risk diagonal matrix
+            cov_matrix = systematic_cov + np.diag(D)
+
+            # Ensure matrix is symmetric positive definite
+            cov_matrix = self._ensure_positive_definite(cov_matrix)
+
+            return pd.DataFrame(cov_matrix, index=symbols, columns=symbols)
+
+        except Exception as e:
+            logger.error(f"Failed to build final covariance matrix: {e}")
+            # Return diagonal matrix as fallback
+            return pd.DataFrame(np.diag(D), index=symbols, columns=symbols)
+
+    def _ensure_positive_definite(self, matrix: np.ndarray, min_eigenvalue: float = 1e-8) -> np.ndarray:
+        """
+        Ensure the covariance matrix is positive definite.
+
+        Args:
+            matrix: Input matrix
+            min_eigenvalue: Minimum eigenvalue allowed
+
+        Returns:
+            Positive definite matrix
+        """
+        try:
+            # Check eigenvalues
+            eigenvalues = np.linalg.eigvals(matrix)
+
+            if np.all(eigenvalues > min_eigenvalue):
+                return matrix
+
+            # Apply regularization if needed
+            n = matrix.shape[0]
+            regularization = min_eigenvalue * np.eye(n)
+            return matrix + regularization
+
+        except Exception as e:
+            logger.warning(f"Eigenvalue check failed: {e}, applying strong regularization")
+            n = matrix.shape[0]
+            return matrix + 0.01 * np.eye(n)
+
+    def get_factor_loadings(self) -> pd.DataFrame:
+        """
+        Get the estimated factor loadings matrix.
+
+        Returns:
+            DataFrame of factor loadings (assets × factors)
+        """
+        if hasattr(self, '_last_factor_loadings'):
+            return pd.DataFrame(self._last_factor_loadings).T
+        return pd.DataFrame()
+
+    def get_specific_risks(self) -> pd.Series:
+        """
+        Get the estimated specific risks vector.
+
+        Returns:
+            Series of specific variances for each asset
+        """
+        if hasattr(self, '_last_specific_risks'):
+            return pd.Series(self._last_specific_risks)
+        return pd.Series()
