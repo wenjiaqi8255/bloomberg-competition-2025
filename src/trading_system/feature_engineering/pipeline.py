@@ -25,6 +25,7 @@ from .models.data_types import FeatureConfig
 from .utils.technical_features import TechnicalIndicatorCalculator
 from .cache_provider import FeatureCacheProvider
 from .local_cache_provider import LocalCacheProvider
+from .utils.cross_sectional_features import CrossSectionalFeatureCalculator
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,8 @@ class FeatureEngineeringPipeline:
     """
 
     def __init__(self, config: FeatureConfig, feature_cache: Optional[FeatureCacheProvider] = None,
-                 auto_cleanup_cache: bool = True):
+                 auto_cleanup_cache: bool = True,
+                 cross_sectional_calculator: Optional[CrossSectionalFeatureCalculator] = None):
         """
         Initialize the pipeline with a feature configuration.
 
@@ -43,6 +45,8 @@ class FeatureEngineeringPipeline:
             config: A FeatureConfig object detailing which features to compute.
             feature_cache: Optional cache provider for feature caching
             auto_cleanup_cache: Whether to automatically clean invalid cache on init
+            cross_sectional_calculator: Optional calculator for cross-sectional features
+                                       (used for Fama-MacBeth and other panel data methods)
         """
         self.config = config
         self.scalers: Dict[str, StandardScaler] = {}
@@ -50,6 +54,21 @@ class FeatureEngineeringPipeline:
 
         # 使用提供的缓存，或创建默认的本地缓存
         self.feature_cache = feature_cache or LocalCacheProvider()
+
+        # Cross-sectional feature calculator (optional, for Fama-MacBeth)
+        if cross_sectional_calculator is not None:
+            self.cross_sectional_calculator = cross_sectional_calculator
+        elif hasattr(config, 'include_cross_sectional') and config.include_cross_sectional:
+            # Auto-create calculator if config requests cross-sectional features
+            lookback = getattr(config, 'cross_sectional_lookback', None)
+            winsorize = getattr(config, 'winsorize_percentile', 0.01)
+            self.cross_sectional_calculator = CrossSectionalFeatureCalculator(
+                lookback_periods=lookback,
+                winsorize_percentile=winsorize
+            )
+            logger.info("Auto-created CrossSectionalFeatureCalculator from config")
+        else:
+            self.cross_sectional_calculator = None
 
         # 定义哪些特征是"慢变"的，需要缓存
         # 注意：这些名称必须与technical_features.py中实际生成的特征名称完全匹配
@@ -71,7 +90,8 @@ class FeatureEngineeringPipeline:
             except Exception as e:
                 logger.warning(f"Failed to auto-clean cache: {e}")
 
-        logger.info(f"Initialized pipeline with {self.feature_cache.__class__.__name__}")
+        logger.info(f"Initialized pipeline with {self.feature_cache.__class__.__name__}, "
+                   f"cross_sectional={'enabled' if self.cross_sectional_calculator else 'disabled'}")
 
     def fit(self, data: Dict[str, pd.DataFrame]):
         """
@@ -125,17 +145,34 @@ class FeatureEngineeringPipeline:
         calculator = TechnicalIndicatorCalculator()
         features = self._compute_all_features(price_data, calculator)
 
-        # Step 2: Apply NaN handling strategies
-        logger.info("Applying NaN handling strategies...")
-        features = self._handle_nan_values(features)
+        # Step 2: Apply NaN handling strategies (only if we have features)
+        if not features.empty:
+            logger.info("Applying NaN handling strategies...")
+            features = self._handle_nan_values(features)
+        else:
+            logger.info("No technical features computed, skipping NaN handling")
 
-        # Step 3: Add factor data if available
+        # Step 3: Add cross-sectional features if enabled
+        if self.cross_sectional_calculator is not None:
+            logger.info("Computing cross-sectional features...")
+            cross_sectional_features = self._compute_cross_sectional_features_for_panel(price_data)
+            if not cross_sectional_features.empty:
+                if features.empty:
+                    # If no technical features, use cross-sectional features directly
+                    features = cross_sectional_features
+                    logger.info(f"Using {len(cross_sectional_features.columns)} cross-sectional features only")
+                else:
+                    # Merge cross-sectional features with existing features
+                    features = self._merge_cross_sectional_features(features, cross_sectional_features)
+                    logger.info(f"Added {len(cross_sectional_features.columns)} cross-sectional features")
+
+        # Step 4: Add factor data if available
         if 'factor_data' in data and data['factor_data'] is not None:
             logger.info("Merging factor data with features...")
             factor_data = data['factor_data']
             features = self._merge_factor_data(features, factor_data)
 
-        # Step 4: Apply scaling if the pipeline is already fitted
+        # Step 5: Apply scaling if the pipeline is already fitted
         if self._is_fitted and not is_fitting:
             logger.debug("Applying learned scaling to features...")
             for col, scaler in self.scalers.items():
@@ -145,7 +182,7 @@ class FeatureEngineeringPipeline:
                 else:
                     logger.warning(f"Scaled column '{col}' not found during transform.")
 
-        # Step 5: Add more feature steps here in the future (e.g., PCA, feature selection)
+        # Step 6: Add more feature steps here in the future (e.g., PCA, feature selection)
 
         return features
 
@@ -599,7 +636,22 @@ class FeatureEngineeringPipeline:
                 problematic_indices = [(idx, count) for idx, count in index_counter.items() if count > 1]
                 logger.error(f"ERROR: Problematic indices: {problematic_indices[:5]}")
 
-            combined_features = pd.concat(all_features, axis=0)
+                # Fix duplicates by dropping duplicates before concat
+                logger.info("Fixing duplicate indices by dropping duplicates within each DataFrame...")
+                cleaned_features = []
+                for i, df in enumerate(all_features):
+                    original_len = len(df)
+                    df_cleaned = df[~df.index.duplicated(keep='first')]
+                    cleaned_len = len(df_cleaned)
+                    if original_len != cleaned_len:
+                        logger.info(f"DataFrame {i}: Removed {original_len - cleaned_len} duplicate indices")
+                    cleaned_features.append(df_cleaned)
+
+                logger.info("Attempting concat after cleaning duplicates...")
+                combined_features = pd.concat(cleaned_features, axis=0)
+                logger.info("Successfully concatenated after cleaning duplicates")
+            else:
+                combined_features = pd.concat(all_features, axis=0)
             combined_features.sort_index(inplace=True)
 
             # Remove duplicate columns (can happen during concatenation)
@@ -1058,3 +1110,117 @@ class FeatureEngineeringPipeline:
             logger.warning(f"Failed to compute {feature_name} for {symbol}: {e}")
 
         return None
+
+    def _compute_cross_sectional_features_for_panel(
+        self,
+        price_data: Dict[str, pd.DataFrame]
+    ) -> pd.DataFrame:
+        """
+        Compute cross-sectional features for panel data.
+        
+        This method calculates features that vary across stocks at each point in time,
+        which are essential for Fama-MacBeth regression and other cross-sectional methods.
+        
+        Args:
+            price_data: Dictionary mapping symbols to OHLCV DataFrames
+        
+        Returns:
+            DataFrame with MultiIndex(symbol, date) containing cross-sectional features
+        """
+        if self.cross_sectional_calculator is None:
+            return pd.DataFrame()
+        
+        # Get all unique dates across all symbols
+        all_dates = set()
+        for symbol, data in price_data.items():
+            all_dates.update(data.index.tolist())
+        
+        all_dates = sorted(list(all_dates))
+        
+        # Determine which features to calculate
+        feature_names = None
+        if hasattr(self.config, 'cross_sectional_features'):
+            feature_names = self.config.cross_sectional_features
+        
+        # Calculate panel features (all dates at once)
+        logger.info(f"Computing cross-sectional features for {len(all_dates)} dates, "
+                   f"{len(price_data)} symbols")
+        
+        try:
+            panel_features = self.cross_sectional_calculator.calculate_panel_features(
+                price_data=price_data,
+                dates=all_dates,
+                feature_names=feature_names
+            )
+            
+            # Convert from (date, symbol) to (symbol, date) MultiIndex
+            if not panel_features.empty and isinstance(panel_features.index, pd.MultiIndex):
+                # Swap levels to match main features format
+                panel_features = panel_features.swaplevel(0, 1).sort_index()
+                logger.info(f"Computed {len(panel_features.columns)} cross-sectional features")
+            
+            return panel_features
+            
+        except Exception as e:
+            logger.error(f"Failed to compute cross-sectional features: {e}")
+            return pd.DataFrame()
+    
+    def _merge_cross_sectional_features(
+        self,
+        features: pd.DataFrame,
+        cross_sectional_features: pd.DataFrame
+    ) -> pd.DataFrame:
+        """
+        Merge cross-sectional features with existing technical features.
+        
+        Both DataFrames should have MultiIndex(symbol, date).
+        
+        Args:
+            features: Main feature DataFrame
+            cross_sectional_features: Cross-sectional feature DataFrame
+        
+        Returns:
+            Merged DataFrame with all features
+        """
+        if cross_sectional_features.empty:
+            return features
+        
+        try:
+            # Ensure both have the same index structure
+            if not isinstance(features.index, pd.MultiIndex):
+                logger.warning("Main features don't have MultiIndex, cannot merge cross-sectional features")
+                return features
+            
+            if not isinstance(cross_sectional_features.index, pd.MultiIndex):
+                logger.warning("Cross-sectional features don't have MultiIndex, cannot merge")
+                return features
+            
+            # Find common indices
+            common_index = features.index.intersection(cross_sectional_features.index)
+            
+            if len(common_index) == 0:
+                logger.warning("No common indices between features and cross-sectional features")
+                return features
+            
+            logger.info(f"Merging cross-sectional features: {len(common_index)} common observations")
+            
+            # Align data to common index
+            features_aligned = features.loc[common_index]
+            cross_aligned = cross_sectional_features.loc[common_index]
+            
+            # Concatenate along columns
+            merged = pd.concat([features_aligned, cross_aligned], axis=1)
+            
+            # Remove duplicate columns if any
+            if merged.columns.duplicated().any():
+                logger.warning("Duplicate columns detected, keeping first occurrence")
+                merged = merged.loc[:, ~merged.columns.duplicated()]
+            
+            logger.info(f"Merged features shape: {merged.shape} "
+                       f"(original: {features.shape}, added: {cross_sectional_features.shape})")
+            
+            return merged
+            
+        except Exception as e:
+            logger.error(f"Error merging cross-sectional features: {e}")
+            return features

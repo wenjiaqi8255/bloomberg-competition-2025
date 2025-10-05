@@ -230,11 +230,11 @@ class StrategyFactory:
             )
             
         elif strategy_type in ['fama_french_5']:
-            # Fama-French: features to construct factor proxies
+            # Fama-French: NO technical features needed!
+            # FF5 model uses factor data directly, not technical indicators
+            logger.info("FF5 Strategy: Using minimal feature config (factors come from factor data provider)")
             feature_config = FeatureConfig(
-                enabled_features=['momentum', 'volatility', 'volume'],
-                momentum_periods=[21, 252],
-                volatility_windows=[60, 252],
+                enabled_features=[],  # No technical features for FF5
                 include_technical=False
             )
             

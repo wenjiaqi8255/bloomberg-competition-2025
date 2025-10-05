@@ -158,13 +158,20 @@ class ModelPredictor:
 
         try:
             # Debug: Log model type and features before prediction
-            logger.debug(f"Current model type: {getattr(self._current_model, 'model_type', 'No model_type attribute')}")
-            logger.debug(f"Features shape={features.shape}, columns={features.columns.tolist()}")
+            logger.info(f"🔍 ModelPredictor.predict() starting for {symbol}")
+            logger.info(f"Current model type: {getattr(self._current_model, 'model_type', 'No model_type attribute')}")
+            logger.info(f"Current model ID: {self._current_model_id}")
+            logger.info(f"Model class: {type(self._current_model)}")
+            logger.info(f"Model trained: {getattr(self._current_model, 'is_trained', 'Unknown')}")
+            logger.info(f"Features shape={features.shape}, columns={features.columns.tolist()}")
             if len(features) > 0:
-                logger.debug(f"Features sample: {features.iloc[-1].to_dict()}")
+                logger.info(f"Features sample: {features.iloc[-1].to_dict()}")
+                logger.info(f"Features non-zero count: {(features.iloc[-1] != 0).sum()}")
 
             # Make prediction
+            logger.info(f"Calling model.predict() for {symbol} on {prediction_date}")
             prediction = self._current_model.predict(features)
+            logger.info(f"Raw prediction result: {prediction} (type: {type(prediction)})")
 
             # Handle different prediction formats
             if isinstance(prediction, np.ndarray):

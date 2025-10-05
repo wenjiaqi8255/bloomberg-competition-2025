@@ -166,6 +166,13 @@ class FF5RegressionModel(BaseModel):
         Raises:
             ValueError: If model is not trained or data is invalid
         """
+        logger.info(f"🔍 FF5RegressionModel.predict() starting")
+        logger.info(f"Model status: {self.status}")
+        logger.info(f"Expected features: {self._expected_features}")
+        logger.info(f"Input columns: {list(X.columns)}")
+        logger.info(f"Input shape: {X.shape}")
+        logger.info(f"Input sample: {X.iloc[-1].to_dict() if not X.empty else 'Empty'}")
+
         if self.status != ModelStatus.TRAINED:
             raise ValueError("Model must be trained before making predictions")
 
@@ -176,27 +183,43 @@ class FF5RegressionModel(BaseModel):
             # Check for required factor columns
             missing_factors = set(self._expected_features) - set(X.columns)
             if missing_factors:
+                logger.error(f"❌ Missing required factor columns: {missing_factors}")
+                logger.error(f"❌ Available columns: {list(X.columns)}")
+                logger.error(f"❌ Expected columns: {self._expected_features}")
                 raise ValueError(f"Missing required factor columns: {missing_factors}")
 
             # Use only expected factor columns in correct order
             X_pred = X[self._expected_features].copy()
+            logger.info(f"Using factor columns: {list(X_pred.columns)}")
+            logger.info(f"Factor data sample: {X_pred.iloc[-1].to_dict() if not X_pred.empty else 'Empty'}")
 
             # Standardize if scaler was fitted during training
             if self.standardize and self._scaler is not None:
+                logger.info(f"Applying standardization with scaler: {type(self._scaler)}")
                 X_pred = pd.DataFrame(
                     self._scaler.transform(X_pred),
                     index=X_pred.index,
                     columns=X_pred.columns
                 )
+                logger.info(f"Standardized data sample: {X_pred.iloc[-1].to_dict() if not X_pred.empty else 'Empty'}")
 
             # Make predictions
+            logger.info(f"Calling underlying model.predict()")
+            logger.info(f"Model type: {type(self._model)}")
             predictions = self._model.predict(X_pred)
+            logger.info(f"Raw model predictions: {predictions} (type: {type(predictions)}, shape: {getattr(predictions, 'shape', 'N/A')})")
 
-            logger.debug(f"Made predictions for {len(predictions)} samples")
+            if isinstance(predictions, np.ndarray):
+                logger.info(f"Prediction stats: min={predictions.min():.6f}, max={predictions.max():.6f}, mean={predictions.mean():.6f}, std={predictions.std():.6f}")
+                logger.info(f"Zero predictions count: {(predictions == 0).sum()}/{len(predictions)}")
+
+            logger.info(f"Made predictions for {len(predictions)} samples")
             return predictions
 
         except Exception as e:
             logger.error(f"Failed to make predictions: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             raise
 
     def get_feature_importance(self) -> Dict[str, float]:

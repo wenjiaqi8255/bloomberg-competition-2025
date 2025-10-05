@@ -72,3 +72,8 @@ allocation:
 compliance:
   max_single_position_weight: 0.15
   max_sector_allocation: 0.30
+
+# 7. 系统级 卖空控制
+system:
+  enable_short_selling: false  # 系统级 卖空开关 (默认禁用)
+  max_leverage: 1.0           # 最大杠杆倍数

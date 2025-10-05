@@ -20,6 +20,7 @@ from .base.base_model import BaseModel, ModelStatus, ModelMetadata
 from .base.model_factory import ModelFactory
 from .implementations.ff5_model import FF5RegressionModel
 from .implementations.momentum_model import MomentumRankingModel
+from .implementations.fama_macbeth_model import FamaMacBethModel
 
 # Export main interfaces
 __all__ = [
@@ -31,6 +32,7 @@ __all__ = [
     # Model implementations (always available)
     'FF5RegressionModel',
     'MomentumRankingModel',
+    'FamaMacBethModel',
 
     # Factory and registry
     'ModelFactory',

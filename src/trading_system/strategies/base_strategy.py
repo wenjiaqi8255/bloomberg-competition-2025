@@ -69,7 +69,7 @@ class BaseStrategy(ABC):
                  **kwargs):
         """
         Initialize unified strategy.
-        
+
         Args:
             name: Strategy identifier
             feature_pipeline: Fitted FeatureEngineeringPipeline
@@ -80,18 +80,26 @@ class BaseStrategy(ABC):
         self.feature_pipeline = feature_pipeline
         self.model_predictor = model_predictor
         self.parameters = kwargs
-        
+
+        # Data providers (if provided)
+        self.data_provider = kwargs.get('data_provider')
+        self.factor_data_provider = kwargs.get('factor_data_provider')
+
+        # Short selling control (default to long-only for safety)
+        self.enable_short_selling = kwargs.get('enable_short_selling', False)
+
         # Signal tracking and diagnostics
         self._last_signals = None
         self._last_price_data = None
         self._last_signal_quality = None
         self._last_position_metrics = None
         self._signal_generation_count = 0
-        
+
         # Validate components
         self._validate_components()
-        
+
         logger.info(f"Initialized {self.__class__.__name__} '{name}' with unified architecture")
+        logger.info(f"Strategy '{name}' short selling: {'enabled' if self.enable_short_selling else 'disabled'}")
     
     def _validate_components(self):
         """Validate that all required components are provided."""
@@ -149,9 +157,13 @@ class BaseStrategy(ABC):
             # Step 3: Evaluate signal quality (NEW)
             logger.debug(f"[{self.name}] Step 3: Evaluating signal quality...")
             self._evaluate_and_cache_signals(predictions, price_data)
-            
-            logger.info(f"[{self.name}] Generated signals for {len(predictions.columns)} assets")
-            return predictions
+
+            # Step 4: Apply short selling restrictions if configured
+            logger.debug(f"[{self.name}] Step 4: Applying short selling restrictions...")
+            filtered_predictions = self._apply_short_selling_restrictions(predictions)
+
+            logger.info(f"[{self.name}] Generated signals for {len(filtered_predictions.columns)} assets")
+            return filtered_predictions
             
         except Exception as e:
             logger.error(f"[{self.name}] Signal generation failed: {e}", exc_info=True)
@@ -208,11 +220,23 @@ class BaseStrategy(ABC):
         """
         try:
             logger.info(f"[{self.name}] 🔍 _get_predictions started")
-            logger.info(f"[{self.name}] Features shape: {features.shape}, columns: {list(features.columns[:5])}...")
+            logger.info(f"[{self.name}] Features shape: {features.shape}, columns: {list(features.columns[:10])}...")
             logger.info(f"[{self.name}] Price data keys: {list(price_data.keys())}")
+            logger.info(f"[{self.name}] Date range: {start_date} to {end_date}")
+            logger.info(f"[{self.name}] Model predictor type: {type(self.model_predictor)}")
+
+            # Log model info if available
+            if hasattr(self.model_predictor, 'model') and self.model_predictor.model:
+                logger.info(f"[{self.name}] Model type: {type(self.model_predictor.model)}")
+                logger.info(f"[{self.name}] Model status: {getattr(self.model_predictor.model, 'status', 'Unknown')}")
+                if hasattr(self.model_predictor.model, 'is_trained'):
+                    logger.info(f"[{self.name}] Model trained: {self.model_predictor.model.is_trained}")
+            else:
+                logger.warning(f"[{self.name}] ⚠️ No model available in predictor")
 
             # Create date range for predictions
             dates = pd.date_range(start=start_date, end=end_date, freq='D')
+            logger.info(f"[{self.name}] Prediction dates count: {len(dates)}")
             predictions_dict = {}
             symbols_processed = 0
 
@@ -235,6 +259,9 @@ class BaseStrategy(ABC):
                     try:
                         # Get prediction from model for this specific date
                         logger.debug(f"[{self.name}] Getting prediction for {symbol} on {date}")
+                        logger.debug(f"[{self.name}] Symbol features shape: {symbol_features.shape}, columns: {list(symbol_features.columns)}")
+                        logger.debug(f"[{self.name}] Symbol features sample: {symbol_features.iloc[-1].to_dict() if not symbol_features.empty else 'Empty'}")
+
                         result = self.model_predictor.predict(
                             features=symbol_features,
                             symbol=symbol,
@@ -242,8 +269,16 @@ class BaseStrategy(ABC):
                         )
                         logger.debug(f"[{self.name}] Model prediction result for {symbol} on {date}: {result}")
 
-                        # Extract prediction value
+                        # Extract prediction value with more detailed logging
                         prediction_value = result.get('prediction', 0.0)
+                        logger.debug(f"[{self.name}] Extracted prediction value: {prediction_value}")
+
+                        # Additional debugging for zero predictions
+                        if abs(prediction_value) < 1e-10:
+                            logger.warning(f"[{self.name}] ⚠️ Zero prediction for {symbol} on {date}")
+                            logger.warning(f"[{self.name}] Model result keys: {list(result.keys())}")
+                            logger.warning(f"[{self.name}] Model result full: {result}")
+
                         symbol_predictions.append(prediction_value)
 
                     except Exception as e:
@@ -290,11 +325,11 @@ class BaseStrategy(ABC):
     def _extract_symbol_features(self, features: pd.DataFrame, symbol: str) -> pd.DataFrame:
         """
         Extract features for a specific symbol.
-        
+
         Args:
             features: Full feature DataFrame
             symbol: Symbol to extract
-        
+
         Returns:
             Features for the symbol
         """
@@ -307,6 +342,56 @@ class BaseStrategy(ABC):
 
         # Fallback: return all features (assume single symbol)
         return features
+
+    def _apply_short_selling_restrictions(self, predictions: pd.DataFrame) -> pd.DataFrame:
+        """
+        Apply short selling restrictions to the predictions.
+
+        Args:
+            predictions: Raw predictions from the model (may include negative values)
+
+        Returns:
+            Filtered predictions with short selling restrictions applied
+        """
+        if predictions.empty:
+            return predictions
+
+        if not self.enable_short_selling:
+            # Long-only: filter out negative predictions
+            logger.info(f"[{self.name}] Applying long-only constraint (filtering negative signals)")
+
+            # Count negative signals before filtering
+            negative_count = (predictions < 0).sum().sum()
+            if negative_count > 0:
+                logger.info(f"[{self.name}] Filtered out {negative_count} negative signals")
+
+            # Set negative values to 0 (no short positions)
+            filtered_predictions = predictions.copy()
+            filtered_predictions[filtered_predictions < 0] = 0
+
+            # Renormalize positive signals to maintain proper weighting
+            # Only renormalize if there are positive signals
+            positive_mask = filtered_predictions > 0
+            if positive_mask.any().any():
+                # For each date, renormalize positive signals to sum to 1
+                for date_idx in filtered_predictions.index:
+                    date_signals = filtered_predictions.loc[date_idx]
+                    positive_signals = date_signals[positive_mask.loc[date_idx]]
+
+                    if len(positive_signals) > 0:
+                        # Normalize positive signals to maintain equal relative weighting
+                        # This preserves the relative strength of long signals
+                        filtered_predictions.loc[date_idx, positive_signals.index] = positive_signals.values
+
+                logger.debug(f"[{self.name}] Renormalized positive signals after filtering negatives")
+            else:
+                logger.warning(f"[{self.name}] No positive signals remaining after filtering")
+
+            return filtered_predictions
+        else:
+            # Short selling enabled - keep all predictions as-is
+            logger.debug(f"[{self.name}] Short selling enabled - keeping all signals")
+            return predictions
     
     def get_name(self) -> str:
         """Get strategy name."""

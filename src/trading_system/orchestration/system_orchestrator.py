@@ -143,7 +143,7 @@ class SystemOrchestrator:
     testable, and extensible.
     """
 
-    def __init__(self, 
+    def __init__(self,
                  system_config: SystemConfig,
                  strategies: List[BaseStrategy],
                  meta_model: MetaModel, # New
@@ -170,7 +170,10 @@ class SystemOrchestrator:
         self.meta_model = meta_model
         self.stock_classifier = stock_classifier
         self.custom_configs = custom_configs or {}
-        
+
+        # Merge system config into custom configs to ensure short selling settings are passed through
+        self.custom_configs['enable_short_selling'] = system_config.enable_short_selling
+
         # Initialize specialized components
         self._initialize_components()
 
@@ -227,6 +230,8 @@ class SystemOrchestrator:
                 'risk_aversion': 2.0
             })
         )
+        # Add short selling configuration to optimizer config
+        optimizer_config['enable_short_selling'] = self.custom_configs.get('enable_short_selling', False)
         self.portfolio_optimizer = PortfolioOptimizer(optimizer_config)
         logger.info(f"Portfolio optimizer initialized with method='{self.portfolio_optimizer.method}'")
 

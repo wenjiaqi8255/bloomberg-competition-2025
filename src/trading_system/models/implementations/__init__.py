@@ -14,11 +14,13 @@ Key Features:
 
 from .ff5_model import FF5RegressionModel
 from .momentum_model import MomentumRankingModel
+from .fama_macbeth_model import FamaMacBethModel
 
 # Optional ML models (require additional dependencies)
 __all__ = [
     'FF5RegressionModel',
     'MomentumRankingModel',
+    'FamaMacBethModel',
 ]
 
 try:

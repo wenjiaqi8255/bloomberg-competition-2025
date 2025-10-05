@@ -1,0 +1,279 @@
+# ============================================================================
+# Fama-MacBeth Cross-Sectional Strategy Configuration
+# ============================================================================
+#
+# This configuration implements a Fama-MacBeth (1973) cross-sectional
+# asset pricing strategy that:
+# 1. Calculates cross-sectional features (market cap, book-to-market, etc.)
+# 2. Runs cross-sectional regressions at each time period
+# 3. Averages coefficients across time to estimate risk premia
+# 4. Uses average coefficients to predict expected returns
+#
+# References:
+# - Fama, E. F., & MacBeth, J. D. (1973). Risk, return, and equilibrium:
+#   Empirical tests. Journal of Political Economy, 81(3), 607-636.
+# ============================================================================
+
+# Part 1: Data Provider Configuration
+# ---------------------------------
+data_provider:
+  type: "YFinanceProvider"
+  parameters:
+    max_retries: 3
+    retry_delay: 1.0
+
+# Part 2: Training Pipeline Configuration
+# ------------------------------------
+training_setup:
+  model:
+    model_type: "fama_macbeth"  # Use Fama-MacBeth cross-sectional regression
+    config:
+      regularization: "none"
+      alpha: 1.0
+      min_cross_section_size: 5
+      newey_west_lags: null
+
+  feature_engineering:
+    enabled_features: ['momentum', 'volatility', 'technical', 'volume']
+    momentum_periods: [21, 63, 252]
+    volatility_windows: [20, 60]
+    lookback_periods: [20, 60, 252]
+    min_ic_threshold: 0.02
+    min_significance: 0.1
+    feature_lag: 1
+    include_technical: false  # Disable for pure cross-sectional
+    include_cross_sectional: true  # Enable cross-sectional features for Fama-MacBeth
+    cross_sectional_features: ['market_cap', 'book_to_market', 'size', 'value', 'momentum', 'volatility']
+    cross_sectional_lookback:
+      momentum: 252
+      volatility: 60
+      ma_long: 200
+      ma_short: 50
+    winsorize_percentile: 0.01
+
+  # Parameters for the training pipeline execution
+  parameters:
+    start_date: "2018-01-01"
+    end_date: "2019-12-31"
+    symbols:
+      - AAPL
+      - MSFT
+      - GOOGL
+      - AMZN
+      - META
+      - TSLA
+      - NVDA
+      - JPM
+      - V
+      - WMT
+
+# Strategy Configuration
+strategy:
+  name: "FamaMacBeth"
+  type: "ml_strategy"  # Uses ML infrastructure for cross-sectional regression
+  model_type: "fama_macbeth"
+  description: "Cross-sectional asset pricing using Fama-MacBeth methodology"
+  
+  # Trading parameters
+  rebalance_frequency: "monthly"  # Typical for cross-sectional strategies
+  lookback_days: 252  # 1 year of historical data
+  forward_return_days: 21  # Predict 1-month forward returns
+  
+  # Position sizing
+  position_sizing:
+    method: "equal_weight"  # Or "risk_parity", "signal_weighted"
+    max_position: 0.10  # 10% max per position
+    min_position: 0.02  # 2% min per position
+    long_only: false  # Allow long-short portfolios
+    
+  # Portfolio constraints
+  portfolio_constraints:
+    max_leverage: 2.0
+    max_turnover: 0.50  # 50% monthly turnover limit
+    sector_neutral: false  # Optional: force sector neutrality
+    
+  # Risk management
+  risk_management:
+    max_drawdown: 0.20
+    stop_loss: 0.15
+    volatility_target: 0.15  # 15% annualized volatility
+
+# Feature Engineering Configuration
+feature_engineering:
+  # Enable cross-sectional features (key for Fama-MacBeth)
+  include_cross_sectional: true
+  include_technical: false  # Focus on cross-sectional, not time-series
+  include_theoretical: false
+  
+  # Cross-sectional features to compute
+  cross_sectional_features:
+    - "market_cap"        # Size factor (SMB proxy)
+    - "book_to_market"    # Value factor (HML proxy)
+    - "size"              # Log market cap
+    - "value"             # Value indicator
+    - "momentum"          # Momentum factor
+    - "volatility"        # Risk measure
+  
+  # Lookback periods for cross-sectional features
+  cross_sectional_lookback:
+    momentum: 252      # 12-month momentum
+    volatility: 60     # 60-day volatility
+    ma_long: 200       # 200-day MA for value proxy
+    ma_short: 50       # 50-day MA
+  
+  # Winsorization to handle outliers
+  winsorize_percentile: 0.01  # Winsorize at 1st and 99th percentile
+  
+  # Feature preprocessing
+  normalize_features: true
+  normalization_method: "zscore"  # Cross-sectional z-scores
+  handle_missing: "forward_fill"
+  
+  # Feature validation (optional)
+  min_ic_threshold: 0.02  # Minimum Information Coefficient
+  min_significance: 0.10  # 10% significance level
+  feature_lag: 1  # Use lagged features to avoid look-ahead bias
+
+# Model Configuration
+model:
+  model_type: "fama_macbeth"
+  
+  # Fama-MacBeth specific parameters
+  params:
+    regularization: "none"  # or "ridge" for regularized cross-sectional regression
+    alpha: 1.0  # Ridge regularization parameter (if ridge is used)
+    min_cross_section_size: 5  # Minimum stocks per cross-section
+    newey_west_lags: null  # Auto-detect for Newey-West standard errors
+  
+  # Model training
+  training:
+    train_frequency: "monthly"  # Retrain monthly
+    rolling_window: 36  # Use 36 months of data
+    min_train_periods: 24  # Minimum 24 months to train
+    walk_forward: true  # Walk-forward validation
+    
+  # Prediction
+  prediction:
+    method: "average_coefficients"  # Use time-series average of gammas
+    confidence_interval: 0.95  # 95% confidence intervals
+    
+  # Model evaluation
+  evaluation:
+    metrics:
+      - "information_coefficient"  # IC between predictions and returns
+      - "sharpe_ratio"
+      - "long_short_return"
+      - "coefficient_significance"
+    
+    # Cross-validation
+    cv_method: "time_series_split"
+    cv_folds: 5
+  
+strategy:
+  # Short selling control
+  enable_short_selling: false  # Enable short selling for long-short strategy
+
+# Backtesting Configuration
+backtesting:
+  start_date: "2015-01-01"
+  end_date: "2023-12-31"
+  initial_capital: 1000000
+  
+  # Universe
+  universe:
+    type: "dynamic"  # Universe can change over time
+    min_stocks: 20  # Need sufficient cross-section
+    filters:
+      min_market_cap: 1000000000  # $1B minimum
+      min_liquidity: 1000000  # $1M daily volume
+      exclude_penny_stocks: true
+      
+  # Transaction costs
+  transaction_costs:
+    commission: 0.001  # 10 bps
+    slippage: 0.0005  # 5 bps
+    market_impact: "sqrt"  # Square-root market impact model
+    
+  # Benchmark
+  benchmark: "SPY"  # S&P 500
+  
+  # Output
+  save_predictions: true
+  save_portfolio_weights: true
+  save_coefficient_history: true  # Save gamma time series
+  
+# Performance Reporting
+reporting:
+  # Metrics to track
+  track_metrics:
+    - "cumulative_returns"
+    - "sharpe_ratio"
+    - "information_ratio"
+    - "max_drawdown"
+    - "turnover"
+    - "hit_rate"
+    - "coefficient_stability"  # Track gamma stability
+    - "long_short_spread"
+    
+  # Factor attribution
+  factor_attribution:
+    enabled: true
+    factors:
+      - "market_cap"
+      - "book_to_market"
+      - "momentum"
+      
+  # Plots
+  generate_plots:
+    - "cumulative_returns"
+    - "rolling_sharpe"
+    - "drawdown"
+    - "coefficient_time_series"  # Plot gamma_t over time
+    - "long_short_returns"
+    - "cross_section_r_squared"  # R² from each cross-section
+
+# Logging Configuration
+logging:
+  level: "INFO"
+  log_predictions: true
+  log_coefficients: true
+  log_cross_sections: true
+  
+# Advanced Options
+advanced:
+  # Parallel processing
+  n_jobs: -1  # Use all cores
+  
+  # Caching
+  cache_features: true
+  cache_predictions: false
+  
+  # Debugging
+  debug_mode: false
+  save_intermediate_results: true
+  
+# Example Usage Notes
+# ============================================================================
+# To run this strategy:
+#
+# 1. Train the model:
+#    python run_experiment.py --config configs/fama_macbeth_strategy_config.yaml
+#
+# 2. The pipeline will:
+#    - Calculate cross-sectional features for each date
+#    - Convert to panel format (date, symbol)
+#    - Run Fama-MacBeth regression
+#    - Generate predictions using average gammas
+#    - Execute trades based on predicted returns
+#
+# 3. Interpretation:
+#    - Positive gamma: Feature has positive risk premium
+#    - Negative gamma: Feature has negative risk premium
+#    - t-stat > 2: Statistically significant at 5% level
+#
+# 4. Expected Results:
+#    - Book-to-Market: Positive gamma (value premium)
+#    - Size: Negative gamma (small cap premium)
+#    - Momentum: Positive gamma (momentum premium)
+# ============================================================================
+

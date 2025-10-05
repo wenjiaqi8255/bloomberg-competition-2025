@@ -15,7 +15,7 @@ data_provider:
 factor_data_provider:
   type: "FF5DataProvider"
   parameters:
-    data_frequency: "monthly" # or "daily"
+    data_frequency: "daily" # Use daily data to get enough points for analysis
 
 training_setup:
   model:
@@ -64,6 +64,10 @@ training_setup:
     log_to_wandb: true
     log_all_trials: true
 
+strategy:
+  # Short selling control
+  enable_short_selling: false  # Enable short selling for long-short strategy
+
 # Part 2: Backtesting Configuration
 # ---------------------------------
 # Defines how to backtest the strategy that uses the newly trained model.
@@ -90,10 +94,12 @@ strategy:
     lookback_days: 252
     risk_free_rate: 0.02
 
+  enable_short_selling: false
+
 # Fama-French 5-Factor Hyperparameter Optimization Settings
 ff5_hyperparameter_optimization:
   # Enable/disable hyperparameter optimization
-  enabled: true
+  enabled: false
 
   # Optimization method (optuna, grid_search, random_search)
   optimization_method: "optuna"

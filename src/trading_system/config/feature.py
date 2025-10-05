@@ -72,6 +72,16 @@ class FeatureConfig:
     # Sequence features (for LSTM)
     sequence_features: Dict[str, Any] = field(default_factory=dict)
 
+    # Cross-sectional features (for Fama-MacBeth)
+    include_cross_sectional: bool = field(default=False)
+    cross_sectional_features: List[str] = field(default_factory=lambda: [
+        "market_cap", "book_to_market", "size", "value", "momentum", "volatility"
+    ])
+    cross_sectional_lookback: Dict[str, int] = field(default_factory=lambda: {
+        'momentum': 252, 'volatility': 60, 'ma_long': 200, 'ma_short': 50
+    })
+    winsorize_percentile: float = field(default=0.01)
+
     def __post_init__(self):
         """Initialize default values."""
         if self.momentum_periods is None:

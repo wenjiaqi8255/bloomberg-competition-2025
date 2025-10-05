@@ -1,0 +1,461 @@
+# XGBoost Trading Strategy Configuration Template
+# ================================================
+#
+# This template demonstrates comprehensive configuration for an XGBoost-based
+# trading strategy with integrated hyperparameter optimization and full pipeline
+# from data acquisition to backtesting.
+#
+# Key Features:
+# - XGBoost model with comprehensive hyperparameter search
+# - Technical feature engineering pipeline
+# - Time series cross-validation
+# - Integrated hyperparameter optimization with Optuna
+# - Complete experiment tracking with WandB
+# - Production-ready backtesting with realistic costs
+
+# =============================================================================
+# EXPERIMENT METADATA
+# =============================================================================
+experiment:
+  name: "xgboost_strategy_experiment"
+  description: "XGBoost-based trading strategy with hyperparameter optimization"
+  tags: ["xgboost", "machine_learning", "technical_indicators", "hyperparameter_optimization"]
+  log_to_wandb: true
+  project_name: "bloomberg-competition"
+
+# =============================================================================
+# DATA PROVIDER CONFIGURATION
+# =============================================================================
+data_provider:
+  # Primary data provider for price data
+  type: "YFinanceProvider"
+  parameters:
+    max_retries: 3                # Retry failed API calls 3 times
+    retry_delay: 1.0              # Wait 1 second between retries
+    request_timeout: 30           # API request timeout in seconds
+    cache_enabled: true           # Enable data caching for performance
+
+# =============================================================================
+# TRAINING CONFIGURATION
+# =============================================================================
+training_setup:
+  # Model configuration
+  model:
+    model_type: "xgboost"         # Use XGBoost regression model
+    config:
+      # Default parameters (will be overridden by optimization)
+      n_estimators: 100
+      max_depth: 6
+      learning_rate: 0.1
+      subsample: 0.8
+      colsample_bytree: 0.8
+      reg_alpha: 0.0
+      reg_lambda: 1.0
+      random_state: 42
+
+  # Feature engineering configuration
+  feature_engineering:
+    enabled_features:
+      - "momentum"                # Price momentum indicators
+      - "trend"                   # Trend following indicators
+      - "volatility"              # Volatility measures
+      - "volume"                  # Volume-based indicators
+      - "technical"               # Technical analysis patterns
+
+    # Momentum indicators configuration
+    momentum_periods: [5, 10, 20, 50]  # Lookback periods for momentum
+    momentum_methods: ["simple", "exponential"]
+
+    # Trend indicators configuration
+    trend_periods: [10, 20, 50]        # Moving average periods
+    trend_methods: ["sma", "ema", "dema"]
+
+    # Volatility indicators configuration
+    volatility_windows: [10, 20, 50]   # Rolling windows for volatility
+    volatility_methods: ["std", "parkinson", "rogers_satchell"]
+
+    # Volume indicators configuration
+    volume_periods: [5, 10, 20]        # Volume moving average periods
+    volume_indicators: ["obv", "vwap", "ad_line"]
+
+    # Technical patterns configuration
+    technical_patterns:
+      - "rsi"
+      - "macd"
+      - "bollinger_bands"
+      - "stochastic"
+      - "williams_r"
+
+    # Feature selection parameters
+    lookback_periods: [252]            # Maximum lookback for features
+    min_ic_threshold: 0.02             # Minimum information coefficient
+    feature_lag: 1                     # Feature lag for realistic trading
+    include_technical: true             # Include technical analysis features
+    feature_importance_threshold: 0.01 # Minimum feature importance
+
+  # Training data parameters
+  parameters:
+    start_date: "2018-01-01"           # Training start date
+    end_date: "2023-12-31"             # Training end date
+    symbols:
+      # Large-cap US stocks
+      - "AAPL"    # Apple
+      - "MSFT"    # Microsoft
+      - "GOOGL"   # Alphabet
+      - "AMZN"    # Amazon
+      - "META"    # Meta Platforms
+      - "TSLA"    # Tesla
+      - "NVDA"    # NVIDIA
+      - "JPM"     # JPMorgan Chase
+      - "V"       # Visa
+      - "WMT"     # Walmart
+
+      # ETF diversification
+      - "SPY"     # S&P 500
+      - "QQQ"     # Nasdaq 100
+      - "IWM"     # Russell 2000
+      - "AGG"     # Aggregate Bonds
+      - "GLD"     # Gold
+
+# =============================================================================
+# XGBOOST HYPERPARAMETER OPTIMIZATION
+# =============================================================================
+xgboost_hyperparameter_optimization:
+  # Enable/disable hyperparameter optimization
+  enabled: true
+
+  # Optimization method (currently only Optuna supported)
+  optimization_method: "optuna"
+
+  # Number of optimization trials
+  n_trials: 100
+
+  # Cross-validation settings
+  cv_folds: 5                          # 5-fold time series cross-validation
+  purge_days: 10                       # Days to purge between train/test
+  embargo_days: 5                      # Days to embargo before test
+
+  # Optimization objective
+  objective: "sharpe_ratio"            # Optimize for risk-adjusted returns
+  direction: "maximize"                # Higher Sharpe ratio is better
+
+  # Optuna sampler configuration
+  sampler:
+    type: "tpe"                        # Tree-structured Parzen Estimator
+    seed: 42                           # Random seed for reproducibility
+    n_startup_trials: 10               # Random trials before TPE
+
+  # Pruner configuration (early stopping)
+  pruner:
+    type: "median"                     # Median pruning
+    n_startup_trials: 5                # Trials before pruning starts
+    n_warmup_steps: 3                  # Steps before pruning evaluation
+    interval_steps: 1                  # Check pruning every step
+
+  # Search space configuration
+  search_space:
+    # Use built-in preset search space
+    preset: "xgboost_default"
+
+    # Custom search space parameters (override preset)
+    custom_space:
+      # Tree structure parameters
+      n_estimators:
+        type: "int"
+        low: 50
+        high: 500
+        step: 10
+        description: "Number of trees in the ensemble"
+
+      max_depth:
+        type: "int"
+        low: 3
+        high: 12
+        step: 1
+        description: "Maximum depth of each tree"
+
+      min_child_weight:
+        type: "int"
+        low: 1
+        high: 10
+        step: 1
+        description: "Minimum sum of instance weight needed in a child"
+
+      # Learning parameters
+      learning_rate:
+        type: "float"
+        low: 0.01
+        high: 0.3
+        step: 0.01
+        log_scale: true
+        description: "Learning rate for gradient boosting"
+
+      # Regularization parameters
+      reg_alpha:
+        type: "float"
+        low: 0.0
+        high: 1.0
+        step: 0.05
+        description: "L1 regularization term on weights"
+
+      reg_lambda:
+        type: "float"
+        low: 1.0
+        high: 5.0
+        step: 0.1
+        description: "L2 regularization term on weights"
+
+      # Sampling parameters
+      subsample:
+        type: "float"
+        low: 0.6
+        high: 1.0
+        step: 0.05
+        description: "Subsample ratio of the training instances"
+
+      colsample_bytree:
+        type: "float"
+        low: 0.6
+        high: 1.0
+        step: 0.05
+        description: "Subsample ratio of columns when constructing each tree"
+
+      colsample_bylevel:
+        type: "float"
+        low: 0.6
+        high: 1.0
+        step: 0.05
+        description: "Subsample ratio of columns for each level"
+
+      # Randomness parameters
+      gamma:
+        type: "float"
+        low: 0.0
+        high: 1.0
+        step: 0.05
+        description: "Minimum loss reduction required to make a further partition"
+
+  # Feature analysis settings
+  feature_analysis:
+    enabled: true
+    analyze_feature_importance: true    # Analyze most important features
+    calculate_feature_correlations: true # Calculate feature correlations
+    plot_feature_importance: true       # Create feature importance plots
+
+  # Logging and tracking
+  logging:
+    log_optimization: true              # Log optimization progress to WandB
+    log_all_trials: true                # Log all trials (not just best)
+    create_optimization_plot: true      # Create optimization history plots
+    log_feature_importance: true        # Log feature importance from best model
+    log_parameter_importance: true      # Log Optuna parameter importance
+
+  # Model validation settings
+  validation:
+    out_of_sample_test: true            # Perform out-of-sample testing
+    time_series_split: true             # Use time series cross-validation
+    stability_check: true               # Check model stability over time
+    calibration_analysis: true          # Analyze model calibration
+
+# =============================================================================
+# PORTFOLIO OPTIMIZATION CONFIGURATION
+# =============================================================================
+portfolio_optimization:
+  # Optimization method selection
+  # Options: 'mean_variance', 'equal_weight', 'top_n'
+  method: "equal_weight"  # Simple 1/N equal weighting (robust, KISS principle)
+  
+  # Mean-variance specific parameters (used when method='mean_variance')
+  risk_aversion: 2.0      # Higher = more risk-averse (typical range: 1-5)
+  
+  # Top-N specific parameters (used when method='top_n')
+  top_n: 10               # Number of top assets to select
+  
+  # Box constraints (applied to all methods)
+  box_limits:
+    sector:
+      Technology: 0.30    # Max 30% in tech sector
+      Finance: 0.25       # Max 25% in financials
+      Consumer: 0.20      # Max 20% in consumer stocks
+    size:
+      Large: 0.50         # Max 50% in large-cap
+      Mid: 0.30           # Max 30% in mid-cap
+      Small: 0.20         # Max 20% in small-cap
+
+# =============================================================================
+# BACKTESTING CONFIGURATION
+# =============================================================================
+backtest:
+  name: "XGBoost_Strategy_Backtest"
+  start_date: "2024-01-01"             # Out-of-sample test period
+  end_date: "2024-12-31"
+
+  # Portfolio settings
+  initial_capital: 1000000             # $1M initial capital
+  benchmark_symbol: "SPY"              # S&P 500 as benchmark
+
+  # Transaction cost settings (realistic costs)
+  commission_rate: 0.001               # 0.1% commission per trade
+  slippage_rate: 0.0005                # 0.05% slippage per trade
+  short_borrow_cost: 0.002             # 0.2% annual short borrow cost
+
+  # Trading constraints
+  rebalance_frequency: "weekly"        # Portfolio rebalancing frequency
+  position_limit: 0.10                 # Maximum 10% in single position
+  rebalance_threshold: 0.02            # 2% change threshold for rebalancing
+
+  # Risk management
+  stop_loss_threshold: 0.15            # 15% stop-loss on positions
+  drawdown_limit: 0.20                 # 20% maximum drawdown
+  volatility_target: 0.15              # 15% annual volatility target
+
+# =============================================================================
+# STRATEGY CONFIGURATION
+# =============================================================================
+strategy:
+  name: "XGBoost_ML_Strategy"
+  type: "xgboost_ml"                   # Strategy type identifier
+
+  # Model configuration
+  parameters:
+    # Model ID will be automatically set by the orchestrator
+    model_id: "placeholder_model_id"
+
+    # Signal generation parameters
+    prediction_horizon: 1               # 1-day ahead prediction
+    confidence_threshold: 0.6           # Minimum confidence for signals
+    position_sizing_method: "kelly"     # Position sizing method
+    max_positions: 10                   # Maximum concurrent positions
+
+    # Risk management parameters
+    risk_adjusted_signals: true         # Apply risk adjustments to signals
+    volatility_scaling: true            # Scale signals by volatility
+    momentum_confirmation: true         # Require momentum confirmation
+
+# =============================================================================
+# ADVANCED CONFIGURATION
+# =============================================================================
+advanced:
+  # Ensemble methods (optional)
+  ensemble:
+    enabled: false
+    methods:
+      - method: "xgboost"
+        weight: 0.7
+      - method: "lstm"
+        weight: 0.3
+
+  # Robustness testing
+  robustness_tests:
+    enabled: true
+    tests:
+      - "data_corruption"              # Test with corrupted data
+      - "parameter_sensitivity"        # Test parameter sensitivity
+      - "outlier_impact"               # Test outlier impact
+      - "market_regime_change"         # Test different market regimes
+
+  # Performance attribution
+  attribution_analysis:
+    enabled: true
+    analyze_factor_exposure: true       # Analyze factor exposures
+    calculate_contribution: true        # Calculate strategy contributions
+    risk_decomposition: true           # Decompose risk sources
+
+# =============================================================================
+# OUTPUT AND REPORTING
+# =============================================================================
+reporting:
+  # Generate comprehensive reports
+  generate_report: true
+  output_format: ["html", "json", "pdf"]
+
+  # Report sections
+  sections:
+    - "executive_summary"              # High-level performance summary
+    - "optimization_results"           # Hyperparameter optimization results
+    - "feature_analysis"               # Feature importance and analysis
+    - "risk_metrics"                   # Detailed risk metrics
+    - "performance_attribution"        # Performance attribution analysis
+    - "model_diagnostics"              # Model health diagnostics
+    - "robustness_tests"               # Robustness test results
+
+  # Visualizations
+  plots:
+    - "cumulative_returns"             # Cumulative returns chart
+    - "drawdown_chart"                 # Drawdown visualization
+    - "rolling_sharpe"                 # Rolling Sharpe ratio
+    - "feature_importance"             # Feature importance plot
+    - "optimization_history"           # Optimization progress
+    - "parameter_importance"           # Parameter importance from Optuna
+    - "correlation_heatmap"            # Feature correlation heatmap
+
+# =============================================================================
+# NOTES AND USAGE
+# =============================================================================
+#
+# To use this configuration:
+# 1. Copy this file to configs/your_experiment_name.yaml
+# 2. Modify symbols, dates, and parameters as needed
+# 3. Run with: poetry run python run_experiment.py --config configs/your_experiment_name.yaml
+#
+# Key customization points:
+# - Adjust symbols list for your universe
+# - Modify date ranges for train/test periods
+# - Tune hyperparameter search space based on computational budget
+# - Change objective to align with your investment goals
+# - Adjust risk management parameters for your risk tolerance
+#
+# Portfolio Optimization Methods (NEW):
+# --------------------------------------
+# Three methods are now available for portfolio weight allocation:
+#
+# 1. mean_variance (Traditional Markowitz Optimization)
+#    Optimizes: E[R] - (λ/2) * Variance
+#    ✓ Pros: Theoretically optimal, considers risk-return tradeoff
+#    ✗ Cons: Sensitive to estimation errors, may over-concentrate
+#    When to use: High-quality return forecasts, stable markets
+#    Academic basis: Markowitz (1952) Portfolio Selection
+#
+# 2. equal_weight (1/N Rule - RECOMMENDED FOR ROBUSTNESS)
+#    Allocates: 1/N to each asset equally
+#    ✓ Pros: Simple, robust, no estimation error, max diversification
+#    ✓ Often outperforms mean-variance in practice
+#    ✗ Cons: Ignores return forecasts and risk differences
+#    When to use: Uncertain forecasts, robust baseline, long-term investing
+#    Academic basis: DeMiguel et al. (2009) "Optimal Versus Naive Diversification"
+#
+# 3. top_n (Selective Equal Weight)
+#    Selects top N by return, allocates 1/N to each
+#    ✓ Pros: Combines signal selection with diversification, intuitive
+#    ✓ Captures alpha from best ideas while maintaining diversification
+#    ✗ Cons: May miss diversification benefits from lower-ranked assets
+#    When to use: Strong confidence in ranking, moderate risk tolerance
+#    Industry practice: Common in quantitative hedge funds
+#
+# Practical Recommendations:
+# - Start with equal_weight for a robust, low-estimation-error baseline
+# - Use top_n (with top_n: 5-10) if you have reliable alpha signals
+# - Use mean_variance only if your return forecasts are well-calibrated
+# - Always backtest multiple methods to compare performance
+#
+# Configuration Examples:
+#
+# Example 1: Equal Weight (Robust, KISS principle)
+# portfolio_optimization:
+#   method: "equal_weight"
+#
+# Example 2: Top-5 Strategy (Selective, Signal-driven)
+# portfolio_optimization:
+#   method: "top_n"
+#   top_n: 5
+#
+# Example 3: Mean-Variance (Traditional, Risk-optimized)
+# portfolio_optimization:
+#   method: "mean_variance"
+#   risk_aversion: 2.0  # Range: 1-5, higher = more risk-averse
+#
+# Expected computational requirements:
+# - Training: ~5-15 minutes per model
+# - Hyperparameter optimization: ~30-120 minutes (100 trials)
+# - Memory: 2-4 GB for feature engineering
+# - Storage: 100-500 MB for models and results

@@ -80,6 +80,9 @@ strategy:
   model_id: placeholder_model_id  # Will be overwritten by orchestrator
   min_signal_strength: 0.00001       # Minimum signal strength threshold
 
+  # Short selling control
+  enable_short_selling: false  # Enable short selling for long-short strategy
+
 # XGBoost Hyperparameter Optimization Settings
 xgboost_hyperparameter_optimization:
   # Enable/disable hyperparameter optimization
@@ -196,6 +199,35 @@ xgboost_hyperparameter_optimization:
     n_features_to_select: null  # null for automatic selection
     importance_threshold: 0.01  # Minimum importance threshold
 
+# =============================================================================
+# PORTFOLIO OPTIMIZATION CONFIGURATION
+# =============================================================================
+portfolio_optimization:
+  # Optimization method selection
+  # Options: 'mean_variance', 'equal_weight', 'top_n'
+  method: "equal_weight"  # Simple 1/N equal weighting (robust, KISS principle)
+
+  # Mean-variance specific parameters (used when method='mean_variance')
+  risk_aversion: 2.0      # Higher = more risk-averse (typical range: 1-5)
+
+  # Top-N specific parameters (used when method='top_n')
+  top_n: 10               # Number of top assets to select
+
+  # Short selling control
+  enable_short_selling: false  # Disable short selling (long-only strategy)
+
+  # Box constraints (applied to all methods)
+  box_limits:
+    sector:
+      Technology: 0.30    # Max 30% in tech sector
+      Finance: 0.25       # Max 25% in financials
+      Consumer: 0.20      # Max 20% in consumer stocks
+    size:
+      Large: 0.50         # Max 50% in large-cap
+      Mid: 0.30           # Max 30% in mid-cap
+      Small: 0.20         # Max 20% in small-cap
+
+
 # Part 4: Backtesting Configuration
 # --------------------------------
 backtest:
@@ -209,6 +241,7 @@ backtest:
   rebalance_frequency: "weekly"
   position_limit: 0.10
   rebalance_threshold: 0.001  # Allow small trades
+  enable_short_selling: false  # Disable short selling for long-only strategy
 
 # Universe configuration
 universe:

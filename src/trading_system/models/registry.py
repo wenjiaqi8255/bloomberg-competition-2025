@@ -8,6 +8,7 @@ Import this module to ensure all models are available for creation.
 from .base.model_factory import ModelFactory
 from .implementations.ff5_model import FF5RegressionModel
 from .implementations.momentum_model import MomentumRankingModel
+from .implementations.fama_macbeth_model import FamaMacBethModel
 
 # Try to import ML models (optional dependencies)
 try:
@@ -49,6 +50,19 @@ def register_all_models():
             "min_momentum": 0.0,
             "momentum_weights": [0.3, 0.3, 0.4],  # 21d, 63d, 252d
             "momentum_periods": [21, 63, 252]
+        }
+    )
+
+    # Register Fama-MacBeth Model
+    ModelFactory.register(
+        model_type="fama_macbeth",
+        model_class=FamaMacBethModel,
+        description="Fama-MacBeth cross-sectional regression model for asset pricing",
+        default_config={
+            "regularization": "none",
+            "alpha": 1.0,
+            "min_cross_section_size": 5,
+            "newey_west_lags": None
         }
     )
 

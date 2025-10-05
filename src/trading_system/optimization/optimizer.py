@@ -46,11 +46,13 @@ class PortfolioOptimizer:
                 - method: Optimization method ('mean_variance', 'equal_weight', 'top_n')
                 - risk_aversion: Risk aversion parameter for mean-variance (default: 2.0)
                 - top_n: Number of top assets for 'top_n' method (default: 10)
+                - enable_short_selling: Allow negative weights (short positions) (default: False)
         """
         self.method: OptimizationMethod = config.get('method', 'mean_variance')
         self.risk_aversion = config.get('risk_aversion', 2.0)
         self.top_n = config.get('top_n', 10)
-        
+        self.enable_short_selling = config.get('enable_short_selling', False)
+
         # Validate method
         valid_methods = ['mean_variance', 'equal_weight', 'top_n']
         if self.method not in valid_methods:
@@ -59,8 +61,8 @@ class PortfolioOptimizer:
                 f"Valid methods: {valid_methods}"
             )
             self.method = 'mean_variance'
-        
-        logger.info(f"PortfolioOptimizer initialized with method='{self.method}'")
+
+        logger.info(f"PortfolioOptimizer initialized with method='{self.method}', short_selling={self.enable_short_selling}")
 
     def optimize(self,
                  expected_returns: pd.Series,
@@ -112,8 +114,15 @@ class PortfolioOptimizer:
         # Build constraints for the solver
         scipy_constraints = self._build_scipy_constraints(constraints, num_assets, expected_returns.index)
 
-        # Bounds for each weight (e.g., 0 <= w_i <= 1 for long-only)
-        bounds = Bounds(0, 1)
+        # Bounds for each weight based on short selling configuration
+        if self.enable_short_selling:
+            # Allow short positions: -1 <= w_i <= 1
+            bounds = Bounds(-1, 1)
+            logger.debug("Using short selling bounds: [-1, 1]")
+        else:
+            # Long-only: 0 <= w_i <= 1
+            bounds = Bounds(0, 1)
+            logger.debug("Using long-only bounds: [0, 1]")
 
         # Perform optimization
         result = minimize(
@@ -139,22 +148,31 @@ class PortfolioOptimizer:
                                constraints: List[Dict[str, Any]]) -> pd.Series:
         """
         Simple 1/N equal weighting strategy.
-        
+
         This is a naive yet robust approach that:
         - Avoids estimation error in mean-variance optimization
         - Provides maximum diversification
         - Has been shown to outperform mean-variance in many practical settings
-        
+
         Reference: DeMiguel et al. (2009) "Optimal Versus Naive Diversification"
+
+        When short selling is enabled, this method still produces equal positive weights.
+        For short selling strategies, use mean_variance optimization instead.
         """
         num_assets = len(expected_returns)
         equal_weights = np.ones(num_assets) / num_assets
         weights = pd.Series(equal_weights, index=expected_returns.index)
-        
+
         # Apply box constraints if any (e.g., sector limits)
         weights = self._apply_constraints_to_weights(weights, constraints)
-        
-        logger.info(f"Equal weight optimization: {num_assets} assets, weight={1/num_assets:.4f} each")
+
+        short_selling_info = " (short selling enabled)" if self.enable_short_selling else " (long-only)"
+        logger.info(f"Equal weight optimization{short_selling_info}: {num_assets} assets, weight={1/num_assets:.4f} each")
+
+        # If short selling is enabled, warn that equal_weight method doesn't produce short positions
+        if self.enable_short_selling:
+            logger.warning("Equal weight method produces only positive weights. Use mean_variance for short positions.")
+
         return weights / weights.sum()
     
     def _optimize_top_n(self,
@@ -162,27 +180,46 @@ class PortfolioOptimizer:
                        constraints: List[Dict[str, Any]]) -> pd.Series:
         """
         Top-N equal weighting strategy.
-        
+
         Selects the N assets with highest expected returns and allocates
         equal weight (1/N) to each. This combines:
         - Signal selectivity (only invest in best opportunities)
         - Simplicity (equal weight among selected assets)
         - Risk control (diversification across N assets)
-        
+
         This approach is commonly used by practitioners who want to
         capture alpha signals while avoiding over-concentration.
+
+        When short selling is enabled and expected returns can be negative,
+        this method will select the most positive expected returns.
+        For short positions, use mean_variance optimization.
         """
         # Select top N assets by expected return
         n = min(self.top_n, len(expected_returns))
-        top_assets = expected_returns.nlargest(n).index
-        
+
+        if self.enable_short_selling:
+            # When short selling is enabled, we might consider both positive and negative returns
+            # For now, select top N by absolute expected return to capture both long and short opportunities
+            abs_returns = expected_returns.abs()
+            top_assets = abs_returns.nlargest(n).index
+            logger.info(f"Top-{n} optimization with short selling: Selected by absolute expected returns")
+        else:
+            # Long-only: select highest positive expected returns
+            top_assets = expected_returns.nlargest(n).index
+            logger.info(f"Top-{n} optimization long-only: Selected by expected returns")
+
         # Allocate equal weight to top N assets
         weights = pd.Series(0.0, index=expected_returns.index)
         weights[top_assets] = 1.0 / n
-        
+
         # Apply box constraints if any
         weights = self._apply_constraints_to_weights(weights, constraints)
-        
+
+        # If short selling is enabled and any selected assets have negative expected returns,
+        # we could potentially assign negative weights, but for simplicity keep positive weights
+        if self.enable_short_selling:
+            logger.warning("Top-N method produces only positive weights. Use mean_variance for short positions.")
+
         logger.info(
             f"Top-{n} optimization: Selected {n} assets from {len(expected_returns)}, "
             f"weight={1/n:.4f} each"
