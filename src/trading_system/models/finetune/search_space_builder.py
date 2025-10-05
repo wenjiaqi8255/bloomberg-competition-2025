@@ -380,6 +380,194 @@ class SearchSpaceBuilder:
             recommended_trials=100
         )
 
+        # LSTM Presets
+        self.presets["lstm_default"] = SearchSpacePreset(
+            name="lstm_default",
+            model_type="lstm",
+            search_spaces={
+                "hidden_size": SearchSpace(
+                    name="hidden_size",
+                    type="categorical",
+                    choices=[32, 64, 128, 256]
+                ),
+                "num_layers": SearchSpace(
+                    name="num_layers",
+                    type="int",
+                    low=1,
+                    high=4
+                ),
+                "dropout": SearchSpace(
+                    name="dropout",
+                    type="float",
+                    low=0.1,
+                    high=0.5,
+                    step=0.05
+                ),
+                "sequence_length": SearchSpace(
+                    name="sequence_length",
+                    type="categorical",
+                    choices=[10, 20, 30, 60]
+                ),
+                "learning_rate": SearchSpace(
+                    name="learning_rate",
+                    type="loguniform",
+                    low=0.0001,
+                    high=0.01,
+                    log=True
+                ),
+                "batch_size": SearchSpace(
+                    name="batch_size",
+                    type="categorical",
+                    choices=[32, 64, 128]
+                ),
+                "num_epochs": SearchSpace(
+                    name="num_epochs",
+                    type="categorical",
+                    choices=[50, 100, 200]
+                ),
+                "weight_decay": SearchSpace(
+                    name="weight_decay",
+                    type="loguniform",
+                    low=1e-6,
+                    high=1e-3,
+                    log=True
+                )
+            },
+            description="Default LSTM search space for sequence modeling",
+            tags=["lstm", "neural_network", "sequence", "time_series"],
+            recommended_trials=120
+        )
+
+        self.presets["lstm_fast"] = SearchSpacePreset(
+            name="lstm_fast",
+            model_type="lstm",
+            search_spaces={
+                "hidden_size": SearchSpace(
+                    name="hidden_size",
+                    type="categorical",
+                    choices=[64, 128]
+                ),
+                "num_layers": SearchSpace(
+                    name="num_layers",
+                    type="categorical",
+                    choices=[1, 2]
+                ),
+                "dropout": SearchSpace(
+                    name="dropout",
+                    type="categorical",
+                    choices=[0.2, 0.3, 0.4]
+                ),
+                "sequence_length": SearchSpace(
+                    name="sequence_length",
+                    type="categorical",
+                    choices=[20, 30]
+                ),
+                "learning_rate": SearchSpace(
+                    name="learning_rate",
+                    type="categorical",
+                    choices=[0.001, 0.005, 0.01]
+                ),
+                "batch_size": SearchSpace(
+                    name="batch_size",
+                    type="categorical",
+                    choices=[64]
+                )
+            },
+            description="Fast LSTM search space with discrete parameters",
+            tags=["lstm", "fast", "neural_network"],
+            recommended_trials=60
+        )
+
+        self.presets["lstm_deep"] = SearchSpacePreset(
+            name="lstm_deep",
+            model_type="lstm",
+            search_spaces={
+                "hidden_size": SearchSpace(
+                    name="hidden_size",
+                    type="categorical",
+                    choices=[128, 256, 512]
+                ),
+                "num_layers": SearchSpace(
+                    name="num_layers",
+                    type="int",
+                    low=2,
+                    high=6
+                ),
+                "dropout": SearchSpace(
+                    name="dropout",
+                    type="float",
+                    low=0.1,
+                    high=0.6,
+                    step=0.05
+                ),
+                "sequence_length": SearchSpace(
+                    name="sequence_length",
+                    type="categorical",
+                    choices=[30, 60, 90]
+                ),
+                "learning_rate": SearchSpace(
+                    name="learning_rate",
+                    type="loguniform",
+                    low=0.00001,
+                    high=0.001,
+                    log=True
+                ),
+                "batch_size": SearchSpace(
+                    name="batch_size",
+                    type="categorical",
+                    choices=[32, 64]
+                ),
+                "num_epochs": SearchSpace(
+                    name="num_epochs",
+                    type="categorical",
+                    choices=[100, 200, 300]
+                ),
+                "weight_decay": SearchSpace(
+                    name="weight_decay",
+                    type="loguniform",
+                    low=1e-6,
+                    high=1e-2,
+                    log=True
+                ),
+                "bidirectional": SearchSpace(
+                    name="bidirectional",
+                    type="categorical",
+                    choices=[True, False]
+                )
+            },
+            description="Deep LSTM search space for complex sequence modeling",
+            tags=["lstm", "deep", "neural_network", "bidirectional"],
+            recommended_trials=200
+        )
+
+        # Fama-French 5-Factor Presets
+        self.presets["ff5_default"] = SearchSpacePreset(
+            name="ff5_default",
+            model_type="ff5",
+            search_spaces={
+                "regularization": SearchSpace(
+                    name="regularization",
+                    type="categorical",
+                    choices=["none", "ridge"]
+                ),
+                "alpha": SearchSpace(
+                    name="alpha",
+                    type="loguniform",
+                    low=0.01,
+                    high=10.0,
+                    log=True
+                ),
+                "standardize": SearchSpace(
+                    name="standardize",
+                    type="categorical",
+                    choices=[True, False]
+                )
+            },
+            description="Default Fama-French 5-Factor model search space",
+            tags=["fama_french", "factor_model", "linear_regression"],
+            recommended_trials=30
+        )
+
         # SVM Presets
         self.presets["svm_default"] = SearchSpacePreset(
             name="svm_default",
@@ -665,6 +853,105 @@ class SearchSpaceBuilder:
                     name="max_features",
                     type="categorical",
                     choices=["sqrt", "log2"]
+                )
+            }
+
+        elif model_type.lower() == "lstm":
+            # LSTM-specific parameter adjustments based on data characteristics
+            # Adjust sequence length based on data size
+            if data_size < 1000:
+                sequence_choices = [10, 20]
+            elif data_size < 10000:
+                sequence_choices = [20, 30, 60]
+            else:
+                sequence_choices = [30, 60, 90]
+
+            # Adjust hidden size based on data complexity
+            if n_features > 50:
+                hidden_choices = [128, 256, 512]
+            elif n_features > 20:
+                hidden_choices = [64, 128, 256]
+            else:
+                hidden_choices = [32, 64, 128]
+
+            # Adjust depth based on data size
+            if data_size < 5000:
+                max_layers = 3
+            else:
+                max_layers = 6
+
+            search_spaces = {
+                "hidden_size": SearchSpace(
+                    name="hidden_size",
+                    type="categorical",
+                    choices=hidden_choices
+                ),
+                "num_layers": SearchSpace(
+                    name="num_layers",
+                    type="int",
+                    low=1,
+                    high=max_layers
+                ),
+                "dropout": SearchSpace(
+                    name="dropout",
+                    type="float",
+                    low=0.1,
+                    high=0.6,
+                    step=0.05
+                ),
+                "sequence_length": SearchSpace(
+                    name="sequence_length",
+                    type="categorical",
+                    choices=sequence_choices
+                ),
+                "learning_rate": SearchSpace(
+                    name="learning_rate",
+                    type="loguniform",
+                    low=0.00001,
+                    high=0.01,
+                    log=True
+                ),
+                "batch_size": SearchSpace(
+                    name="batch_size",
+                    type="categorical",
+                    choices=[32, 64, 128]
+                ),
+                "weight_decay": SearchSpace(
+                    name="weight_decay",
+                    type="loguniform",
+                    low=1e-6,
+                    high=1e-2,
+                    log=True
+                )
+            }
+
+            # Add bidirectional option for larger datasets
+            if data_size > 5000:
+                search_spaces["bidirectional"] = SearchSpace(
+                    name="bidirectional",
+                    type="categorical",
+                    choices=[True, False]
+                )
+
+        elif model_type.lower() == "ff5":
+            # Fama-French 5-Factor models are typically simpler
+            search_spaces = {
+                "regularization": SearchSpace(
+                    name="regularization",
+                    type="categorical",
+                    choices=["none", "ridge"]
+                ),
+                "alpha": SearchSpace(
+                    name="alpha",
+                    type="loguniform",
+                    low=0.01,
+                    high=10.0,
+                    log=True
+                ),
+                "standardize": SearchSpace(
+                    name="standardize",
+                    type="categorical",
+                    choices=[True, False]
                 )
             }
 

@@ -413,8 +413,8 @@ class MetaModelTrainingPipeline(TrainingPipeline):
                 'training_samples': len(X),
                 'strategy_count': len(X.columns),
                 'training_period': {
-                    'start': X.index.min().isoformat(),
-                    'end': X.index.max().isoformat()
+                    'start': self._extract_date_from_multiindex(X.index.min()).isoformat(),
+                    'end': self._extract_date_from_multiindex(X.index.max()).isoformat()
                 }
             },
             'model_weights': training_result.model.strategy_weights,
@@ -439,6 +439,23 @@ class MetaModelTrainingPipeline(TrainingPipeline):
             logger.warning(f"Failed to log MetaModel pipeline report: {e}")
 
         return base_report
+
+    def _extract_date_from_multiindex(self, index_value) -> datetime:
+        """
+        Extract datetime from MultiIndex tuple or single datetime value.
+
+        Args:
+            index_value: Either a tuple (symbol, date) or a datetime object
+
+        Returns:
+            datetime object
+        """
+        if isinstance(index_value, tuple):
+            # MultiIndex format: (symbol, date)
+            return index_value[1]  # Return the date part
+        else:
+            # Single index format: just the date
+            return index_value
 
     def _analyze_weight_distribution(self, weights: Dict[str, float]) -> Dict[str, Any]:
         """

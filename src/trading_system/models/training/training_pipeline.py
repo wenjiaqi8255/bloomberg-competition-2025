@@ -161,6 +161,25 @@ class TrainingPipeline:
             logger.info(f"DEBUG: y has NaN values: {y.isnull().any()}, NaN count: {y.isnull().sum()}")
             logger.info(f"DEBUG: X feature types sample: {dict(list(X.dtypes.head(10).items()))}")
 
+            # DEBUG: Check for any DataFrame columns (shouldn't exist but let's verify)
+            problematic_cols = []
+            for col in X.columns:
+                if isinstance(X[col], pd.DataFrame):
+                    problematic_cols.append(col)
+                    logger.error(f"DEBUG: Column '{col}' is a DataFrame with shape {X[col].shape}")
+                    logger.error(f"DEBUG: Column '{col}' columns: {list(X[col].columns)}")
+                    logger.error(f"DEBUG: Column '{col}' index: {X[col].index}")
+
+            if problematic_cols:
+                logger.error(f"DEBUG: Found {len(problematic_cols)} DataFrame columns that should be Series: {problematic_cols}")
+                # Try to fix the issue by taking the first column if it's a single-column DataFrame
+                for col in problematic_cols:
+                    if isinstance(X[col], pd.DataFrame) and len(X[col].columns) == 1:
+                        logger.info(f"DEBUG: Attempting to fix column '{col}' by extracting first column")
+                        X[col] = X[col].iloc[:, 0]
+            else:
+                logger.info("DEBUG: All columns are properly formatted as Series")
+
             # Step 4: Create and train model
             logger.info("Step 4: Training model...")
             model = ModelFactory.create(self.model_type, config=kwargs.get('model_config'))

@@ -19,7 +19,7 @@ import pandas as pd
 import json
 import pickle
 from pathlib import Path
-from typing import Dict, Any, Optional, Union
+from typing import Dict, Any, Optional, Union, List
 from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.preprocessing import StandardScaler
 
@@ -346,3 +346,65 @@ class FF5RegressionModel(BaseModel):
 
         logger.info(f"FF5RegressionModel loaded from {path}")
         return instance
+
+    def get_hyperparameter_search_space(self) -> Dict[str, Any]:
+        """
+        Get hyperparameter search space for FF5 model optimization.
+
+        Returns:
+            Dictionary defining the search space for Optuna optimization
+        """
+        from ..finetune.hyperparameter_optimizer import SearchSpace
+
+        return {
+            'regularization': SearchSpace(
+                param_type='categorical',
+                choices=['none', 'ridge']
+            ),
+            'alpha': SearchSpace(
+                param_type='float',
+                low=0.01,
+                high=10.0,
+                step=0.1,
+                log_scale=True
+            ),
+            'standardize': SearchSpace(
+                param_type='categorical',
+                choices=[True, False]
+            )
+        }
+
+    def get_tunable_hyperparameters(self) -> List[str]:
+        """
+        Get list of tunable hyperparameter names.
+
+        Returns:
+            List of hyperparameter names that can be optimized
+        """
+        return [
+            'regularization',
+            'alpha',
+            'standardize'
+        ]
+
+    def get_model_info(self) -> Dict[str, Any]:
+        """
+        Get comprehensive model information.
+
+        Returns:
+            Dictionary with model metadata and current configuration
+        """
+        return {
+            'model_type': self.model_type,
+            'status': self.status.value,
+            'hyperparameters': self.get_model_params(),
+            'expected_features': self._expected_features,
+            'tunable_parameters': self.get_tunable_hyperparameters(),
+            'capabilities': {
+                'factor_modeling': True,
+                'beta_estimation': True,
+                'regularization': self.regularization != 'none',
+                'feature_standardization': self.standardize,
+                'interpretable': True
+            }
+        }

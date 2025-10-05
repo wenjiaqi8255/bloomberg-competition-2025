@@ -21,7 +21,7 @@ import pandas as pd
 import json
 import pickle
 from pathlib import Path
-from typing import Dict, Any, Optional, Union, Tuple
+from typing import Dict, Any, Optional, Union, Tuple, List
 
 try:
     import torch
@@ -586,4 +586,91 @@ class LSTMModel(BaseModel):
         
         logger.info(f"LSTMModel loaded from {path}")
         return instance
+
+    def get_hyperparameter_search_space(self) -> Dict[str, Any]:
+        """
+        Get hyperparameter search space for LSTM model optimization.
+
+        Returns:
+            Dictionary defining the search space for Optuna optimization
+        """
+        from ..finetune.hyperparameter_optimizer import SearchSpace
+
+        return {
+            'hidden_size': SearchSpace(
+                param_type='categorical',
+                choices=[32, 64, 128, 256]
+            ),
+            'num_layers': SearchSpace(
+                param_type='int',
+                low=1,
+                high=4,
+                step=1
+            ),
+            'dropout': SearchSpace(
+                param_type='float',
+                low=0.1,
+                high=0.5,
+                step=0.05
+            ),
+            'learning_rate': SearchSpace(
+                param_type='float',
+                low=0.0001,
+                high=0.01,
+                step=0.0001,
+                log_scale=True
+            ),
+            'batch_size': SearchSpace(
+                param_type='categorical',
+                choices=[16, 32, 64, 128]
+            ),
+            'sequence_length': SearchSpace(
+                param_type='categorical',
+                choices=[10, 20, 30, 60]
+            ),
+            'bidirectional': SearchSpace(
+                param_type='categorical',
+                choices=[True, False]
+            )
+        }
+
+    def get_tunable_hyperparameters(self) -> List[str]:
+        """
+        Get list of tunable hyperparameter names.
+
+        Returns:
+            List of hyperparameter names that can be optimized
+        """
+        return [
+            'hidden_size',
+            'num_layers',
+            'dropout',
+            'learning_rate',
+            'batch_size',
+            'sequence_length',
+            'bidirectional'
+        ]
+
+    def get_model_info(self) -> Dict[str, Any]:
+        """
+        Get comprehensive model information.
+
+        Returns:
+            Dictionary with model metadata and current configuration
+        """
+        return {
+            'model_type': self.model_type,
+            'status': self.status.value,
+            'hyperparameters': self.get_model_params(),
+            'feature_names': self._feature_names,
+            'input_size': self._input_size,
+            'tunable_parameters': self.get_tunable_hyperparameters(),
+            'capabilities': {
+                'sequence_modeling': True,
+                'temporal_dependencies': True,
+                'early_stopping': True,
+                'handles_multivariate': True,
+                'supports_gpu': torch.cuda.is_available() if TORCH_AVAILABLE else False
+            }
+        }
 

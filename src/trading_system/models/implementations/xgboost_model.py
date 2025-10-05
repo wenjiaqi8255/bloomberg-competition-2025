@@ -21,7 +21,7 @@ import pandas as pd
 import json
 import pickle
 from pathlib import Path
-from typing import Dict, Any, Optional, Union
+from typing import Dict, Any, Optional, Union, List
 
 try:
     import xgboost as xgb
@@ -409,3 +409,110 @@ class XGBoostModel(BaseModel):
         logger.info(f"XGBoostModel loaded from {path}")
         return instance
 
+    def get_hyperparameter_search_space(self) -> Dict[str, Any]:
+        """
+        Get hyperparameter search space for XGBoost model optimization.
+
+        Returns:
+            Dictionary defining the search space for Optuna optimization
+        """
+        from ..finetune.hyperparameter_optimizer import SearchSpace
+
+        return {
+            'n_estimators': SearchSpace(
+                param_type='int',
+                low=50,
+                high=500,
+                step=10
+            ),
+            'max_depth': SearchSpace(
+                param_type='int',
+                low=3,
+                high=12,
+                step=1
+            ),
+            'learning_rate': SearchSpace(
+                param_type='float',
+                low=0.01,
+                high=0.3,
+                step=0.01,
+                log_scale=True
+            ),
+            'subsample': SearchSpace(
+                param_type='float',
+                low=0.6,
+                high=1.0,
+                step=0.05
+            ),
+            'colsample_bytree': SearchSpace(
+                param_type='float',
+                low=0.6,
+                high=1.0,
+                step=0.05
+            ),
+            'min_child_weight': SearchSpace(
+                param_type='int',
+                low=1,
+                high=10,
+                step=1
+            ),
+            'gamma': SearchSpace(
+                param_type='float',
+                low=0.0,
+                high=1.0,
+                step=0.05
+            ),
+            'reg_alpha': SearchSpace(
+                param_type='float',
+                low=0.0,
+                high=1.0,
+                step=0.05
+            ),
+            'reg_lambda': SearchSpace(
+                param_type='float',
+                low=0.5,
+                high=2.0,
+                step=0.1
+            )
+        }
+
+    def get_tunable_hyperparameters(self) -> List[str]:
+        """
+        Get list of tunable hyperparameter names.
+
+        Returns:
+            List of hyperparameter names that can be optimized
+        """
+        return [
+            'n_estimators',
+            'max_depth',
+            'learning_rate',
+            'subsample',
+            'colsample_bytree',
+            'min_child_weight',
+            'gamma',
+            'reg_alpha',
+            'reg_lambda'
+        ]
+
+    def get_model_info(self) -> Dict[str, Any]:
+        """
+        Get comprehensive model information.
+
+        Returns:
+            Dictionary with model metadata and current configuration
+        """
+        return {
+            'model_type': self.model_type,
+            'status': self.status.value,
+            'hyperparameters': self.get_model_params(),
+            'feature_names': self._feature_names,
+            'best_iteration': self._best_iteration,
+            'tunable_parameters': self.get_tunable_hyperparameters(),
+            'capabilities': {
+                'feature_importance': True,
+                'early_stopping': self.early_stopping_rounds is not None,
+                'handles_missing_values': True,
+                'supports_gpu': False  # Could be enabled with proper setup
+            }
+        }

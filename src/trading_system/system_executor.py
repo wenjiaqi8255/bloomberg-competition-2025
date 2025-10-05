@@ -160,12 +160,11 @@ class SystemExecutor:
             position_sizer = PositionSizer(volatility_target=0.15)
             
             # e. 实例化策略
-            # 这里我们假设所有策略都使用通用的 MLStrategy 类，它遵循新的架构
+            # 这里我们假设所有策略都使用通用的 MultiStockMLStrategy 类，它遵循新的架构
             strategy = MLStrategy(
                 name=name,
                 feature_pipeline=fe_pipeline,
                 model_predictor=model_predictor,
-                position_sizer=position_sizer,
                 universe=strategy_universe,  # Pass the resolved universe
                 data_provider=data_provider,
                 factor_data_provider=factor_data_provider

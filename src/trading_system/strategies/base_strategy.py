@@ -48,7 +48,7 @@ class BaseStrategy(ABC):
     
     Example:
         # ML Strategy
-        MLStrategy(
+        MultiStockMLStrategy(
             pipeline=FeaturePipeline(config=ml_feature_config),
             model=ModelPredictor(model_id="random_forest_v1"),
             ...
@@ -133,11 +133,15 @@ class BaseStrategy(ABC):
             if features.empty:
                 logger.warning(f"[{self.name}] Feature computation returned empty DataFrame")
                 return pd.DataFrame()
-            
+
+            logger.info(f"[{self.name}] Features computed successfully: shape={features.shape}, columns={len(features.columns)}")
+
             # Step 2: Get model predictions
-            logger.debug(f"[{self.name}] Step 2: Getting model predictions...")
+            logger.info(f"[{self.name}] Step 2: Getting model predictions...")
             predictions = self._get_predictions(features, price_data, start_date, end_date)
-            
+
+            logger.info(f"[{self.name}] Predictions returned: shape={predictions.shape}, empty={predictions.empty}")
+
             if predictions.empty:
                 logger.warning(f"[{self.name}] Model predictions returned empty DataFrame")
                 return pd.DataFrame()
@@ -166,10 +170,18 @@ class BaseStrategy(ABC):
         try:
             # Prepare data in format expected by pipeline
             pipeline_data = {'price_data': price_data}
-            
+
+            logger.info(f"[{self.name}] 🔧 Feature pipeline transform starting...")
+            logger.info(f"[{self.name}] Pipeline data keys: {list(pipeline_data.keys())}")
+            logger.info(f"[{self.name}] Price data symbols: {list(price_data.keys())}")
+            logger.info(f"[{self.name}] Feature pipeline fitted: {getattr(self.feature_pipeline, '_is_fitted', 'Unknown')}")
+
             # Transform using fitted pipeline
             features = self.feature_pipeline.transform(pipeline_data)
-            
+
+            logger.info(f"[{self.name}] ✅ Feature pipeline transform completed")
+            logger.info(f"[{self.name}] Features shape: {features.shape}")
+            logger.info(f"[{self.name}] Features columns sample: {list(features.columns[:10])}...")
             logger.debug(f"[{self.name}] Computed {len(features.columns)} features")
             return features
             
@@ -195,27 +207,40 @@ class BaseStrategy(ABC):
             DataFrame with predictions (expected returns or signals)
         """
         try:
+            logger.info(f"[{self.name}] 🔍 _get_predictions started")
+            logger.info(f"[{self.name}] Features shape: {features.shape}, columns: {list(features.columns[:5])}...")
+            logger.info(f"[{self.name}] Price data keys: {list(price_data.keys())}")
+
             # Get predictions for each symbol
             predictions_dict = {}
-            
+            symbols_processed = 0
+
             for symbol in price_data.keys():
+                logger.info(f"[{self.name}] Processing symbol {symbol}...")
+                symbols_processed += 1
+
                 # Extract symbol features
                 symbol_features = self._extract_symbol_features(features, symbol)
-                
+                logger.info(f"[{self.name}] Symbol {symbol}: extracted {len(symbol_features.columns)} features")
+
                 if symbol_features.empty:
+                    logger.warning(f"[{self.name}] No features found for symbol {symbol}")
                     continue
                 
                 # Get prediction from model
                 # Model should return expected return or signal strength
+                logger.debug(f"[{self.name}] Getting prediction for {symbol} with features shape: {symbol_features.shape}")
                 result = self.model_predictor.predict(
                     features=symbol_features,
                     symbol=symbol,
                     prediction_date=end_date
                 )
-                
+                logger.debug(f"[{self.name}] Model prediction result for {symbol}: {result}")
+
                 # Extract prediction value
                 prediction_value = result.get('prediction', 0.0)
                 predictions_dict[symbol] = prediction_value
+                logger.debug(f"[{self.name}] Extracted prediction value for {symbol}: {prediction_value}")
             
             # Convert to DataFrame format
             dates = pd.date_range(start=start_date, end=end_date, freq='D')
@@ -224,12 +249,16 @@ class BaseStrategy(ABC):
                 columns=list(predictions_dict.keys()),
                 data=[list(predictions_dict.values())] * len(dates)
             )
-            
-            logger.debug(f"[{self.name}] Generated predictions for {len(predictions_dict)} symbols")
+
+            logger.info(f"[{self.name}] ✅ Created DataFrame: shape={predictions_df.shape}, symbols={len(predictions_dict)}, processed={symbols_processed}")
+            logger.info(f"[{self.name}] 📊 Prediction dict keys: {list(predictions_dict.keys())}")
+            logger.info(f"[{self.name}] 📅 Date range: {start_date} to {end_date}")
             return predictions_df
-            
+
         except Exception as e:
-            logger.error(f"[{self.name}] Prediction failed: {e}")
+            logger.error(f"[{self.name}] ❌ Prediction failed: {e}")
+            import traceback
+            logger.error(f"[{self.name}] Traceback: {traceback.format_exc()}")
             return pd.DataFrame()
     
     def _extract_symbol_features(self, features: pd.DataFrame, symbol: str) -> pd.DataFrame:
@@ -243,16 +272,14 @@ class BaseStrategy(ABC):
         Returns:
             Features for the symbol
         """
-        # Features may have symbol prefix (e.g., 'AAPL_momentum_21d')
-        symbol_cols = [col for col in features.columns if col.startswith(f"{symbol}_")]
-        
-        if symbol_cols:
-            symbol_features = features[symbol_cols].copy()
-            # Remove symbol prefix
-            symbol_features.columns = [col.replace(f"{symbol}_", "") for col in symbol_cols]
+        # Extract features for this symbol using MultiIndex structure
+        if isinstance(features.index, pd.MultiIndex):
+            # Filter by symbol in MultiIndex
+            symbol_features = features.loc[symbol].copy()
+            symbol_features.reset_index(drop=True, inplace=True)
             return symbol_features
-        
-        # If no prefix, return all features (assume single symbol)
+
+        # Fallback: return all features (assume single symbol)
         return features
     
     def get_name(self) -> str:

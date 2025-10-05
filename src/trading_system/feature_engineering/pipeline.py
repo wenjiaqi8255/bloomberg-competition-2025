@@ -159,6 +159,10 @@ class FeatureEngineeringPipeline:
         nan_analysis = {}
         for col in features.columns:
             nan_count = features[col].isnull().sum()
+            # Ensure we have a scalar value (handle MultiIndex case)
+            if isinstance(nan_count, pd.Series):
+                nan_count = nan_count.iloc[0] if len(nan_count) > 0 else 0
+
             nan_pct = (nan_count / len(features)) * 100
             nan_analysis[col] = {'count': nan_count, 'percentage': nan_pct}
 
@@ -338,7 +342,7 @@ class FeatureEngineeringPipeline:
 
                 # Compute remaining features that weren't cached
                 if len(technical_cached.columns) < 8:  # If not all features were cached
-                    technical = calculator.compute_technical_indicators(data)
+                    technical = calculator._calculate_technical_for_group(data)
                     # Cache individual features that are in SLOW_FEATURES
                     for feature_name in self.SLOW_FEATURES:
                         if feature_name in technical.columns and feature_name not in technical_cached.columns:
@@ -370,7 +374,8 @@ class FeatureEngineeringPipeline:
                 missing_windows = [w for w in self.config.volatility_windows
                                  if f'volatility_{w}d' not in volatility_cached.columns]
                 if missing_windows:
-                    volatility = calculator.compute_volatility_features(data, missing_windows)
+                    volatility_methods = getattr(self.config, 'volatility_methods', ['std'])
+                    volatility = calculator._calculate_volatility_for_group(data, missing_windows, volatility_methods)
                     # Cache individual volatility features
                     for window in missing_windows:
                         feature_name = f'volatility_{window}d'
@@ -387,7 +392,8 @@ class FeatureEngineeringPipeline:
             # Step 3: Momentum features (highest NaN generation, but computed after volatility)
             if hasattr(self.config, 'momentum_periods'):
                 logger.debug(f"Step 3: Computing momentum features for {symbol}")
-                momentum = calculator.compute_momentum_features(data, self.config.momentum_periods)
+                momentum_methods = getattr(self.config, 'momentum_methods', ['simple'])
+                momentum = calculator._calculate_momentum_for_group(data, self.config.momentum_periods, momentum_methods)
                 symbol_features = pd.concat([symbol_features, momentum], axis=1)
                 # Quality checkpoint after momentum features
                 self._quality_checkpoint(symbol_features, f"{symbol}_momentum", step=3)
@@ -401,15 +407,13 @@ class FeatureEngineeringPipeline:
                     # Final quality checkpoint
                     self._quality_checkpoint(symbol_features, f"{symbol}_final", step=4)
 
-            # Add symbol prefix to feature names and create MultiIndex
-            symbol_features.columns = [f"{symbol}_{col}" for col in symbol_features.columns]
-
-            # Create MultiIndex for this symbol's features
+            # Create MultiIndex for this symbol's features (universal feature names)
             symbol_multiindex = pd.MultiIndex.from_product(
                 [[symbol], symbol_features.index],
                 names=['symbol', 'date']
             )
             symbol_features.index = symbol_multiindex
+
             all_features.append(symbol_features)
 
             logger.info(f"Completed feature computation for {symbol}: {len(symbol_features.columns)} features")
@@ -418,6 +422,11 @@ class FeatureEngineeringPipeline:
         if all_features:
             combined_features = pd.concat(all_features, axis=0)
             combined_features.sort_index(inplace=True)
+
+            # Remove duplicate columns (can happen during concatenation)
+            if combined_features.columns.duplicated().any():
+                logger.warning(f"Found {combined_features.columns.duplicated().sum()} duplicate columns, removing duplicates")
+                combined_features = combined_features.loc[:, ~combined_features.columns.duplicated()]
 
             # Final global quality checkpoint
             self._final_quality_checkpoint(combined_features)
@@ -579,7 +588,12 @@ class FeatureEngineeringPipeline:
         # Find features with high NaN percentages
         problematic_features = []
         for col in features.columns:
-            col_nan_pct = (features[col].isnull().sum() / len(features)) * 100
+            col_nan_count = features[col].isnull().sum()
+            # Ensure we have a scalar value (handle MultiIndex case)
+            if isinstance(col_nan_count, pd.Series):
+                col_nan_count = col_nan_count.iloc[0] if len(col_nan_count) > 0 else 0
+
+            col_nan_pct = (col_nan_count / len(features)) * 100
             if col_nan_pct > 50:
                 problematic_features.append((col, col_nan_pct))
 

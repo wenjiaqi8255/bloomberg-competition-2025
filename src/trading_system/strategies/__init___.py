@@ -16,7 +16,7 @@ from .base_strategy import BaseStrategy
 
 # Unified Strategies (new implementations)
 from .ml_strategy import MLStrategy
-from .dual_momentum import DualMomentumStrategy  
+from .dual_momentum import DualMomentumStrategy
 from .fama_french_5 import FamaFrench5Strategy
 
 # Unified Factory
@@ -25,12 +25,12 @@ from .factory import StrategyFactory
 __all__ = [
     # Base
     'BaseStrategy',
-    
+
     # Strategies
     'MLStrategy',
     'DualMomentumStrategy',
     'FamaFrench5Strategy',
-    
+
     # Factory
     'StrategyFactory',
 ]

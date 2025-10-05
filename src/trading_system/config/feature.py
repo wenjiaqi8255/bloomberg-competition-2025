@@ -1,5 +1,5 @@
-from dataclasses import dataclass
-from typing import List, Dict, Any
+from dataclasses import dataclass, field
+from typing import List, Dict, Any, Optional
 from enum import Enum
 
 
@@ -41,6 +41,31 @@ class FeatureConfig:
 
     # Feature selection
     max_features: int = 50
+
+    # Method selection parameters (for enhanced feature engineering)
+    return_methods: List[str] = field(default_factory=lambda: ["simple", "log"])
+    momentum_methods: List[str] = field(default_factory=lambda: ["simple", "exponential"])
+    trend_methods: List[str] = field(default_factory=lambda: ["sma", "ema", "dema"])
+    volatility_methods: List[str] = field(default_factory=lambda: ["std", "parkinson", "garman_klass"])
+    volume_periods: List[int] = field(default_factory=lambda: [5, 10, 20])
+    volume_ratios: bool = field(default=True)
+    volume_indicators: List[str] = field(default_factory=lambda: ["obv", "vwap", "ad_line"])
+
+    # Additional parameters from templates
+    return_periods: List[int] = field(default_factory=lambda: [1, 5, 10, 20])
+    trend_periods: List[int] = field(default_factory=lambda: [10, 20, 50])
+    feature_importance_threshold: float = field(default=0.01)
+    handle_missing: str = field(default="interpolate")
+    technical_indicators: List[str] = field(default_factory=lambda: ["rsi", "macd", "bollinger_bands", "stochastic", "williams_r"])
+    technical_patterns: List[str] = field(default_factory=lambda: ["rsi", "macd", "bollinger_position", "stochastic"])
+
+    # Factor model parameters (for FF5)
+    factors: List[str] = field(default_factory=lambda: ["MKT", "SMB", "HML", "RMW", "CMA"])
+    factor_timing: Dict[str, Any] = field(default_factory=dict)
+    risk_metrics: Dict[str, Any] = field(default_factory=dict)
+
+    # Sequence features (for LSTM)
+    sequence_features: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         """Initialize default values."""

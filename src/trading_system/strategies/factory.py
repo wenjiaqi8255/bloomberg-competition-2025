@@ -53,7 +53,7 @@ class StrategyFactory:
     
     # Strategy class registry
     _strategy_registry = {
-        'ml': MLStrategy,
+        'ml': MLStrategy,  # Use multi-stock version for better compatibility
         'dual_momentum': DualMomentumStrategy,
         'fama_french_5': FamaFrench5Strategy,
     }
@@ -108,19 +108,20 @@ class StrategyFactory:
         # Step 1: Get or Create FeatureEngineeringPipeline
         # Check if a fitted pipeline is provided (e.g., from training)
         providers = kwargs.get('providers', {})
+        logger.debug(f"StrategyFactory: Available providers: {list(providers.keys())}")
         feature_pipeline = providers.get('feature_pipeline')
-        
+
         if feature_pipeline is not None:
-            logger.info("Using provided fitted FeatureEngineeringPipeline from training")
-            if not feature_pipeline._is_fitted:
-                logger.warning("Provided feature_pipeline is not fitted!")
+            logger.info("✓ Using provided fitted FeatureEngineeringPipeline from training")
+            logger.debug(f"✓ Feature pipeline type: {type(feature_pipeline)}")
+            logger.debug(f"✓ Feature pipeline fitted: {getattr(feature_pipeline, '_is_fitted', 'Unknown')}")
         else:
-            logger.info("Creating new FeatureEngineeringPipeline from config")
+            logger.warning("⚠ Creating new FeatureEngineeringPipeline from config (no fitted pipeline provided)")
             feature_pipeline = cls._create_feature_pipeline(strategy_type, config)
         
         # Step 2: Create ModelPredictor, passing along any extra context like providers
         model_predictor = cls._create_model_predictor(model_id, config, **kwargs)
-        
+
         # Step 3: Create PositionSizer
         position_sizer = cls._create_position_sizer(config)
         
@@ -313,7 +314,7 @@ class StrategyFactory:
         logger.info(f"Mode 3: Creating new model instance from factory")
         
         # Use the inferred type to handle versioned model_ids like 'ff5_regression_v1.2'
-        model_type_to_create = inferred_model_type
+        model_type_to_create = cls._infer_model_type(model_id)
         
         if ModelFactory.is_registered(model_type_to_create):
             logger.info(f"Creating model '{model_type_to_create}' with config: {model_config}")
@@ -324,7 +325,7 @@ class StrategyFactory:
             # Create predictor with direct model injection
             predictor = ModelPredictor(
                 model_instance=model,
-                model_registry_path=model_registry_path,
+                model_registry_path=model_registry_path or './models',
                 **predictor_kwargs
             )
             
@@ -419,6 +420,7 @@ class StrategyFactory:
         
         return params
 
+    
 
 # TODO: REQUIRED FOR FULL FUNCTIONALITY
 # --------------------------------------
