@@ -25,9 +25,240 @@ class TechnicalIndicatorCalculator:
     indicators used in quantitative trading strategies.
     """
 
-    def __init__(self):
+    def __init__(self, config=None):
         """Initialize calculator."""
         logger.debug("Initialized TechnicalIndicatorCalculator")
+        self._missing_value_stats = {}
+        self.config = config
+
+    def _analyze_missing_values(self, features: pd.DataFrame, feature_type: str = "unknown") -> Dict[str, float]:
+        """
+        Analyze missing values in computed features and return statistics.
+
+        Args:
+            features: DataFrame containing computed features
+            feature_type: Type of features (momentum, volatility, technical)
+
+        Returns:
+            Dictionary with missing value statistics
+        """
+        missing_stats = {}
+        total_values = len(features) * len(features.columns)
+
+        if total_values == 0:
+            return missing_stats
+
+        overall_missing = features.isnull().sum().sum()
+        overall_missing_pct = (overall_missing / total_values) * 100
+
+        missing_stats['overall_missing_pct'] = overall_missing_pct
+        missing_stats['total_values'] = total_values
+        missing_stats['missing_values'] = overall_missing
+
+        # Per-feature missing values
+        for column in features.columns:
+            missing_count = features[column].isnull().sum()
+            missing_pct = (missing_count / len(features)) * 100
+            missing_stats[f'{column}_missing_pct'] = missing_pct
+
+            # Store for later reporting
+            if column not in self._missing_value_stats:
+                self._missing_value_stats[column] = {}
+            self._missing_value_stats[column][feature_type] = {
+                'missing_pct': missing_pct,
+                'missing_count': missing_count,
+                'total_count': len(features)
+            }
+
+        # Log summary based on config
+        if self.config and hasattr(self.config, 'should_log_missing_value_warning'):
+            should_warn = self.config.should_log_missing_value_warning(overall_missing_pct / 100)
+        else:
+            should_warn = overall_missing_pct > 0
+
+        if should_warn:
+            logger.warning(f"{feature_type} features: {overall_missing_pct:.2f}% missing values "
+                          f"({overall_missing}/{total_values})")
+        else:
+            logger.info(f"{feature_type} features: No missing values ({total_values} values)")
+
+        return missing_stats
+
+    def _log_feature_quality_summary(self, feature_type: str, warmup_period: int = 0):
+        """
+        Log a detailed summary of feature quality including missing values and warmup periods.
+
+        Args:
+            feature_type: Type of features computed
+            warmup_period: Expected warmup period for rolling calculations
+        """
+        if not self._missing_value_stats:
+            logger.info(f"No missing value statistics available for {feature_type}")
+            return
+
+        logger.info(f"\n=== {feature_type.upper()} FEATURE QUALITY SUMMARY ===")
+
+        feature_columns = [col for col in self._missing_value_stats.keys() if feature_type in self._missing_value_stats[col]]
+
+        if not feature_columns:
+            logger.info(f"No {feature_type} features found in statistics")
+            return
+
+        total_missing = 0
+        total_values = 0
+
+        for column in feature_columns:
+            stats = self._missing_value_stats[column][feature_type]
+            missing_pct = stats['missing_pct']
+            missing_count = stats['missing_count']
+            total_count = stats['total_count']
+
+            total_missing += missing_count
+            total_values += total_count
+
+            if missing_pct > 0:
+                logger.info(f"  {column}: {missing_pct:.2f}% missing ({missing_count}/{total_count})")
+            else:
+                logger.info(f"  {column}: Complete ({total_count} values)")
+
+        # Overall summary
+        overall_missing_pct = (total_missing / total_values * 100) if total_values > 0 else 0
+        logger.info(f"\nOverall: {overall_missing_pct:.2f}% missing ({total_missing}/{total_values})")
+
+        if warmup_period > 0:
+            expected_missing_pct = (warmup_period / len(feature_columns)) * 100 if len(feature_columns) > 0 else 0
+            logger.info(f"Expected warmup missing: {expected_missing_pct:.2f}% (first {warmup_period} periods)")
+
+            # Use config tolerance multiplier if available
+            tolerance_multiplier = 1.5
+            if self.config and hasattr(self.config, 'warmup_tolerance_multiplier'):
+                tolerance_multiplier = self.config.warmup_tolerance_multiplier
+
+            if overall_missing_pct > expected_missing_pct * tolerance_multiplier:
+                logger.warning(f"Missing values exceed expected warmup period! "
+                             f"Actual: {overall_missing_pct:.2f}%, Expected: {expected_missing_pct:.2f}% (tolerance: {tolerance_multiplier}x)")
+            else:
+                logger.info(f"Missing values within expected range (tolerance: {tolerance_multiplier}x)")
+
+        logger.info("=" * 50)
+
+    def get_missing_value_report(self) -> Dict[str, Dict]:
+        """
+        Get comprehensive missing value report for all computed features.
+
+        Returns:
+            Dictionary containing missing value statistics for all features
+        """
+        return self._missing_value_stats.copy()
+
+    def reset_missing_value_stats(self):
+        """Reset missing value statistics for fresh computation."""
+        self._missing_value_stats.clear()
+
+    def calculate_expected_warmup_periods(self, feature_types: List[str] = None) -> Dict[str, int]:
+        """
+        Calculate expected warmup periods for different feature types.
+
+        Args:
+            feature_types: List of feature types to calculate warmup for
+
+        Returns:
+            Dictionary mapping feature types to expected warmup periods
+        """
+        if feature_types is None:
+            feature_types = ['momentum', 'volatility', 'technical']
+
+        warmup_periods = {
+            'momentum': 252,  # Maximum momentum period + ranking window
+            'volatility': 252,  # Maximum volatility window + ranking window
+            'technical': 200    # Maximum SMA period
+        }
+
+        return {ft: warmup_periods.get(ft, 0) for ft in feature_types}
+
+    def log_comprehensive_feature_report(self, feature_types: List[str] = None):
+        """
+        Log comprehensive missing value report for all feature types.
+
+        Args:
+            feature_types: List of feature types to include in report
+        """
+        if feature_types is None:
+            feature_types = ['momentum', 'volatility', 'technical']
+
+        logger.info("\n" + "="*60)
+        logger.info("COMPREHENSIVE FEATURE QUALITY REPORT")
+        logger.info("="*60)
+
+        warmup_periods = self.calculate_expected_warmup_periods(feature_types)
+
+        for feature_type in feature_types:
+            self._log_feature_quality_summary(feature_type, warmup_periods[feature_type])
+
+        # Cross-feature analysis
+        all_features = set(self._missing_value_stats.keys())
+        logger.info(f"\nTotal unique features computed: {len(all_features)}")
+
+        if all_features:
+            # Use configured threshold instead of hardcoded 10%
+            threshold_pct = 10
+            if self.config and hasattr(self.config, 'missing_value_threshold'):
+                threshold_pct = self.config.missing_value_threshold * 100
+
+            high_missing_features = []
+            for feature_name in all_features:
+                for feature_type, stats in self._missing_value_stats[feature_name].items():
+                    if stats['missing_pct'] > threshold_pct:  # More than threshold missing
+                        high_missing_features.append((feature_name, feature_type, stats['missing_pct']))
+
+        if high_missing_features:
+            logger.warning(f"\nFeatures with high missing values (>{threshold_pct:.1f}%):")
+            for feature_name, feature_type, missing_pct in sorted(high_missing_features, key=lambda x: x[2], reverse=True):
+                logger.warning(f"  {feature_name} ({feature_type}): {missing_pct:.2f}% missing")
+        else:
+            logger.info(f"\nAll features have acceptable missing value rates (<{threshold_pct:.1f}%)")
+
+        # Save report to file if configured
+        if self.config and hasattr(self.config, 'missing_value_report_path') and self.config.missing_value_report_path:
+            self._save_missing_value_report(self.config.missing_value_report_path)
+
+        logger.info("="*60)
+
+    def _save_missing_value_report(self, file_path: str):
+        """
+        Save missing value report to a JSON file.
+
+        Args:
+            file_path: Path to save the report
+        """
+        import json
+        from datetime import datetime
+
+        try:
+            report_data = {
+                'timestamp': datetime.now().isoformat(),
+                'missing_value_stats': self._missing_value_stats,
+                'config': {
+                    'strategy': self.config.handle_missing if self.config else 'interpolate',
+                    'threshold': self.config.missing_value_threshold if self.config else 0.1,
+                    'tolerance_multiplier': self.config.warmup_tolerance_multiplier if self.config else 1.5
+                },
+                'summary': {
+                    'total_features': len(self._missing_value_stats),
+                    'feature_types': list(set(
+                        ft for feature_stats in self._missing_value_stats.values()
+                        for ft in feature_stats.keys()
+                    ))
+                }
+            }
+
+            with open(file_path, 'w') as f:
+                json.dump(report_data, f, indent=2, default=str)
+
+            logger.info(f"Missing value report saved to: {file_path}")
+
+        except Exception as e:
+            logger.error(f"Failed to save missing value report to {file_path}: {e}")
 
     # ========== Group-Aware Functions for Multi-Stock Processing ==========
 
@@ -120,6 +351,9 @@ class TechnicalIndicatorCalculator:
             features['mfi'] = mfi
             logger.debug(f"DEBUG: mfi has {mfi.isnull().sum()} NaN values")
 
+        # Analyze missing values before returning
+        self._analyze_missing_values(features, "momentum")
+
         return features
 
     def _calculate_volatility_for_group(self, group_df: pd.DataFrame, windows: List[int],
@@ -195,6 +429,9 @@ class TechnicalIndicatorCalculator:
         range_vol = (group_df['High'] - group_df['Low']) / group_df['Close']
         features['range_volatility'] = range_vol
         logger.debug(f"DEBUG: range_volatility has {range_vol.isnull().sum()} NaN values")
+
+        # Analyze missing values before returning
+        self._analyze_missing_values(features, "volatility")
 
         return features
 
@@ -319,5 +556,8 @@ class TechnicalIndicatorCalculator:
             vpt_cumsum = vpt.cumsum()
             features['volume_price_trend'] = vpt_cumsum
             logger.debug(f"DEBUG: volume_price_trend has {vpt_cumsum.isnull().sum()} NaN values")
+
+        # Analyze missing values before returning
+        self._analyze_missing_values(features, "technical")
 
         return features

@@ -317,3 +317,4 @@ class MetaModel(BaseModel):
     # Note: Persistence methods are removed since BaseModel and ModelRegistry provide this functionality
     # Use BaseModel's serialization or ModelRegistry for saving/loading models
 
+

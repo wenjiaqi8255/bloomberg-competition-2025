@@ -58,6 +58,29 @@ training_setup:
       - V
       - WMT
 
+  # Hyperparameter optimization configuration
+  hyperparameter_optimization:
+    enabled: true
+    optimization_method: "optuna"
+    n_trials: 50
+    cv_folds: 3
+    objective: "sharpe_ratio"
+
+    # Search space using LSTM model defaults
+    search_space_preset: "lstm_default"
+
+    # Optuna sampler and pruner settings
+    sampler_type: "tpe"
+    pruner_type: "median"
+
+    # Training optimization
+    enable_early_stopping: true
+    early_stopping_patience: 10
+
+    # Logging
+    log_to_wandb: true
+    log_all_trials: true
+
 # Part 3: Strategy Configuration
 # ------------------------------
 strategy:
@@ -67,6 +90,86 @@ strategy:
   # Model configuration
   model_id: placeholder_model_id  # Will be overwritten by orchestrator
   min_signal_strength: 0.1       # Minimum signal strength threshold
+
+# Model hyperparameter optimization settings
+hyperparameter_optimization:
+  # Enable/disable hyperparameter optimization
+  enabled: true
+
+  # Optimization method (optuna, grid_search, random_search)
+  optimization_method: "optuna"
+
+  # Number of optimization trials
+  n_trials: 50
+
+  # Optimization timeout (in seconds) - alternative to n_trials
+  timeout: null  # e.g., 3600 for 1 hour
+
+  # Cross-validation settings
+  cv_folds: 3
+  purge_days: 10  # Days to purge after train period
+  embargo_days: 5  # Days to embargo before test period
+
+  # Optimization objective (sharpe_ratio, sortino_ratio, max_drawdown, total_return, r2, mse)
+  objective: "sharpe_ratio"
+  direction: "maximize"  # maximize or minimize
+
+  # Sampler settings (optuna specific)
+  sampler:
+    type: "tpe"  # tpe, random, cmaes, grid
+    seed: 42
+
+  # Pruner settings (for early stopping of bad trials)
+  pruner:
+    type: "median"  # median, hyperband, successional_halving
+    n_startup_trials: 5  # Number of trials before pruning starts
+    n_warmup_steps: 10  # Number of steps before pruning starts
+    interval_steps: 1  # Interval between pruning checks
+
+  # Search space configuration (uses model defaults if not specified)
+  search_space:
+    # Use preset search space from SearchSpaceBuilder
+    preset: "lstm_default"  # lstm_default, lstm_fast, lstm_deep, or custom
+
+    # Custom search space (if preset is "custom")
+    custom_space:
+      hidden_size:
+        type: "categorical"
+        choices: [32, 64, 128, 256]
+      num_layers:
+        type: "int"
+        low: 1
+        high: 4
+      dropout:
+        type: "float"
+        low: 0.1
+        high: 0.5
+        step: 0.05
+      learning_rate:
+        type: "float"
+        low: 0.001
+        high: 0.1
+        log_scale: true
+      sequence_length:
+        type: "categorical"
+        choices: [10, 20, 30, 60]
+      batch_size:
+        type: "categorical"
+        choices: [16, 32, 64, 128]
+
+  # Early stopping settings
+  early_stopping:
+    enabled: true
+    patience: 10  # Number of epochs without improvement
+    min_delta: 0.001  # Minimum change to qualify as improvement
+    monitor: "val_loss"  # Metric to monitor for early stopping
+
+  # Trial logging and visualization
+  logging:
+    log_optimization: true  # Log optimization progress to wandb
+    log_all_trials: true  # Log all trials (not just best)
+    create_optimization_plot: true  # Create optimization history plots
+    log_feature_importance: true  # Log feature importance from best model
 
 # Part 4: Backtesting Configuration
 # --------------------------------

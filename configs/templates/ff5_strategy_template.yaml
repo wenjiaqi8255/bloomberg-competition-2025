@@ -1,0 +1,431 @@
+# Fama-French 5-Factor Strategy Configuration Template
+# ====================================================
+#
+# This template demonstrates comprehensive configuration for a Fama-French 5-factor
+# model-based trading strategy with integrated hyperparameter optimization and
+# full pipeline from factor data acquisition to backtesting.
+#
+# Key Features:
+# - Fama-French 5-factor model implementation
+# - Factor exposure analysis and timing
+# - Statistical factor model optimization
+# - Integrated hyperparameter optimization with Optuna
+# - Complete experiment tracking with WandB
+# - Production-ready backtesting with realistic costs
+
+# =============================================================================
+# EXPERIMENT METADATA
+# =============================================================================
+experiment:
+  name: "ff5_strategy_experiment"
+  description: "Fama-French 5-factor model trading strategy with factor timing"
+  tags: ["fama_french", "factor_model", "econometric", "statistical_arbitrage", "factor_timing"]
+  log_to_wandb: true
+  project_name: "bloomberg-competition"
+
+# =============================================================================
+# DATA PROVIDER CONFIGURATION
+# =============================================================================
+data_provider:
+  # Primary data provider for price data
+  type: "YFinanceProvider"
+  parameters:
+    max_retries: 3                # Retry failed API calls 3 times
+    retry_delay: 1.0              # Wait 1 second between retries
+    request_timeout: 30           # API request timeout in seconds
+    cache_enabled: true           # Enable data caching for performance
+
+# Factor data provider for Fama-French factors
+factor_data_provider:
+  type: "FF5DataProvider"
+  parameters:
+    data_frequency: "monthly"         # Monthly factor data (standard for FF5)
+    cache_enabled: true               # Cache factor data
+    validate_factors: true             # Validate factor data integrity
+
+# =============================================================================
+# TRAINING CONFIGURATION
+# =============================================================================
+training_setup:
+  # Model configuration
+  model:
+    model_type: "ff5_regression"     # Use Fama-French 5-factor regression model
+    config:
+      # Default regression parameters (will be optimized)
+      regularization: 'none'          # Regularization method
+      alpha: 1.0                      # Regularization strength
+      standardize: false              # Whether to standardize features
+      fit_intercept: true             # Include intercept in regression
+      positive_beta: false            # Allow negative betas
+      beta_constraints: {}            # Optional beta constraints
+
+  # Factor engineering configuration
+  feature_engineering:
+    # For FF5 models, feature engineering is primarily factor-based
+    enabled_features:
+      - "fama_french_factors"          # Core 5 factors
+      - "factor_timing"               # Factor timing signals
+      - "risk_metrics"                # Additional risk metrics
+      - "macro_variables"             # Optional macro variables
+
+    # Fama-French 5 Factors
+    factors:
+      - "MKT"                         # Market excess return
+      - "SMB"                         # Size (Small Minus Big)
+      - "HML"                         # Value (High Minus Low)
+      - "RMW"                         # Profitability (Robust Minus Weak)
+      - "CMA"                         # Investment (Conservative Minus Aggressive)
+
+    # Factor timing features (optional)
+    factor_timing:
+      enabled: true
+      timing_methods:
+        - "factor_momentum"           # 3-12 month factor momentum
+        - "factor_mean_reversion"     # Factor mean reversion signals
+        - "factor_volatility_timing"   # Volatility-based timing
+      lookback_periods: [3, 6, 12]    # Months for timing signals
+
+    # Risk metrics as additional features
+    risk_metrics:
+      enabled: true
+      metrics:
+        - "idiosyncratic_volatility"  # Stock-specific volatility
+        - "systematic_beta"           # Market beta
+        - "size_beta"                # Size factor beta
+        - "value_beta"               # Value factor beta
+
+    # Feature preprocessing
+    lookback_periods: [60]             # Maximum lookback for factor calculations
+    min_ic_threshold: 0.01             # Minimum information coefficient
+    feature_lag: 1                     # Factor data typically has 1-month lag
+    include_technical: false            # Not typically used with factor models
+    handle_missing: "forward_fill"     # Forward fill missing factor data
+
+  # Training data parameters
+  parameters:
+    start_date: "2010-01-01"           # Longer history for factor models
+    end_date: "2023-12-31"             # Training end date
+    symbols:
+      # Large-cap stocks (good for factor models)
+      - "AAPL"    # Apple
+      - "MSFT"    # Microsoft
+      - "GOOGL"   # Alphabet
+      - "AMZN"    # Amazon
+      - "META"    # Meta
+      - "TSLA"    # Tesla
+      - "NVDA"    # NVIDIA
+      - "JPM"     # JPMorgan Chase
+      - "V"       # Visa
+      - "WMT"     # Walmart
+
+      # Mid-cap stocks (more factor exposure)
+      - "ADBE"    # Adobe
+      - "CRM"     # Salesforce
+      - "NFLX"    # Netflix
+      - "INTC"    # Intel
+      - "CSCO"    # Cisco
+
+      # Value stocks (for HML factor exposure)
+      - "BRK-B"   # Berkshire Hathaway
+      - "JNJ"     # Johnson & Johnson
+      - "PG"      # Procter & Gamble
+      - "KO"      # Coca-Cola
+      - "MCD"     # McDonald's
+
+      # Small-cap stocks (for SMB factor exposure)
+      - "IWM"     # Russell 2000 ETF
+      - "SLY"     # S&P Small Cap ETF
+      - "IWO"     # Russell 2000 Growth ETF
+
+# =============================================================================
+# FAMA-FRENCH 5-FACTOR HYPERPARAMETER OPTIMIZATION
+# =============================================================================
+ff5_hyperparameter_optimization:
+  # Enable/disable hyperparameter optimization
+  enabled: true
+
+  # Optimization method
+  optimization_method: "optuna"
+
+  # Number of optimization trials (factor models need fewer trials)
+  n_trials: 30
+
+  # Cross-validation settings
+  cv_folds: 3                          # 3-fold cross-validation
+  purge_days: 21                       # 1 month purge period
+  embargo_days: 5                      # Days to embargo before test
+
+  # Optimization objective
+  objective: "r2"                      # Optimize for R² (fit quality)
+  direction: "maximize"                # Higher R² is better
+
+  # Alternative objectives (uncomment to use)
+  # objective: "sharpe_ratio"         # Optimize for risk-adjusted returns
+  # objective: "information_ratio"     # Optimize for information ratio
+  # objective: "ic"                    # Optimize for information coefficient
+
+  # Optuna sampler configuration
+  sampler:
+    type: "tpe"                        # Tree-structured Parzen Estimator
+    seed: 42                           # Random seed for reproducibility
+    n_startup_trials: 5                # Random trials before TPE
+
+  # Pruner configuration
+  pruner:
+    type: "median"                     # Median pruning
+    n_startup_trials: 3                # Trials before pruning starts
+    n_warmup_steps: 1                  # Fewer steps needed for factor models
+
+  # Search space configuration
+  search_space:
+    # Use built-in preset search space for FF5
+    preset: "ff5_default"
+
+    # Custom search space parameters (override preset)
+    custom_space:
+      # Regularization method
+      regularization:
+        type: "categorical"
+        choices: ["none", "ridge", "lasso"]
+        description: "Regularization method for regression"
+
+      # Regularization strength (when applicable)
+      alpha:
+        type: "float"
+        low: 0.01
+        high: 10.0
+        step: 0.1
+        log_scale: true
+        description: "Regularization strength parameter"
+
+      # Data standardization
+      standardize:
+        type: "categorical"
+        choices: [true, false]
+        description: "Standardize features before regression"
+
+      # Model fitting parameters
+      fit_intercept:
+        type: "categorical"
+        choices: [true, false]
+        description: "Include intercept in regression model"
+
+      # Factor constraints (advanced)
+      constrain_betas:
+        type: "categorical"
+        choices: [true, false]
+        description: "Apply constraints to factor betas"
+
+      max_beta_magnitude:
+        type: "float"
+        low: 0.5
+        high: 3.0
+        step: 0.1
+        description: "Maximum absolute value for factor betas"
+
+  # Factor analysis settings
+  factor_analysis:
+    enabled: true
+    analyze_factor_exposures: true     # Analyze factor exposures over time
+    calculate_factor_correlations: true # Calculate factor correlations
+    test_factor_significance: true      # Test statistical significance
+    beta_stability_analysis: true      # Analyze beta coefficient stability
+    factor_attribution_analysis: true   # Analyze factor contribution to returns
+
+  # Model validation settings
+  validation:
+    out_of_sample_test: true            # Perform out-of-sample testing
+    time_series_split: true             # Use time series cross-validation
+    stability_check: true               # Check model stability over time
+    statistical_significance: true      # Test statistical significance of factors
+    residual_analysis: true             # Analyze regression residuals
+    multicollinearity_check: true       # Check for multicollinearity
+
+  # Logging and tracking
+  logging:
+    log_optimization: true              # Log optimization progress to WandB
+    log_all_trials: true                # Log all trials (not just best)
+    create_optimization_plot: true      # Create optimization history plots
+    log_beta_coefficients: true         # Log beta coefficients from best model
+    log_factor_analysis: true           # Log factor analysis results
+    log_model_diagnostics: true         # Log regression diagnostics
+
+# =============================================================================
+# BACKTESTING CONFIGURATION
+# =============================================================================
+backtest:
+  name: "FF5_Factor_Strategy_Backtest"
+  start_date: "2024-01-01"             # Out-of-sample test period
+  end_date: "2024-12-31"
+
+  # Portfolio settings
+  initial_capital: 1000000             # $1M initial capital
+  benchmark_symbol: "SPY"              # S&P 500 as benchmark
+
+  # Transaction cost settings (realistic costs)
+  commission_rate: 0.001               # 0.1% commission per trade
+  slippage_rate: 0.0005                # 0.05% slippage per trade
+  short_borrow_cost: 0.002             # 0.2% annual short borrow cost
+
+  # Trading constraints (factor models typically trade less frequently)
+  rebalance_frequency: "monthly"        # Monthly rebalancing (matches factor data)
+  position_limit: 0.15                 # Maximum 15% in single position
+  rebalance_threshold: 0.05            # 5% change threshold for rebalancing
+
+  # Risk management
+  stop_loss_threshold: 0.20            # 20% stop-loss on positions
+  drawdown_limit: 0.25                 # 25% maximum drawdown
+  volatility_target: 0.12              # 12% annual volatility target
+
+# =============================================================================
+# STRATEGY CONFIGURATION
+# =============================================================================
+strategy:
+  name: "FF5_Factor_Strategy"
+  type: "fama_french_5"                # Strategy type identifier
+
+  # Model configuration
+  parameters:
+    # Model ID will be automatically set by the orchestrator
+    model_id: "placeholder_model_id"
+
+    # Factor model parameters
+    lookback_days: 252                 # 1 year lookback for calculations
+    risk_free_rate: 0.02               # Risk-free rate for calculations
+    factor_timing_enabled: true         # Enable factor timing signals
+    beta_update_frequency: "monthly"    # How often to update beta estimates
+
+    # Portfolio construction parameters
+    portfolio_method: "factor_tilt"     # Method for portfolio construction
+    factor_tilt_intensity: 0.5         # How much to tilt toward factors
+    sector_neutral: false               # Whether to be sector-neutral
+    beta_neutral: false                 # Whether to be beta-neutral
+
+    # Stock selection parameters
+    min_market_cap: 1000000000         # Minimum market cap ($1B)
+    min_trading_volume: 1000000        # Minimum daily volume
+    exclude_penny_stocks: true          # Exclude stocks < $5
+
+    # Risk management parameters
+    max_factor_exposure: 0.3            # Maximum exposure to single factor
+    position_sizing_method: "equal_weight"  # Position sizing method
+    rebalance_timing: "month_start"     # When to rebalance each month
+
+# =============================================================================
+# ADVANCED CONFIGURATION
+# =============================================================================
+advanced:
+  # Factor timing strategies
+  factor_timing:
+    enabled: true
+    strategies:
+      - "factor_momentum"               # Use factor momentum for timing
+      - "value_timing"                  # Time value factor exposure
+      - "size_timing"                   # Time size factor exposure
+      - "quality_timing"                # Time quality factor exposure
+    timing_lookback: 12                 # Months for timing calculations
+
+  # Multi-factor models (extensions)
+  multi_factor_models:
+    enabled: false
+    additional_models:
+      - "carhart_4_factor"              # Add momentum factor
+      - "q_factor_5_factor"             # Investment and profitability factors
+      - "fama_french_6_factor"          # Add other factors
+    model_combination: "weighted_average" # How to combine models
+
+  # Risk management
+  risk_management:
+    enabled: true
+    methods:
+      - "factor_exposure_limits"        # Limit factor exposures
+      - "volatility_targeting"          # Target portfolio volatility
+      - "drawdown_control"              # Control drawdowns
+      - "correlation_limits"            # Limit position correlations
+
+  # Performance attribution
+  attribution_analysis:
+    enabled: true
+    analyze_factor_returns: true        # Analyze factor return contributions
+    calculate_alpha_attribution: true   # Calculate alpha attribution
+    risk_decomposition: true           # Decompose risk sources
+    benchmark_comparison: true         # Compare to benchmark factors
+
+  # Statistical analysis
+  statistical_analysis:
+    enabled: true
+    tests:
+      - "factor_significance"           # Test factor significance
+      - "model_diagnostics"            # Regression diagnostics
+      - "stability_tests"               # Test model stability
+      - "outlier_detection"             # Detect outliers
+      - "structural_break_tests"        # Test for structural breaks
+
+# =============================================================================
+# OUTPUT AND REPORTING
+# =============================================================================
+reporting:
+  # Generate comprehensive reports
+  generate_report: true
+  output_format: ["html", "json", "pdf"]
+
+  # Report sections (factor model specific)
+  sections:
+    - "executive_summary"              # High-level performance summary
+    - "factor_model_results"           # Factor model estimation results
+    - "beta_coefficient_analysis"      # Beta coefficient analysis
+    - "factor_performance_attribution" # Factor performance attribution
+    - "risk_metrics"                   # Detailed risk metrics
+    - "statistical_diagnostics"        # Statistical model diagnostics
+    - "factor_timing_analysis"         # Factor timing performance
+    - "comparison_to_benchmark"        # Benchmark comparison
+
+  # Visualizations (factor model specific)
+  plots:
+    - "cumulative_returns"             # Cumulative returns chart
+    - "drawdown_chart"                 # Drawdown visualization
+    - "factor_exposure_evolution"      # Factor exposure over time
+    - "beta_coefficient_evolution"     # Beta coefficient changes
+    - "factor_attribution_chart"       # Factor return attribution
+    - "correlation_heatmap"            # Factor correlation heatmap
+    - "optimization_history"           # Optimization progress
+    - "parameter_importance"           # Parameter importance from Optuna
+    - "residual_analysis"              # Regression residual analysis
+    - "factor_performance_charts"      # Individual factor performance
+
+# =============================================================================
+# NOTES AND USAGE
+# =============================================================================
+#
+# To use this configuration:
+# 1. Copy this file to configs/your_experiment_name.yaml
+# 2. Modify symbols, dates, and parameters as needed
+# 3. Run with: poetry run python run_experiment.py --config configs/your_experiment_name.yaml
+#
+# Key customization points for FF5:
+# - Adjust symbols universe for different market segments
+# - Modify factor_timing parameters for different timing strategies
+# - Change regularization based on data characteristics
+# - Adjust portfolio_method for different investment approaches
+# - Enable additional factor models for enhanced analysis
+#
+# Expected computational requirements:
+# - Training: ~2-5 minutes per model (fast for linear models)
+# - Hyperparameter optimization: ~15-45 minutes (30 trials)
+# - Memory: 1-2 GB for factor data and models
+# - Storage: 50-200 MB for models and results
+#
+# Tips for FF5 model success:
+# - Ensure high-quality factor data (no missing values)
+# - Use appropriate lookback periods (typically 3-5 years)
+# - Consider market regimes (factor models may not work in all periods)
+# - Monitor factor exposures and correlations
+# - Use statistical tests to validate model assumptions
+# - Consider transaction costs (factor models often have lower turnover)
+#
+# Factor model specific considerations:
+# - Monthly rebalancing is typical (matches factor data frequency)
+# - Factor timing can add value but increases turnover
+# - Regularization helps prevent overfitting with many factors
+# - Statistical significance testing is important for factor models
+# - Consider macroeconomic regime when interpreting results

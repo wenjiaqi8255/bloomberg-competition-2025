@@ -219,8 +219,16 @@ class SystemOrchestrator:
         )
         
         # Portfolio Optimizer (New Component)
-        optimizer_config = self.custom_configs.get('optimizer_config', {'risk_aversion': 2.0})
+        # Support both 'portfolio_optimization' and legacy 'optimizer_config'
+        optimizer_config = self.custom_configs.get(
+            'portfolio_optimization',
+            self.custom_configs.get('optimizer_config', {
+                'method': 'mean_variance',
+                'risk_aversion': 2.0
+            })
+        )
         self.portfolio_optimizer = PortfolioOptimizer(optimizer_config)
+        logger.info(f"Portfolio optimizer initialized with method='{self.portfolio_optimizer.method}'")
 
         # Compliance Monitor (Modified to use box limits)
         self.box_limits = self.custom_configs.get('box_limits', {})

@@ -1,0 +1,372 @@
+# Feature Comparison Configuration Template
+# ========================================
+#
+# This template demonstrates configuration for comparing different feature sets
+# using fixed optimal hyperparameters to identify the best feature combination.
+#
+# Key Features:
+# - Compare multiple feature configurations side-by-side
+# - Use fixed optimal hyperparameters (from previous optimization)
+# - Focus on feature set comparison rather than hyperparameter tuning
+# - Generate comprehensive comparison reports and save best configuration
+# - Support for any model type (XGBoost, LSTM, FF5, etc.)
+
+# =============================================================================
+# EXPERIMENT METADATA
+# =============================================================================
+experiment:
+  name: "feature_comparison_experiment"
+  description: "Compare different feature sets to identify optimal feature combination"
+  tags: ["feature_comparison", "feature_engineering", "model_optimization"]
+
+# =============================================================================
+# DATA CONFIGURATION
+# =============================================================================
+data_config:
+  # Data provider configuration
+  provider_config:
+    max_retries: 3
+    retry_delay: 1.0
+    request_timeout: 30
+    cache_enabled: true
+
+  # Symbols and time period
+  symbols:
+    # Large-cap technology stocks
+    - "AAPL"    # Apple
+    - "MSFT"    # Microsoft
+    - "GOOGL"   # Alphabet
+    - "AMZN"    # Amazon
+    - "META"    # Meta
+
+    # Additional diversified stocks
+    - "JPM"     # JPMorgan Chase
+    - "V"       # Visa
+    - "WMT"     # Walmart
+    - "JNJ"     # Johnson & Johnson
+    - "NVDA"    # NVIDIA
+
+  start_date: "2018-01-01"
+  end_date: "2023-12-31"
+
+# =============================================================================
+# BASE FEATURE CONFIGURATION
+# =============================================================================
+base_feature_config:
+  # Time periods (will be overridden by variations if needed)
+  momentum_periods: [21, 63, 126]
+  volatility_windows: [20, 60]
+  lookback_periods: [20, 50, 200]
+
+  # Feature types to include
+  enabled_features:
+    - "momentum"
+    - "volatility"
+    - "technical"
+    - "volume"
+
+  # Default calculation methods (will be overridden by variations)
+  return_methods: ["simple"]
+  momentum_methods: ["simple"]
+  trend_methods: ["sma"]
+  volatility_methods: ["std"]
+
+  # Feature selection and validation
+  min_ic_threshold: 0.03
+  feature_lag: 1
+  normalize_features: true
+  normalization_method: "robust"
+  max_features: 50
+
+  # Technical indicators
+  technical_indicators: ["rsi", "macd", "bollinger_bands"]
+  technical_patterns: ["rsi", "macd", "bollinger_position"]
+
+  # Volume indicators
+  volume_periods: [5, 10, 20]
+  volume_ratios: true
+  volume_indicators: ["obv", "vwap"]
+
+  # Additional parameters
+  return_periods: [1, 5, 10, 20]
+  trend_periods: [10, 20, 50]
+  feature_importance_threshold: 0.01
+  handle_missing: "interpolate"
+
+# =============================================================================
+# FEATURE VARIATIONS TO COMPARE
+# =============================================================================
+feature_variations:
+  # Variation 1: Basic features (baseline)
+  - name: "basic_features"
+    description: "Simple momentum and volatility features only"
+    parameters:
+      momentum_periods: [21, 63]
+      volatility_windows: [20]
+      return_methods: ["simple"]
+      volatility_methods: ["std"]
+      technical_indicators: ["rsi"]
+      volume_ratios: false
+
+  # Variation 2: Enhanced momentum methods
+  - name: "enhanced_momentum"
+    description: "Multiple momentum calculation methods"
+    parameters:
+      momentum_periods: [10, 21, 63, 126]
+      return_methods: ["simple", "log", "exponential"]
+      momentum_methods: ["simple", "exponential"]
+      volatility_windows: [20, 60]
+      volatility_methods: ["std"]
+      technical_indicators: ["rsi", "macd"]
+
+  # Variation 3: Enhanced volatility methods
+  - name: "enhanced_volatility"
+    description: "Multiple volatility calculation methods"
+    parameters:
+      momentum_periods: [21, 63]
+      volatility_windows: [10, 20, 60]
+      volatility_methods: ["std", "parkinson", "garman_klass"]
+      return_methods: ["simple", "log"]
+      technical_indicators: ["rsi", "bollinger_bands"]
+
+  # Variation 4: Comprehensive technical indicators
+  - name: "comprehensive_technical"
+    description: "Full set of technical indicators"
+    parameters:
+      momentum_periods: [10, 21, 63]
+      volatility_windows: [20, 60]
+      return_methods: ["simple", "log"]
+      technical_indicators: ["rsi", "macd", "bollinger_bands", "stochastic", "williams_r"]
+      technical_patterns: ["rsi", "macd", "bollinger_position", "stochastic"]
+      volume_periods: [5, 10, 20]
+      volume_ratios: true
+      volume_indicators: ["obv", "vwap", "ad_line"]
+
+  # Variation 5: Long-term focus
+  - name: "long_term_features"
+    description: "Long-term momentum and volatility features"
+    parameters:
+      momentum_periods: [63, 126, 252]
+      volatility_windows: [60, 120]
+      return_methods: ["simple", "log"]
+      lookback_periods: [50, 200]
+      technical_indicators: ["rsi", "macd"]
+      volume_ratios: false
+
+  # Variation 6: Short-term focus
+  - name: "short_term_features"
+    description: "Short-term momentum and volatility features"
+    parameters:
+      momentum_periods: [5, 10, 21]
+      volatility_windows: [5, 10, 20]
+      return_methods: ["simple", "exponential"]
+      momentum_methods: ["simple", "exponential"]
+      technical_indicators: ["rsi", "stochastic", "williams_r"]
+      technical_patterns: ["rsi", "stochastic"]
+
+  # Variation 7: Factor model features
+  - name: "factor_features"
+    description: "Features suitable for factor models"
+    parameters:
+      momentum_periods: [21, 63, 126, 252]
+      volatility_windows: [20, 60, 120]
+      return_methods: ["simple", "log"]
+      factors: ["MKT", "SMB", "HML", "RMW", "CMA"]
+      factor_timing:
+        enabled: true
+        timing_methods: ["factor_momentum"]
+        lookback_periods: [3, 6, 12]
+      risk_metrics:
+        enabled: true
+        metrics: ["idiosyncratic_volatility", "systematic_beta"]
+
+  # Variation 8: Minimal feature set
+  - name: "minimal_features"
+    description: "Minimal feature set to avoid overfitting"
+    parameters:
+      momentum_periods: [21]
+      volatility_windows: [20]
+      return_methods: ["simple"]
+      volatility_methods: ["std"]
+      technical_indicators: ["rsi"]
+      max_features: 10
+      feature_importance_threshold: 0.05
+
+# =============================================================================
+# MODEL CONFIGURATION
+# =============================================================================
+model_config:
+  # Model type: xgboost, lstm, ff5_regression
+  model_type: "xgboost"
+
+  # Model-specific configuration
+  config:
+    # XGBoost specific
+    objective: "reg:squarederror"
+    eval_metric: "rmse"
+    random_state: 42
+
+    # LSTM specific (if using lstm)
+    # input_size: 50  # Will be set based on feature count
+    # output_size: 1
+    # random_state: 42
+
+    # FF5 specific (if using ff5_regression)
+    # standardize: true
+    # fit_intercept: true
+
+# =============================================================================
+# OPTIMAL HYPERPARAMETERS
+# =============================================================================
+# These should come from previous hyperparameter optimization
+optimal_hyperparameters:
+  # XGBoost optimal parameters
+  n_estimators: 200
+  max_depth: 6
+  learning_rate: 0.05
+  subsample: 0.8
+  colsample_bytree: 0.8
+  reg_alpha: 0.1
+  reg_lambda: 1.0
+  random_state: 42
+
+  # LSTM optimal parameters (if using lstm)
+  # hidden_size: 128
+  # num_layers: 2
+  # dropout: 0.2
+  # learning_rate: 0.001
+  # batch_size: 32
+  # sequence_length: 30
+  # num_epochs: 100
+  # random_state: 42
+
+  # FF5 optimal parameters (if using ff5_regression)
+  # regularization: "ridge"
+  # alpha: 1.0
+  # standardize: true
+  # fit_intercept: true
+
+# =============================================================================
+# TRAINING CONFIGURATION
+# =============================================================================
+training_config:
+  # Training data parameters
+  parameters:
+    start_date: "2018-01-01"
+    end_date: "2022-12-31"
+    validation_split: 0.2
+
+  # Cross-validation settings
+  cv_folds: 3
+  time_series_split: true
+  purge_days: 10
+  embargo_days: 5
+
+  # Model training settings
+  early_stopping: true
+  early_stopping_patience: 10
+  save_model: true
+
+# =============================================================================
+# BACKTESTING CONFIGURATION
+# =============================================================================
+backtest_config:
+  # Backtest period (out-of-sample)
+  start_date: "2023-01-01"
+  end_date: "2023-12-31"
+
+  # Portfolio settings
+  initial_capital: 1000000
+  benchmark_symbol: "SPY"
+
+  # Trading constraints
+  rebalance_frequency: "monthly"
+  position_limit: 0.15
+  rebalance_threshold: 0.05
+
+  # Transaction costs
+  commission_rate: 0.001
+  slippage_rate: 0.0005
+  short_borrow_cost: 0.002
+
+  # Risk management
+  stop_loss_threshold: 0.20
+  drawdown_limit: 0.25
+  volatility_target: 0.12
+
+# =============================================================================
+# COMPARISON CONFIGURATION
+# =============================================================================
+comparison:
+  # Primary metric for ranking feature sets
+  primary_metric: "sharpe_ratio"  # Options: sharpe_ratio, total_return, calmar_ratio, sortino_ratio
+
+  # Sort direction (false for maximization, true for minimization)
+  ascending: false
+
+  # Additional metrics to track
+  track_metrics:
+    - "sharpe_ratio"
+    - "total_return"
+    - "max_drawdown"
+    - "volatility"
+    - "calmar_ratio"
+    - "sortino_ratio"
+
+# =============================================================================
+# OUTPUT CONFIGURATION
+# =============================================================================
+output:
+  # Output directory for results
+  directory: "./feature_comparison_results"
+
+  # Files to generate
+  generate_files:
+    - "comparison_table"      # CSV with all results
+    - "detailed_results"      # JSON with detailed results
+    - "best_feature_config"   # YAML with best configuration
+    - "summary_report"        # Text summary report
+
+  # Visualization options (optional - can be implemented later)
+  visualizations:
+    enabled: false
+    charts:
+      - "performance_comparison"
+      - "feature_importance"
+      - "metric_correlation"
+
+# =============================================================================
+# USAGE NOTES
+# =============================================================================
+#
+# To use this configuration:
+# 1. Copy this file to configs/your_feature_comparison.yaml
+# 2. Modify feature_variations to test different feature sets
+# 3. Set optimal_hyperparameters based on your previous optimization results
+# 4. Update symbols and date ranges as needed
+# 5. Run with: poetry run python run_feature_comparison.py --config configs/your_feature_comparison.yaml
+#
+# Key customization points:
+# - Add/remove feature variations in feature_variations section
+# - Adjust optimal_hyperparameters based on your model's best parameters
+# - Change primary_metric in comparison section based on your optimization goal
+# - Modify model_config to test different model types
+#
+# Expected computational requirements:
+# - Training: ~5-15 minutes per feature set (depending on model complexity)
+# - Total time: ~30-120 minutes for 6-8 feature variations
+# - Memory: 2-4 GB for most models
+# - Storage: 100-500 MB for results and models
+#
+# Tips for successful feature comparison:
+# - Use a diverse set of feature variations to test different hypotheses
+# - Ensure optimal_hyperparameters are truly optimal for your model
+# - Use sufficient out-of-sample data for reliable comparison
+# - Consider computational budget when designing feature variations
+# - Focus on feature sets that make sense for your model type and market hypothesis
+#
+# Model-specific considerations:
+# - XGBoost: Can handle many features, but may overfit with too many
+# - LSTM: Sequence models benefit from temporally consistent features
+# - FF5: Factor models work best with economically meaningful features
+# - All models: Consider feature scaling and correlation between features

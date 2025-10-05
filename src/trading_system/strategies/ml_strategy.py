@@ -17,6 +17,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Dict, Optional, List, Any
 import pandas as pd
+import numpy as np
 import yfinance as yf
 
 from .base_strategy import BaseStrategy
@@ -235,9 +236,10 @@ class MLStrategy(BaseStrategy):
                         start_date: datetime,
                         end_date: datetime) -> pd.DataFrame:
         """
-        Override to add signal strength filtering for ML predictions.
+        Override to add signal strength filtering and normalization for ML predictions.
 
-        ML models may output weak signals that should be filtered out.
+        ML models may output weak signals that should be filtered out or extreme values
+        that need to be normalized.
         """
         # Get base predictions from parent
         predictions = super()._get_predictions(features, price_data, start_date, end_date)
@@ -245,13 +247,86 @@ class MLStrategy(BaseStrategy):
         if predictions.empty:
             return predictions
 
-        # Filter weak signals
+        logger.info(f"[{self.name}] 📊 Raw predictions statistics:")
+        logger.info(f"[{self.name}]   Shape: {predictions.shape}")
+        logger.info(f"[{self.name}]   Mean: {predictions.mean().mean():.6f}")
+        logger.info(f"[{self.name}]   Std: {predictions.std().mean():.6f}")
+        logger.info(f"[{self.name}]   Min: {predictions.min().min():.6f}")
+        logger.info(f"[{self.name}]   Max: {predictions.max().max():.6f}")
+
+        # Apply signal strength filtering
         filtered_predictions = predictions.copy()
-        filtered_predictions[filtered_predictions.abs() < self.min_signal_strength] = 0.0
 
-        logger.debug(f"[{self.name}] Filtered weak signals (threshold={self.min_signal_strength})")
+        # Filter weak signals
+        weak_signal_mask = filtered_predictions.abs() < self.min_signal_strength
+        num_weak_signals = weak_signal_mask.sum().sum()
+        filtered_predictions[weak_signal_mask] = 0.0
 
-        return filtered_predictions
+        logger.info(f"[{self.name}] 🎯 Filtered {num_weak_signals} weak signals (threshold={self.min_signal_strength})")
+
+        # Apply outlier detection and normalization
+        normalized_predictions = self._normalize_predictions(filtered_predictions)
+
+        logger.info(f"[{self.name}] 📈 Normalized predictions statistics:")
+        logger.info(f"[{self.name}]   Mean: {normalized_predictions.mean().mean():.6f}")
+        logger.info(f"[{self.name}]   Std: {normalized_predictions.std().mean():.6f}")
+        logger.info(f"[{self.name}]   Min: {normalized_predictions.min().min():.6f}")
+        logger.info(f"[{self.name}]   Max: {normalized_predictions.max().max():.6f}")
+
+        return normalized_predictions
+
+    def _normalize_predictions(self, predictions: pd.DataFrame) -> pd.DataFrame:
+        """
+        Normalize predictions to handle extreme values and ensure reasonable bounds.
+
+        Args:
+            predictions: Raw predictions DataFrame
+
+        Returns:
+            Normalized predictions DataFrame
+        """
+        normalized = predictions.copy()
+
+        # Handle extreme values using quantile-based clipping
+        for column in normalized.columns:
+            series = normalized[column]
+
+            # Calculate quantiles for this symbol
+            q_low = series.quantile(0.01)  # 1st percentile
+            q_high = series.quantile(0.99)  # 99th percentile
+
+            # Clip extreme values
+            clipped_series = series.clip(lower=q_low, upper=q_high)
+            normalized[column] = clipped_series
+
+            if series.min() != clipped_series.min() or series.max() != clipped_series.max():
+                logger.debug(f"[{self.name}] Clipped {column} from [{series.min():.6f}, {series.max():.6f}] to [{clipped_series.min():.6f}, {clipped_series.max():.6f}]")
+
+        # Apply additional normalization to ensure reasonable scale
+        # Use robust scaling based on median and MAD (median absolute deviation)
+        all_values = normalized.values.flatten()
+        non_zero_values = all_values[all_values != 0]
+
+        if len(non_zero_values) > 0:
+            median_val = np.median(non_zero_values)
+            mad_val = np.median(np.abs(non_zero_values - median_val))
+
+            if mad_val > 0:
+                # Robust scaling: (x - median) / MAD
+                for column in normalized.columns:
+                    mask = normalized[column] != 0
+                    normalized.loc[mask, column] = (normalized.loc[mask, column] - median_val) / mad_val
+
+                logger.debug(f"[{self.name}] Applied robust scaling (median={median_val:.6f}, MAD={mad_val:.6f})")
+
+                # Rescale to reasonable range for trading signals (e.g., -0.3 to 0.3)
+                max_abs_val = normalized.abs().max().max()
+                if max_abs_val > 0.3:
+                    scale_factor = 0.3 / max_abs_val
+                    normalized = normalized * scale_factor
+                    logger.debug(f"[{self.name}] Rescaled by factor {scale_factor:.6f} to keep signals in [-0.3, 0.3] range")
+
+        return normalized
 
     def generate_signals(self,
                         price_data: Dict[str, pd.DataFrame],
@@ -312,6 +387,10 @@ class MLStrategy(BaseStrategy):
             # Step 6: Apply position sizing
             signals = self._apply_position_sizing(filtered_predictions, enhanced_price_data)
 
+            # Step 7: Validate signal diversity (NEW)
+            if not signals.empty:
+                self.log_signal_validation(signals)
+
             logger.info(f"[{self.name}] ✅ Generated signals for {len(signals.columns)} assets")
             return signals
 
@@ -321,7 +400,7 @@ class MLStrategy(BaseStrategy):
 
     def _apply_position_sizing(self, predictions: pd.DataFrame, price_data: Dict[str, pd.DataFrame]) -> pd.DataFrame:
         """
-        Apply position sizing to predictions.
+        Apply position sizing to predictions based on relative prediction strength.
 
         Args:
             predictions: DataFrame with raw model predictions (dates x symbols)
@@ -333,33 +412,91 @@ class MLStrategy(BaseStrategy):
         if predictions.empty:
             return predictions
 
-        # Apply equal weight position sizing for now
-        # This can be enhanced later with more sophisticated position sizing methods
         signals = predictions.copy()
 
-        # Normalize signals to sum to 1 (or 0 for neutral positions)
+        # Log input statistics
+        logger.info(f"[{self.name}] 📊 Input predictions statistics:")
+        logger.info(f"[{self.name}]   Shape: {signals.shape}")
+        logger.info(f"[{self.name}]   Mean: {signals.mean().mean():.6f}")
+        logger.info(f"[{self.name}]   Std: {signals.std().mean():.6f}")
+        logger.info(f"[{self.name}]   Min: {signals.min().min():.6f}")
+        logger.info(f"[{self.name}]   Max: {signals.max().max():.6f}")
+
+        # Normalize signals based on relative prediction strength for each date
         for date_idx in signals.index:
-            date_signals = signals.loc[date_idx]
+            date_signals = signals.loc[date_idx].copy()
 
             # Separate long and short signals
             long_signals = date_signals[date_signals > 0]
             short_signals = date_signals[date_signals < 0]
 
-            # Equal weight among long positions
+            # Apply prediction-strength-based weighting for long positions
             if not long_signals.empty:
-                long_weight = 1.0 / len(long_signals) if len(long_signals) > 0 else 0
-                signals.loc[date_idx, long_signals.index] = long_weight
+                if len(long_signals) == 1:
+                    # Single long position, give it full weight
+                    signals.loc[date_idx, long_signals.index] = 1.0
+                else:
+                    # Multiple long positions, weight by prediction strength
+                    long_sum = long_signals.sum()
+                    if long_sum > 0:
+                        long_weights = long_signals / long_sum
+                        signals.loc[date_idx, long_signals.index] = long_weights
+                    else:
+                        # Fallback to equal weights if all predictions are zero
+                        equal_weight = 1.0 / len(long_signals)
+                        signals.loc[date_idx, long_signals.index] = equal_weight
 
-            # Equal weight among short positions
+            # Apply prediction-strength-based weighting for short positions
             if not short_signals.empty:
-                short_weight = -1.0 / len(short_signals) if len(short_signals) > 0 else 0
-                signals.loc[date_idx, short_signals.index] = short_weight
+                if len(short_signals) == 1:
+                    # Single short position, give it full negative weight
+                    signals.loc[date_idx, short_signals.index] = -1.0
+                else:
+                    # Multiple short positions, weight by prediction strength (absolute values)
+                    short_abs = short_signals.abs()
+                    short_sum = short_abs.sum()
+                    if short_sum > 0:
+                        short_weights = -short_abs / short_sum
+                        signals.loc[date_idx, short_signals.index] = short_weights
+                    else:
+                        # Fallback to equal weights if all predictions are zero
+                        equal_weight = -1.0 / len(short_signals)
+                        signals.loc[date_idx, short_signals.index] = equal_weight
 
         # Apply max position size limit if configured
         if hasattr(self, 'max_position_size') and self.max_position_size < 1.0:
             signals = signals.clip(lower=-self.max_position_size, upper=self.max_position_size)
+            # Renormalize to maintain sum constraint
+            for date_idx in signals.index:
+                date_signals = signals.loc[date_idx]
+                total_long = date_signals[date_signals > 0].sum()
+                total_short = date_signals[date_signals < 0].sum()
 
-        logger.debug(f"[{self.name}] Applied position sizing to {signals.shape[0]} dates")
+                if total_long > 0:
+                    long_mask = date_signals > 0
+                    signals.loc[date_idx, long_mask] = date_signals[long_mask] / total_long
+
+                if total_short < 0:
+                    short_mask = date_signals < 0
+                    signals.loc[date_idx, short_mask] = date_signals[short_mask] / abs(total_short)
+
+        # Log output statistics
+        logger.info(f"[{self.name}] 📈 Output signals statistics:")
+        logger.info(f"[{self.name}]   Mean: {signals.mean().mean():.6f}")
+        logger.info(f"[{self.name}]   Std: {signals.std().mean():.6f}")
+        logger.info(f"[{self.name}]   Min: {signals.min().min():.6f}")
+        logger.info(f"[{self.name}]   Max: {signals.max().max():.6f}")
+
+        # Log sample date to verify diversity
+        if not signals.empty:
+            sample_date = signals.index[0]
+            sample_signals = signals.loc[sample_date]
+            logger.info(f"[{self.name}] 📊 Sample signals for {sample_date}:")
+            for symbol, signal in sample_signals.items():
+                if abs(signal) > 0.01:  # Only log non-trivial signals
+                    logger.info(f"[{self.name}]   {symbol}: {signal:.6f}")
+
+        logger.debug(f"[{self.name}] Applied prediction-strength-based position sizing to {signals.shape[0]} dates")
         return signals
 
     def get_info(self) -> Dict:
@@ -374,3 +511,125 @@ class MLStrategy(BaseStrategy):
             'feature_compatibility': 'multi_stock_enhanced'
         })
         return info
+
+    def validate_signal_diversity(self, signals: pd.DataFrame) -> Dict[str, Any]:
+        """
+        Validate that signals are diverse and not all equal.
+
+        This method helps verify that the fixes for signal equalization are working.
+
+        Args:
+            signals: Generated signals DataFrame
+
+        Returns:
+            Dictionary with validation metrics
+        """
+        if signals.empty:
+            return {'error': 'No signals to validate'}
+
+        validation_results = {}
+
+        # Check 1: Signal variance over time
+        time_variance = signals.var(axis=0)
+        validation_results['signal_variance_by_symbol'] = time_variance.to_dict()
+        validation_results['avg_time_variance'] = time_variance.mean()
+
+        # Check 2: Cross-sectional variance at each date
+        cross_sectional_variance = signals.var(axis=1)
+        validation_results['cross_sectional_variance_stats'] = {
+            'mean': cross_sectional_variance.mean(),
+            'std': cross_sectional_variance.std(),
+            'min': cross_sectional_variance.min(),
+            'max': cross_sectional_variance.max()
+        }
+
+        # Check 3: Unique signal values
+        unique_values_per_symbol = signals.nunique()
+        validation_results['unique_values_per_symbol'] = unique_values_per_symbol.to_dict()
+        validation_results['avg_unique_values'] = unique_values_per_symbol.mean()
+
+        # Check 4: Signal correlation matrix
+        if not signals.empty and signals.shape[1] > 1:
+            correlation_matrix = signals.corr()
+            avg_correlation = correlation_matrix.values[np.triu_indices_from(correlation_matrix.values, k=1)].mean()
+            validation_results['avg_pairwise_correlation'] = avg_correlation
+            validation_results['max_correlation'] = correlation_matrix.values[np.triu_indices_from(correlation_matrix.values, k=1)].max()
+
+        # Check 5: Position distribution
+        long_positions = (signals > 0).sum().sum()
+        short_positions = (signals < 0).sum().sum()
+        total_positions = signals.shape[0] * signals.shape[1]
+        validation_results['position_distribution'] = {
+            'long_positions': long_positions,
+            'short_positions': short_positions,
+            'neutral_positions': total_positions - long_positions - short_positions,
+            'long_percentage': long_positions / total_positions * 100,
+            'short_percentage': short_positions / total_positions * 100
+        }
+
+        # Check 6: Signal range analysis
+        signal_ranges = {}
+        for symbol in signals.columns:
+            symbol_signals = signals[symbol]
+            signal_ranges[symbol] = {
+                'min': symbol_signals.min(),
+                'max': symbol_signals.max(),
+                'range': symbol_signals.max() - symbol_signals.min(),
+                'std': symbol_signals.std()
+            }
+        validation_results['signal_ranges'] = signal_ranges
+
+        # Overall validation summary
+        validation_results['validation_summary'] = {
+            'signals_are_diverse': validation_results['avg_time_variance'] > 1e-6,
+            'time_variance_ok': validation_results['avg_time_variance'] > 1e-6,
+            'cross_sectional_variance_ok': validation_results['cross_sectional_variance_stats']['mean'] > 1e-6,
+            'unique_values_ok': validation_results['avg_unique_values'] > 1,
+            'signals_not_static': not (signals.std().max() < 1e-6)
+        }
+
+        return validation_results
+
+    def log_signal_validation(self, signals: pd.DataFrame):
+        """
+        Log validation results to help with debugging.
+
+        Args:
+            signals: Generated signals DataFrame
+        """
+        logger.info(f"[{self.name}] 🔍 Validating signal diversity...")
+
+        validation_results = self.validate_signal_diversity(signals)
+
+        if 'error' in validation_results:
+            logger.error(f"[{self.name}] ❌ Validation failed: {validation_results['error']}")
+            return
+
+        # Log key metrics
+        logger.info(f"[{self.name}] 📊 Signal Validation Results:")
+        logger.info(f"[{self.name}]   Average time variance: {validation_results['avg_time_variance']:.8f}")
+        logger.info(f"[{self.name}]   Cross-sectional variance: {validation_results['cross_sectional_variance_stats']['mean']:.8f}")
+        logger.info(f"[{self.name}]   Average unique values per symbol: {validation_results['avg_unique_values']:.1f}")
+
+        if 'avg_pairwise_correlation' in validation_results:
+            logger.info(f"[{self.name}]   Average pairwise correlation: {validation_results['avg_pairwise_correlation']:.4f}")
+
+        pos_dist = validation_results['position_distribution']
+        logger.info(f"[{self.name}]   Position distribution: {pos_dist['long_percentage']:.1f}% long, {pos_dist['short_percentage']:.1f}% short")
+
+        # Log validation summary
+        summary = validation_results['validation_summary']
+        logger.info(f"[{self.name}] ✅ Validation summary:")
+        for key, value in summary.items():
+            status = "✅" if value else "❌"
+            logger.info(f"[{self.name}]   {status} {key}: {value}")
+
+        # Sample signal patterns
+        if not signals.empty:
+            logger.info(f"[{self.name}] 📈 Sample signal patterns:")
+            sample_dates = signals.index[:min(3, len(signals.index))]
+            for date in sample_dates:
+                date_signals = signals.loc[date]
+                non_zero = date_signals[abs(date_signals) > 0.01]
+                if not non_zero.empty:
+                    logger.info(f"[{self.name}]   {date.date()}: {non_zero.to_dict()}")

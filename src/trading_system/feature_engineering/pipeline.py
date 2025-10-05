@@ -34,13 +34,15 @@ class FeatureEngineeringPipeline:
     Orchestrates the entire feature engineering process, ensuring consistency.
     """
 
-    def __init__(self, config: FeatureConfig, feature_cache: Optional[FeatureCacheProvider] = None):
+    def __init__(self, config: FeatureConfig, feature_cache: Optional[FeatureCacheProvider] = None,
+                 auto_cleanup_cache: bool = True):
         """
         Initialize the pipeline with a feature configuration.
 
         Args:
             config: A FeatureConfig object detailing which features to compute.
             feature_cache: Optional cache provider for feature caching
+            auto_cleanup_cache: Whether to automatically clean invalid cache on init
         """
         self.config = config
         self.scalers: Dict[str, StandardScaler] = {}
@@ -50,11 +52,24 @@ class FeatureEngineeringPipeline:
         self.feature_cache = feature_cache or LocalCacheProvider()
 
         # 定义哪些特征是"慢变"的，需要缓存
+        # 注意：这些名称必须与technical_features.py中实际生成的特征名称完全匹配
         self.SLOW_FEATURES = {
-            'sma_200', 'sma_50', 'ema_200', 'ema_50',
-            'volatility_60d', 'volatility_30d',
-            'bb_upper_20', 'bb_lower_20', 'bb_middle_20'
+            'sma_200', 'sma_50',  # SMA特征
+            'ema_12', 'ema_26',   # EMA特征（实际生成的是ema_12和ema_26，而不是ema_50/ema_200）
+            'volatility_60d', 'volatility_30d',  # 波动率特征
+            'bb_upper', 'bb_middle', 'bb_lower',  # Bollinger Bands（实际生成时不带_20后缀）
+            'macd_line', 'macd_signal', 'macd_histogram',  # MACD相关特征
+            'adx', 'cci'  # 其他技术指标
         }
+
+        # 自动清理无效缓存
+        if auto_cleanup_cache and hasattr(self.feature_cache, 'clear_invalid_cache'):
+            try:
+                cleared_count = self.feature_cache.clear_invalid_cache()
+                if cleared_count > 0:
+                    logger.info(f"Auto-cleaned {cleared_count} invalid cache files on initialization")
+            except Exception as e:
+                logger.warning(f"Failed to auto-clean cache: {e}")
 
         logger.info(f"Initialized pipeline with {self.feature_cache.__class__.__name__}")
 
@@ -332,27 +347,89 @@ class FeatureEngineeringPipeline:
 
                 # Try to compute technical indicators with caching for individual features
                 technical_cached = pd.DataFrame(index=data.index)
+                cached_features_count = 0
 
-                # Try to get individual technical features from cache
-                for feature_name in ['sma_200', 'sma_50', 'ema_200', 'ema_50', 'rsi_14', 'bb_upper_20', 'bb_lower_20', 'bb_middle_20']:
+                # 技术指标列表 - 分为可缓存和不可缓存的
+                # 注意：这些名称必须与technical_features.py中实际生成的特征名称完全匹配
+                cacheable_features = ['sma_200', 'sma_50', 'ema_12', 'ema_26', 'bb_upper', 'bb_middle', 'bb_lower', 'macd_line', 'macd_signal', 'macd_histogram', 'adx', 'cci']
+                non_cacheable_features = []  # 目前所有技术指标都支持缓存
+
+                # Step 1: 尝试从缓存获取可缓存的特征
+                logger.debug(f"Attempting to fetch {len(cacheable_features)} cacheable features for {symbol}")
+                for feature_name in cacheable_features:
                     cached_feature = self._get_single_feature_cached(symbol, feature_name, data.index[0], data.index[-1])
-                    if cached_feature is not None:
-                        technical_cached[feature_name] = cached_feature['value']
-                        logger.debug(f"Used cached {feature_name} for {symbol}")
+                    if cached_feature is not None and not cached_feature.empty:
+                        try:
+                            # 将缓存数据对齐到当前索引
+                            aligned_data = cached_feature.reindex(data.index, method='ffill').reindex(data.index, method='bfill')
+                            if not aligned_data.empty and not aligned_data['value'].isna().all():
+                                technical_cached[feature_name] = aligned_data['value']
+                                cached_features_count += 1
+                                logger.debug(f"✓ Cache HIT: {feature_name} for {symbol} ({len(aligned_data)} rows)")
+                            else:
+                                logger.debug(f"✗ Cache INVALID: {feature_name} for {symbol} (no valid data after alignment)")
+                        except Exception as e:
+                            logger.debug(f"✗ Cache ALIGN FAILED: {feature_name} for {symbol}: {e}")
+                    else:
+                        logger.debug(f"✗ Cache MISS: {feature_name} for {symbol}")
 
-                # Compute remaining features that weren't cached
-                if len(technical_cached.columns) < 8:  # If not all features were cached
-                    technical = calculator._calculate_technical_for_group(data)
-                    # Cache individual features that are in SLOW_FEATURES
-                    for feature_name in self.SLOW_FEATURES:
-                        if feature_name in technical.columns and feature_name not in technical_cached.columns:
-                            self._cache_single_feature(symbol, feature_name, technical[feature_name])
+                # Step 2: 计算缺失的特征（包括不可缓存的特征）
+                missing_features = [f for f in cacheable_features + non_cacheable_features if f not in technical_cached.columns]
+                logger.debug(f"Computing {len(missing_features)} missing features for {symbol}: {missing_features}")
 
-                    # Combine cached and newly computed features
-                    symbol_features = pd.concat([symbol_features, technical], axis=1)
+                if missing_features:
+                    try:
+                        # 计算所有技术指标
+                        technical = calculator._calculate_technical_for_group(data)
+
+                        # 添加缺失的特征
+                        for feature_name in missing_features:
+                            if feature_name in technical.columns:
+                                technical_cached[feature_name] = technical[feature_name]
+                                logger.debug(f"✓ Computed: {feature_name} for {symbol}")
+
+                                # 如果是可缓存特征，缓存它
+                                if feature_name in self.SLOW_FEATURES:
+                                    try:
+                                        self._cache_single_feature(symbol, feature_name, technical[feature_name])
+                                        logger.debug(f"✓ Cached: {feature_name} for {symbol}")
+                                    except Exception as e:
+                                        logger.debug(f"✗ Cache save failed: {feature_name} for {symbol}: {e}")
+                            else:
+                                logger.warning(f"Feature {feature_name} not found in computed technical indicators")
+
+                        # 添加其他计算出的特征（如果有的话）
+                        additional_features = [f for f in technical.columns if f not in cacheable_features + non_cacheable_features]
+                        for feature_name in additional_features:
+                            technical_cached[feature_name] = technical[feature_name]
+                            if feature_name in self.SLOW_FEATURES:
+                                try:
+                                    self._cache_single_feature(symbol, feature_name, technical[feature_name])
+                                    logger.debug(f"✓ Cached additional: {feature_name} for {symbol}")
+                                except Exception as e:
+                                    logger.debug(f"✗ Cache save failed (additional): {feature_name} for {symbol}: {e}")
+
+                    except Exception as e:
+                        logger.error(f"Failed to compute technical indicators for {symbol}: {e}")
+                        # 如果计算失败，至少保留缓存的特征
+
+                # Step 3: 验证并清理最终结果
+                if technical_cached.empty:
+                    logger.warning(f"No technical features available for {symbol}")
                 else:
-                    # Use all cached features
-                    symbol_features = pd.concat([symbol_features, technical_cached], axis=1)
+                    # 清理全为 NaN 的列
+                    valid_cols = []
+                    for col in technical_cached.columns:
+                        if not technical_cached[col].isna().all():
+                            valid_cols.append(col)
+                        else:
+                            logger.debug(f"Removing all-NaN column: {col} for {symbol}")
+
+                    technical_cached = technical_cached[valid_cols]
+                    logger.info(f"Technical features for {symbol}: {cached_features_count} cached, {len(technical_cached.columns)} total")
+
+                # 添加到主特征集合
+                symbol_features = pd.concat([symbol_features, technical_cached], axis=1)
 
                 # Quality checkpoint after basic indicators
                 self._quality_checkpoint(symbol_features, f"{symbol}_basic_technical", step=1)
@@ -361,30 +438,85 @@ class FeatureEngineeringPipeline:
             if hasattr(self.config, 'volatility_windows') and self.config.volatility_windows:
                 logger.debug(f"Step 2: Computing volatility features for {symbol}")
                 volatility_cached = pd.DataFrame(index=data.index)
+                cached_volatility_count = 0
 
-                # Try to get volatility features from cache
+                volatility_methods = getattr(self.config, 'volatility_methods', ['std'])
+
+                # Step 1: 尝试从缓存获取波动率特征
                 for window in self.config.volatility_windows:
                     feature_name = f'volatility_{window}d'
-                    cached_feature = self._get_single_feature_cached(symbol, feature_name, data.index[0], data.index[-1])
-                    if cached_feature is not None:
-                        volatility_cached[feature_name] = cached_feature['value']
-                        logger.debug(f"Used cached {feature_name} for {symbol}")
+                    if feature_name in self.SLOW_FEATURES:  # 只缓存定义的慢变特征
+                        cached_feature = self._get_single_feature_cached(symbol, feature_name, data.index[0], data.index[-1])
+                        if cached_feature is not None and not cached_feature.empty:
+                            try:
+                                # 将缓存数据对齐到当前索引
+                                aligned_data = cached_feature.reindex(data.index, method='ffill').reindex(data.index, method='bfill')
+                                if not aligned_data.empty and not aligned_data['value'].isna().all():
+                                    volatility_cached[feature_name] = aligned_data['value']
+                                    cached_volatility_count += 1
+                                    logger.debug(f"✓ Cache HIT: {feature_name} for {symbol}")
+                                else:
+                                    logger.debug(f"✗ Cache INVALID: {feature_name} for {symbol}")
+                            except Exception as e:
+                                logger.debug(f"✗ Cache ALIGN FAILED: {feature_name} for {symbol}: {e}")
+                        else:
+                            logger.debug(f"✗ Cache MISS: {feature_name} for {symbol}")
+                    else:
+                        logger.debug(f"Non-cachable volatility feature: {feature_name} for {symbol}")
 
-                # Compute remaining volatility features
+                # Step 2: 计算缺失的波动率特征
                 missing_windows = [w for w in self.config.volatility_windows
                                  if f'volatility_{w}d' not in volatility_cached.columns]
-                if missing_windows:
-                    volatility_methods = getattr(self.config, 'volatility_methods', ['std'])
-                    volatility = calculator._calculate_volatility_for_group(data, missing_windows, volatility_methods)
-                    # Cache individual volatility features
-                    for window in missing_windows:
-                        feature_name = f'volatility_{window}d'
-                        if feature_name in volatility.columns:
-                            self._cache_single_feature(symbol, feature_name, volatility[feature_name])
 
-                    symbol_features = pd.concat([symbol_features, volatility], axis=1)
-                else:
-                    symbol_features = pd.concat([symbol_features, volatility_cached], axis=1)
+                if missing_windows:
+                    logger.debug(f"Computing {len(missing_windows)} missing volatility features for {symbol}: {missing_windows}")
+                    try:
+                        volatility = calculator._calculate_volatility_for_group(data, missing_windows, volatility_methods)
+
+                        # 添加计算出的波动率特征
+                        for window in missing_windows:
+                            feature_name = f'volatility_{window}d'
+                            if feature_name in volatility.columns:
+                                volatility_cached[feature_name] = volatility[feature_name]
+                                logger.debug(f"✓ Computed: {feature_name} for {symbol}")
+
+                                # 如果是可缓存特征，缓存它
+                                if feature_name in self.SLOW_FEATURES:
+                                    try:
+                                        self._cache_single_feature(symbol, feature_name, volatility[feature_name])
+                                        logger.debug(f"✓ Cached: {feature_name} for {symbol}")
+                                    except Exception as e:
+                                        logger.debug(f"✗ Cache save failed: {feature_name} for {symbol}: {e}")
+
+                        # 添加其他波动率特征
+                        additional_vol_features = [f for f in volatility.columns if f not in [f'volatility_{w}d' for w in self.config.volatility_windows]]
+                        for feature_name in additional_vol_features:
+                            volatility_cached[feature_name] = volatility[feature_name]
+                            if feature_name in self.SLOW_FEATURES:
+                                try:
+                                    self._cache_single_feature(symbol, feature_name, volatility[feature_name])
+                                    logger.debug(f"✓ Cached additional volatility: {feature_name} for {symbol}")
+                                except Exception as e:
+                                    logger.debug(f"✗ Cache save failed (additional): {feature_name} for {symbol}: {e}")
+
+                    except Exception as e:
+                        logger.error(f"Failed to compute volatility indicators for {symbol}: {e}")
+
+                # Step 3: 验证并清理结果
+                if not volatility_cached.empty:
+                    # 清理全为 NaN 的列
+                    valid_vol_cols = []
+                    for col in volatility_cached.columns:
+                        if not volatility_cached[col].isna().all():
+                            valid_vol_cols.append(col)
+                        else:
+                            logger.debug(f"Removing all-NaN volatility column: {col} for {symbol}")
+
+                    volatility_cached = volatility_cached[valid_vol_cols]
+                    logger.info(f"Volatility features for {symbol}: {cached_volatility_count} cached, {len(volatility_cached.columns)} total")
+
+                # 添加到主特征集合
+                symbol_features = pd.concat([symbol_features, volatility_cached], axis=1)
 
                 # Quality checkpoint after volatility features
                 self._quality_checkpoint(symbol_features, f"{symbol}_volatility", step=2)
@@ -412,7 +544,18 @@ class FeatureEngineeringPipeline:
                 [[symbol], symbol_features.index],
                 names=['symbol', 'date']
             )
+
+            # Debug: Check for potential index issues before setting MultiIndex
+            logger.debug(f"DEBUG: Creating MultiIndex for {symbol}")
+            logger.debug(f"DEBUG: symbol_features.index type: {type(symbol_features.index)}")
+            logger.debug(f"DEBUG: symbol_features.index length: {len(symbol_features.index)}")
+            logger.debug(f"DEBUG: symbol_features.index unique: {symbol_features.index.is_unique}")
+
             symbol_features.index = symbol_multiindex
+
+            # Debug: Verify MultiIndex is unique
+            logger.debug(f"DEBUG: MultiIndex for {symbol} unique: {symbol_multiindex.is_unique}")
+            logger.debug(f"DEBUG: MultiIndex for {symbol} length: {len(symbol_multiindex)}")
 
             all_features.append(symbol_features)
 
@@ -420,6 +563,42 @@ class FeatureEngineeringPipeline:
 
         # Combine all features with proper MultiIndex structure
         if all_features:
+            # Debug: Check for index issues before concatenation
+            logger.debug(f"DEBUG: About to concatenate {len(all_features)} feature DataFrames")
+
+            for i, df in enumerate(all_features):
+                logger.debug(f"DEBUG: DataFrame {i}: shape {df.shape}, index type {type(df.index)}")
+                logger.debug(f"DEBUG: DataFrame {i}: index unique: {df.index.is_unique}")
+                if len(df.index) > 0:
+                    logger.debug(f"DEBUG: DataFrame {i}: sample index: {df.index[:3].tolist()}")
+
+                # Check for any potential duplicates
+                if hasattr(df.index, 'duplicated'):
+                    dup_count = df.index.duplicated().sum()
+                    if dup_count > 0:
+                        logger.error(f"ERROR: DataFrame {i} has {dup_count} duplicate indices!")
+
+            # Check combined index uniqueness before concat
+            all_indices = []
+            for i, df in enumerate(all_features):
+                all_indices.extend(df.index.tolist())
+
+            combined_index = pd.MultiIndex.from_tuples(all_indices)
+            logger.debug(f"DEBUG: Combined index unique: {combined_index.is_unique}")
+            logger.debug(f"DEBUG: Combined index length: {len(combined_index)}")
+
+            if not combined_index.is_unique:
+                duplicates = combined_index.duplicated()
+                dup_indices = combined_index[duplicates]
+                logger.error(f"ERROR: Found {duplicates.sum()} duplicate indices before concat!")
+                logger.error(f"ERROR: Duplicate indices sample: {dup_indices[:5].tolist()}")
+
+                # Find source of duplicates
+                from collections import Counter
+                index_counter = Counter(all_indices)
+                problematic_indices = [(idx, count) for idx, count in index_counter.items() if count > 1]
+                logger.error(f"ERROR: Problematic indices: {problematic_indices[:5]}")
+
             combined_features = pd.concat(all_features, axis=0)
             combined_features.sort_index(inplace=True)
 
@@ -767,7 +946,33 @@ class FeatureEngineeringPipeline:
         if feature_name not in self.SLOW_FEATURES:
             return None
 
-        return self.feature_cache.get(symbol, feature_name, start_date, end_date)
+        try:
+            cached_data = self.feature_cache.get(symbol, feature_name, start_date, end_date)
+
+            if cached_data is None:
+                logger.debug(f"Cache MISS: {symbol}/{feature_name}")
+                return None
+
+            # 验证返回数据的格式
+            if not isinstance(cached_data, pd.DataFrame):
+                logger.warning(f"Invalid cached data type for {symbol}/{feature_name}: {type(cached_data)}")
+                return None
+
+            if cached_data.empty:
+                logger.debug(f"Cache HIT but empty: {symbol}/{feature_name}")
+                return None
+
+            # 确保有 'value' 列
+            if 'value' not in cached_data.columns:
+                logger.warning(f"Cached data missing 'value' column for {symbol}/{feature_name}: {cached_data.columns}")
+                return None
+
+            logger.debug(f"Cache HIT: {symbol}/{feature_name} ({len(cached_data)} rows)")
+            return cached_data
+
+        except Exception as e:
+            logger.warning(f"Error retrieving cache for {symbol}/{feature_name}: {e}")
+            return None
 
     def _cache_single_feature(
         self,
@@ -779,10 +984,33 @@ class FeatureEngineeringPipeline:
         if feature_name not in self.SLOW_FEATURES:
             return
 
-        # 转换为 DataFrame
-        df = data.to_frame(name='value')
-        self.feature_cache.set(symbol, feature_name, df)
-        logger.debug(f"Cached {feature_name} for {symbol}")
+        try:
+            # 转换为 DataFrame，确保格式正确
+            if isinstance(data, pd.Series):
+                df = data.to_frame(name='value')
+            elif isinstance(data, pd.DataFrame):
+                # 如果是DataFrame，确保只有一列且列名为'value'
+                if len(data.columns) == 1:
+                    df = data.copy()
+                    df.columns = ['value']
+                else:
+                    # 如果有多列，取第一列
+                    df = data.iloc[:, [0]].copy()
+                    df.columns = ['value']
+            else:
+                logger.warning(f"Unexpected data type for caching {feature_name}: {type(data)}")
+                return
+
+            # 确保索引是 DatetimeIndex
+            if not isinstance(df.index, pd.DatetimeIndex):
+                df.index = pd.to_datetime(df.index)
+
+            self.feature_cache.set(symbol, feature_name, df)
+            logger.debug(f"Cached {feature_name} for {symbol}: {len(df)} rows from {df.index.min()} to {df.index.max()}")
+
+        except Exception as e:
+            logger.warning(f"Failed to cache {feature_name} for {symbol}: {e}")
+            # 不抛出异常，继续执行其他操作
 
     def clear_cache(self, symbol: Optional[str] = None):
         """清空特征缓存"""

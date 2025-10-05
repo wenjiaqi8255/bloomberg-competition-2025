@@ -134,15 +134,74 @@ reporting:
 
 # 8. Advanced Configuration
 advanced:
-  # Hyperparameter optimization (optional)
+  # Hyperparameter optimization for MetaModel
   hyperparameter_optimization:
-    enabled: false
-    method: "grid_search"
-    parameters:
-      alpha: [0.1, 0.5, 1.0, 2.0]
-      method: ["ridge", "lasso"]
-    cv_folds: 3
-    scoring: "r2"
+    enabled: true
+    optimization_method: "optuna"
+    n_trials: 50
+    cv_folds: 5
+    objective: "sharpe_ratio"
+    direction: "maximize"
+
+    # Optuna sampler and pruner settings
+    sampler:
+      type: "tpe"  # tpe, random, cmaes, grid
+      seed: 42
+
+    pruner:
+      type: "median"
+      n_startup_trials: 5
+      n_warmup_steps: 3
+
+    # MetaModel search space
+    search_space:
+      method:
+        type: "categorical"
+        choices: ["equal", "lasso", "ridge", "dynamic"]
+      alpha:
+        type: "float"
+        low: 0.01
+        high: 10.0
+        step: 0.1
+        log_scale: true
+      positive_weights:
+        type: "categorical"
+        choices: [true, false]
+      min_weight:
+        type: "float"
+        low: 0.0
+        high: 0.1
+        step: 0.01
+      max_weight:
+        type: "float"
+        low: 0.3
+        high: 1.0
+        step: 0.05
+      weight_sum_constraint:
+        type: "float"
+        low: 0.8
+        high: 1.2
+        step: 0.05
+
+    # Strategy-specific optimization
+    strategy_optimization:
+      enabled: true
+      allow_strategy_exclusion: true  # Allow optimization to exclude strategies
+      min_active_strategies: 2
+      max_active_strategies: 10
+
+    # Logging and tracking
+    logging:
+      log_optimization: true
+      log_all_trials: true
+      log_weight_evolution: true
+      log_strategy_performance: true
+
+    # Performance targets
+    targets:
+      min_sharpe_ratio: 0.5
+      max_volatility: 0.2
+      max_drawdown: 0.15
 
   # Ensemble methods (optional)
   ensemble:

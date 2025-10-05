@@ -1,0 +1,405 @@
+# MetaModel Strategy Combination Configuration Template
+# ====================================================
+#
+# This template demonstrates comprehensive configuration for MetaModel training
+# and evaluation, combining multiple trading strategies using machine learning
+# techniques to achieve optimal portfolio weights.
+#
+# Key Features:
+# - Multiple combination methods (Equal, Lasso, Ridge, Dynamic)
+# - Strategy data collection and validation
+# - Cross-validation for robust weight estimation
+# - Hyperparameter optimization for MetaModel parameters
+# - Comprehensive performance attribution and analysis
+# - Production-ready integration with SystemOrchestrator
+
+# =============================================================================
+# EXPERIMENT METADATA
+# =============================================================================
+experiment:
+  name: "metamodel_combination_experiment"
+  description: "MetaModel training for optimal strategy combination and weight allocation"
+  tags: ["metamodel", "strategy_combination", "ridge_regression", "portfolio_optimization", "ensemble_methods"]
+  log_to_wandb: true
+  project_name: "bloomberg-competition"
+
+# =============================================================================
+# METAMODEL TRAINING CONFIGURATION
+# =============================================================================
+metamodel_training:
+  # Combination method and core parameters
+  method: "ridge"                      # Options: equal, lasso, ridge, dynamic
+  alpha: 0.5                          # Regularization strength (for lasso/ridge)
+  positive_weights: true              # Enforce non-negative weights
+  weight_sum_constraint: 1.0          # Weights should sum to 1.0 (fully invested)
+
+  # Strategy configuration (strategies to combine)
+  strategies:
+    - "DualMomentumStrategy"           # Dual momentum strategy
+    - "MLStrategy"                     # Machine learning strategy
+    - "FF5Strategy"                    # Fama-French 5-factor strategy
+    # Add more strategies as needed:
+    # - "MeanReversionStrategy"
+    # - "TrendFollowingStrategy"
+    # - "VolatilityTargetingStrategy"
+
+  # Data collection parameters
+  data_source: "synthetic"             # Options: backtest, synthetic, live
+  start_date: "2022-01-01"            # Start date for strategy data
+  end_date: "2023-12-31"              # End date for strategy data
+  target_benchmark: "SPY"             # Optional benchmark for target returns
+
+  # Training parameters
+  use_cross_validation: true           # Use cross-validation for robust training
+  cv_folds: 5                         # Number of cross-validation folds
+  validation_split: 0.2               # Validation set proportion
+  time_series_split: true             # Use time series aware splitting
+  purge_period: 10                    # Days to purge between train/validation
+  embargo_period: 5                   # Days to embargo before validation
+
+  # Performance target optimization (optional)
+  target_optimization:
+    enabled: false                    # Enable target-based optimization
+    target_metric: "sharpe_ratio"     # Target metric to optimize
+    target_value: 1.0                 # Target value for the metric
+    tolerance: 0.1                    # Acceptable tolerance around target
+
+  # Experiment tracking
+  experiment_name: "metamodel_core_satellite"
+  track_strategy_correlation: true     # Track correlation between strategies
+  track_contribution_analysis: true    # Track individual strategy contributions
+  track_weight_stability: true        # Track weight stability over time
+
+# =============================================================================
+# SYNTHETIC STRATEGY CONFIGURATION (for testing)
+# =============================================================================
+synthetic_strategy_config:
+  # Define synthetic strategy characteristics (used when data_source is "synthetic")
+  DualMomentumStrategy:
+    annual_return: 0.10                # 10% annual return
+    annual_volatility: 0.15            # 15% annual volatility
+    correlation_factor: 0.3            # Correlation with market
+    skewness: 0.5                     # Return distribution skewness
+    kurtosis: 3.0                     # Return distribution kurtosis
+
+  MLStrategy:
+    annual_return: 0.12                # 12% annual return
+    annual_volatility: 0.18            # 18% annual volatility
+    correlation_factor: 0.25           # Correlation with market
+    skewness: 0.2                     # Return distribution skewness
+    kurtosis: 4.0                     # Return distribution kurtosis
+
+  FF5Strategy:
+    annual_return: 0.08                # 8% annual return
+    annual_volatility: 0.12            # 12% annual volatility
+    correlation_factor: 0.4            # Correlation with market
+    skewness: -0.1                    # Return distribution skewness
+    kurtosis: 2.5                     # Return distribution kurtosis
+
+  # Add more strategies as needed
+  # MeanReversionStrategy:
+  #   annual_return: 0.06
+  #   annual_volatility: 0.10
+  #   correlation_factor: 0.2
+
+# =============================================================================
+# MODEL REGISTRY CONFIGURATION
+# =============================================================================
+model_registry:
+  base_path: "./models"                # Base path for model storage
+  save_model: true                     # Save trained MetaModel
+  model_name_template: "metamodel_{method}_{date}"  # Template for model names
+  artifacts:
+    include_training_data: true        # Save training data
+    include_feature_pipeline: true     # Save feature preprocessing pipeline
+    include_performance_metrics: true  # Save performance metrics
+    include_weights_history: true      # Save weight evolution history
+    include_validation_results: true   # Save cross-validation results
+
+  # Version control
+  version_control: true                # Enable model versioning
+  version_tags: ["production", "validated"]  # Tags for model versions
+
+# =============================================================================
+# VALIDATION AND TESTING
+# =============================================================================
+validation:
+  # Out-of-sample testing period
+  test_start_date: "2024-01-01"       # Start date for out-of-sample test
+  test_end_date: "2024-06-30"         # End date for out-of-sample test
+
+  # Performance metrics to compute
+  metrics:
+    - "r2"                            # R-squared (fit quality)
+    - "mse"                           # Mean squared error
+    - "mae"                           # Mean absolute error
+    - "sharpe_ratio"                  # Risk-adjusted return
+    - "sortino_ratio"                 # Downside risk-adjusted return
+    - "calmar_ratio"                  # Return/max drawdown
+    - "max_drawdown"                  # Maximum drawdown
+    - "volatility"                    # Annual volatility
+    - "information_ratio"             # Information ratio vs benchmark
+    - "tracking_error"                # Tracking error vs benchmark
+
+  # Statistical tests
+  statistical_tests:
+    enabled: true
+    tests:
+      - "jarque_bera"                 # Normality test for residuals
+      - "ljung_box"                   # Autocorrelation test
+      - "engle_test"                  # Heteroskedasticity test
+      - "breusch_pagan"               # Heteroskedasticity test
+      - "white_test"                  # Heteroskedasticity test
+    significance_level: 0.05          # Significance level for tests
+
+  # Benchmark comparison
+  benchmark_comparison:
+    enabled: true
+    benchmark: "equal_weighted"        # Benchmark to compare against
+    alternative_benchmarks:
+      - "equal_weighted"              # Equal weight benchmark
+      - "inverse_volatility"         # Inverse volatility weighting
+      - "risk_parity"                # Risk parity weighting
+      - "best_single_strategy"        # Best single strategy
+    compare_metrics: ["sharpe_ratio", "volatility", "max_drawdown", "calmar_ratio"]
+
+# =============================================================================
+# SYSTEM INTEGRATION TESTING
+# =============================================================================
+system_integration:
+  # Test with SystemOrchestrator after training
+  enabled: true
+
+  # Test configuration
+  initial_capital: 1000000            # Initial capital for integration test
+  test_period:
+    start_date: "2024-01-01"
+    end_date: "2024-03-31"
+
+  # Assets to test with
+  universe:
+    symbols:
+      - "SPY"                        # S&P 500
+      - "AAPL"                       # Apple
+      - "MSFT"                       # Microsoft
+      - "GOOGL"                      # Alphabet
+      - "AMZN"                       # Amazon
+
+  # Expected strategy behavior
+  expected_behaviors:
+    weight_stability: 0.1            # Max weight change per rebalance
+    min_active_strategies: 2         # Minimum strategies with non-zero weights
+    max_concentration: 0.6           # Maximum weight in single strategy
+    rebalance_frequency: "monthly"    # Expected rebalance frequency
+
+  # Integration test metrics
+  integration_metrics:
+    - "portfolio_return"             # Portfolio return
+    - "portfolio_volatility"         # Portfolio volatility
+    - "strategy_contributions"        # Individual strategy contributions
+    - "turnover"                     # Portfolio turnover
+    - "execution_slippage"           # Execution slippage
+
+# =============================================================================
+# HYPERPARAMETER OPTIMIZATION
+# =============================================================================
+advanced:
+  # Hyperparameter optimization for MetaModel
+  hyperparameter_optimization:
+    enabled: true                    # Enable hyperparameter optimization
+    optimization_method: "optuna"    # Optimization framework
+    n_trials: 50                     # Number of optimization trials
+    cv_folds: 5                      # Cross-validation folds
+    objective: "sharpe_ratio"        # Objective to optimize
+    direction: "maximize"             # Maximize the objective
+
+    # Optuna sampler and pruner settings
+    sampler:
+      type: "tpe"                    # Tree-structured Parzen Estimator
+      seed: 42                       # Random seed
+      n_startup_trials: 10           # Random trials before TPE
+
+    pruner:
+      type: "median"                 # Median pruning
+      n_startup_trials: 5            # Trials before pruning starts
+      n_warmup_steps: 3              # Steps before pruning evaluation
+      interval_steps: 1              # Interval between pruning checks
+
+    # MetaModel search space
+    search_space:
+      method:
+        type: "categorical"
+        choices: ["equal", "lasso", "ridge", "dynamic"]
+      alpha:
+        type: "float"
+        low: 0.01
+        high: 10.0
+        step: 0.1
+        log_scale: true
+      positive_weights:
+        type: "categorical"
+        choices: [true, false]
+      min_weight:
+        type: "float"
+        low: 0.0
+        high: 0.1
+        step: 0.01
+      max_weight:
+        type: "float"
+        low: 0.3
+        high: 1.0
+        step: 0.05
+      weight_sum_constraint:
+        type: "float"
+        low: 0.8
+        high: 1.2
+        step: 0.05
+
+    # Strategy-specific optimization
+    strategy_optimization:
+      enabled: true
+      allow_strategy_exclusion: true  # Allow optimization to exclude strategies
+      min_active_strategies: 2        # Minimum strategies to keep active
+      max_active_strategies: 10       # Maximum strategies to keep active
+      exclusion_penalty: 0.01         # Penalty for excluding strategies
+
+    # Performance targets
+    targets:
+      min_sharpe_ratio: 0.5          # Minimum acceptable Sharpe ratio
+      max_volatility: 0.2            # Maximum acceptable volatility
+      max_drawdown: 0.15             # Maximum acceptable drawdown
+      min_r2: 0.3                    # Minimum R-squared
+
+    # Logging and tracking
+    logging:
+      log_optimization: true          # Log optimization progress
+      log_all_trials: true            # Log all trials
+      log_weight_evolution: true      # Log weight evolution
+      log_strategy_performance: true  # Log strategy performance
+      log_optimization_metrics: true  # Log optimization metrics
+
+  # Ensemble methods (optional)
+  ensemble:
+    enabled: false                   # Enable ensemble of MetaModels
+    methods:
+      - method: "ridge"
+        weight: 0.5
+      - method: "lasso"
+        weight: 0.3
+      - method: "equal"
+        weight: 0.2
+    combination_method: "weighted_average"
+
+  # Robustness testing
+  robustness_tests:
+    enabled: true
+    tests:
+      - "data_corruption"            # Test with corrupted data
+      - "parameter_sensitivity"      # Test parameter sensitivity
+      - "outlier_impact"             # Test outlier impact
+      - "regime_change"              # Test different market regimes
+      - "strategy_failure"           # Test when strategies fail
+
+# =============================================================================
+# REPORTING AND OUTPUT
+# =============================================================================
+reporting:
+  # Generate comprehensive report
+  generate_report: true
+  output_format: ["html", "json", "pdf"]
+  output_directory: "./reports"
+
+  # Report sections
+  sections:
+    - "training_summary"             # Summary of training process
+    - "weight_analysis"              # Analysis of learned weights
+    - "strategy_contributions"       # Strategy contribution analysis
+    - "performance_attribution"      # Performance attribution
+    - "risk_metrics"                 # Risk metrics analysis
+    - "integration_test_results"     # System integration test results
+    - "hyperparameter_optimization"   # Hyperparameter optimization results
+    - "statistical_diagnostics"      # Statistical diagnostics
+    - "robustness_analysis"          # Robustness test results
+
+  # Visualizations
+  plots:
+    - "weight_evolution"             # Evolution of strategy weights over time
+    - "strategy_correlation_heatmap"  # Correlation between strategies
+    - "performance_comparison"        # Performance comparison charts
+    - "risk_return_scatter"          # Risk-return scatter plot
+    - "contribution_chart"            # Strategy contribution chart
+    - "cumulative_returns"           # Cumulative returns plot
+    - "drawdown_chart"               # Drawdown visualization
+    - "optimization_history"         # Hyperparameter optimization history
+    - "parameter_importance"         # Parameter importance analysis
+
+  # Additional outputs
+  additional_outputs:
+    - "weight_time_series"           # Time series of weights
+    - "performance_metrics_table"    # Performance metrics table
+    - "risk_metrics_table"           # Risk metrics table
+    - "statistical_test_results"     # Statistical test results
+    - "model_diagnostics"            # Model diagnostic information
+
+# =============================================================================
+# DATA QUALITY AND VALIDATION
+# =============================================================================
+data_quality:
+  # Data validation settings
+  validation:
+    enabled: true
+    check_missing_data: true         # Check for missing data
+    check_outliers: true             # Check for outliers
+    check_data_consistency: true     # Check data consistency
+    min_data_coverage: 0.95          # Minimum data coverage required
+
+  # Data cleaning settings
+  cleaning:
+    enabled: true
+    handle_missing: "forward_fill"   # Method to handle missing data
+    outlier_method: "iqr"            # Method to handle outliers
+    outlier_threshold: 3.0           # Outlier threshold (IQR multiples)
+
+  # Data quality metrics
+  quality_metrics:
+    - "completeness"                 # Data completeness percentage
+    - "consistency"                 # Data consistency score
+    - "accuracy"                    # Data accuracy score
+    - "timeliness"                  # Data timeliness score
+
+# =============================================================================
+# NOTES AND USAGE
+# =============================================================================
+#
+# To use this configuration:
+# 1. Copy this file to configs/your_metamodel_experiment.yaml
+# 2. Modify strategies, dates, and parameters as needed
+# 3. Run with: poetry run python run_experiment.py metamodel --config configs/your_metamodel_experiment.yaml
+#
+# Key customization points:
+# - Change method to "lasso", "ridge", "dynamic", or "equal" for different combination approaches
+# - Adjust strategies list to include your available strategies
+# - Modify date ranges for training and testing periods
+# - Tune hyperparameter search space based on your needs
+# - Set performance targets according to your investment goals
+#
+# Expected computational requirements:
+# - Training: ~5-15 minutes for MetaModel training
+# - Hyperparameter optimization: ~30-90 minutes (50 trials)
+# - System integration testing: ~10-20 minutes
+# - Memory: 1-3 GB for strategy data and models
+# - Storage: 100-500 MB for models and reports
+#
+# MetaModel method selection guide:
+# - "equal": Simple equal weighting (baseline)
+# - "ridge": Ridge regression with L2 regularization (good for correlated strategies)
+# - "lasso": Lasso regression with L1 regularization (good for strategy selection)
+# - "dynamic": Time-varying weights (more complex, needs more data)
+#
+# Tips for MetaModel success:
+# - Use diverse strategies with low correlation for better combination
+# - Ensure sufficient historical data (at least 2-3 years recommended)
+# - Use cross-validation to prevent overfitting
+# - Monitor weight stability and turnover
+# - Consider transaction costs when evaluating performance
+# - Test robustness to different market conditions

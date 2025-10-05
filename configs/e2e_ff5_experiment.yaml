@@ -33,7 +33,7 @@ training_setup:
   parameters:
     start_date: "2018-01-01"
     end_date: "2019-12-31"
-    symbols: 
+    symbols:
       - AAPL
       - MSFT
       - GOOGL
@@ -44,6 +44,25 @@ training_setup:
       - JPM
       - V
       - WMT
+
+  # Hyperparameter optimization configuration for FF5 model
+  hyperparameter_optimization:
+    enabled: true
+    optimization_method: "optuna"
+    n_trials: 30  # Fewer trials for factor models as they have fewer parameters
+    cv_folds: 3
+    objective: "r2"  # Use R² for factor model evaluation
+
+    # Search space using FF5 model defaults
+    search_space_preset: "ff5_default"
+
+    # Optuna sampler and pruner settings
+    sampler_type: "tpe"
+    pruner_type: "median"
+
+    # Logging
+    log_to_wandb: true
+    log_all_trials: true
 
 # Part 2: Backtesting Configuration
 # ---------------------------------
@@ -70,3 +89,80 @@ strategy:
     model_id: "placeholder_model_id"
     lookback_days: 252
     risk_free_rate: 0.02
+
+# Fama-French 5-Factor Hyperparameter Optimization Settings
+ff5_hyperparameter_optimization:
+  # Enable/disable hyperparameter optimization
+  enabled: true
+
+  # Optimization method (optuna, grid_search, random_search)
+  optimization_method: "optuna"
+
+  # Number of optimization trials
+  n_trials: 30
+
+  # Optimization timeout (in seconds) - alternative to n_trials
+  timeout: null  # e.g., 1800 for 30 minutes
+
+  # Cross-validation settings
+  cv_folds: 3
+  purge_days: 10  # Days to purge after train period
+  embargo_days: 5  # Days to embargo before test period
+
+  # Optimization objective (r2, mse, mae, sharpe_ratio, sortino_ratio)
+  objective: "r2"
+  direction: "maximize"  # maximize or minimize
+
+  # Sampler settings (optuna specific)
+  sampler:
+    type: "tpe"  # tpe, random, cmaes, grid
+    seed: 42
+
+  # Pruner settings (for early stopping of bad trials)
+  pruner:
+    type: "median"  # median, hyperband, successional_halving
+    n_startup_trials: 5  # Number of trials before pruning starts
+    n_warmup_steps: 3  # Number of steps before pruning starts
+    interval_steps: 1  # Interval between pruning checks
+
+  # Search space configuration (uses model defaults if not specified)
+  search_space:
+    # Use preset search space from SearchSpaceBuilder
+    preset: "ff5_default"  # ff5_default or custom
+
+    # Custom search space (if preset is "custom")
+    custom_space:
+      regularization:
+        type: "categorical"
+        choices: ["none", "ridge"]
+      alpha:
+        type: "float"
+        low: 0.01
+        high: 10.0
+        step: 0.1
+        log_scale: true
+      standardize:
+        type: "categorical"
+        choices: [true, false]
+
+  # Feature analysis settings
+  feature_analysis:
+    enabled: true
+    analyze_factor_importance: true  # Analyze importance of each factor
+    calculate_factor_correlations: true  # Calculate correlations between factors
+    beta_stability_analysis: true  # Analyze beta coefficient stability over time
+
+  # Trial logging and visualization
+  logging:
+    log_optimization: true  # Log optimization progress to wandb
+    log_all_trials: true  # Log all trials (not just best)
+    create_optimization_plot: true  # Create optimization history plots
+    log_beta_coefficients: true  # Log beta coefficients from best model
+    log_factor_analysis: true  # Log factor analysis results
+
+  # Model validation settings
+  validation:
+    out_of_sample_test: true  # Perform out-of-sample testing
+    time_series_split: true  # Use time series cross-validation
+    stability_check: true  # Check model stability over time
+    statistical_significance: true  # Test statistical significance of factors

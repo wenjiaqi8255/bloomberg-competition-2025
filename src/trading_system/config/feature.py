@@ -55,7 +55,12 @@ class FeatureConfig:
     return_periods: List[int] = field(default_factory=lambda: [1, 5, 10, 20])
     trend_periods: List[int] = field(default_factory=lambda: [10, 20, 50])
     feature_importance_threshold: float = field(default=0.01)
+    # Missing value handling strategy
     handle_missing: str = field(default="interpolate")
+    missing_value_threshold: float = field(default=0.1)  # 10% threshold for warnings
+    enable_missing_value_monitoring: bool = field(default=True)
+    missing_value_report_path: Optional[str] = field(default=None)
+    warmup_tolerance_multiplier: float = field(default=1.5)  # Allow 1.5x expected warmup
     technical_indicators: List[str] = field(default_factory=lambda: ["rsi", "macd", "bollinger_bands", "stochastic", "williams_r"])
     technical_patterns: List[str] = field(default_factory=lambda: ["rsi", "macd", "bollinger_position", "stochastic"])
 
@@ -85,3 +90,46 @@ class FeatureConfig:
                 FeatureType.TECHNICAL,
                 FeatureType.VOLUME
             ]
+
+        # Validate missing value handling strategy
+        self._validate_missing_value_config()
+
+    def _validate_missing_value_config(self):
+        """Validate missing value configuration parameters."""
+        valid_strategies = ["interpolate", "forward_fill", "backward_fill", "median_fill", "mean_fill", "drop"]
+        if self.handle_missing not in valid_strategies:
+            raise ValueError(f"Invalid missing value strategy: {self.handle_missing}. "
+                           f"Valid options: {valid_strategies}")
+
+        if not 0 <= self.missing_value_threshold <= 1:
+            raise ValueError(f"missing_value_threshold must be between 0 and 1, got {self.missing_value_threshold}")
+
+        if self.warmup_tolerance_multiplier < 1:
+            raise ValueError(f"warmup_tolerance_multiplier must be >= 1, got {self.warmup_tolerance_multiplier}")
+
+    def get_missing_value_config(self) -> Dict[str, Any]:
+        """
+        Get missing value handling configuration.
+
+        Returns:
+            Dictionary with missing value handling settings
+        """
+        return {
+            'strategy': self.handle_missing,
+            'threshold': self.missing_value_threshold,
+            'monitoring_enabled': self.enable_missing_value_monitoring,
+            'report_path': self.missing_value_report_path,
+            'warmup_tolerance': self.warmup_tolerance_multiplier
+        }
+
+    def should_log_missing_value_warning(self, missing_pct: float) -> bool:
+        """
+        Determine if missing value percentage should trigger a warning.
+
+        Args:
+            missing_pct: Missing value percentage (0-1)
+
+        Returns:
+            True if warning should be logged
+        """
+        return missing_pct > self.missing_value_threshold

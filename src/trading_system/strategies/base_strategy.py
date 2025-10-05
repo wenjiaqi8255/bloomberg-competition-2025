@@ -195,23 +195,24 @@ class BaseStrategy(ABC):
                         start_date: datetime,
                         end_date: datetime) -> pd.DataFrame:
         """
-        Get predictions from the model.
-        
+        Get predictions from the model for each date in the range.
+
         Args:
-            features: Computed features
+            features: Computed features with MultiIndex (symbol, date)
             price_data: Original price data
             start_date: Start date
             end_date: End date
-        
+
         Returns:
-            DataFrame with predictions (expected returns or signals)
+            DataFrame with predictions (expected returns or signals) indexed by date
         """
         try:
             logger.info(f"[{self.name}] 🔍 _get_predictions started")
             logger.info(f"[{self.name}] Features shape: {features.shape}, columns: {list(features.columns[:5])}...")
             logger.info(f"[{self.name}] Price data keys: {list(price_data.keys())}")
 
-            # Get predictions for each symbol
+            # Create date range for predictions
+            dates = pd.date_range(start=start_date, end=end_date, freq='D')
             predictions_dict = {}
             symbols_processed = 0
 
@@ -226,33 +227,58 @@ class BaseStrategy(ABC):
                 if symbol_features.empty:
                     logger.warning(f"[{self.name}] No features found for symbol {symbol}")
                     continue
-                
-                # Get prediction from model
-                # Model should return expected return or signal strength
-                logger.debug(f"[{self.name}] Getting prediction for {symbol} with features shape: {symbol_features.shape}")
-                result = self.model_predictor.predict(
-                    features=symbol_features,
-                    symbol=symbol,
-                    prediction_date=end_date
-                )
-                logger.debug(f"[{self.name}] Model prediction result for {symbol}: {result}")
 
-                # Extract prediction value
-                prediction_value = result.get('prediction', 0.0)
-                predictions_dict[symbol] = prediction_value
-                logger.debug(f"[{self.name}] Extracted prediction value for {symbol}: {prediction_value}")
-            
+                # Get predictions for each date
+                symbol_predictions = []
+
+                for date in dates:
+                    try:
+                        # Get prediction from model for this specific date
+                        logger.debug(f"[{self.name}] Getting prediction for {symbol} on {date}")
+                        result = self.model_predictor.predict(
+                            features=symbol_features,
+                            symbol=symbol,
+                            prediction_date=date
+                        )
+                        logger.debug(f"[{self.name}] Model prediction result for {symbol} on {date}: {result}")
+
+                        # Extract prediction value
+                        prediction_value = result.get('prediction', 0.0)
+                        symbol_predictions.append(prediction_value)
+
+                    except Exception as e:
+                        logger.warning(f"[{self.name}] Failed to get prediction for {symbol} on {date}: {e}")
+                        symbol_predictions.append(0.0)
+
+                predictions_dict[symbol] = symbol_predictions
+                logger.debug(f"[{self.name}] Generated {len(symbol_predictions)} predictions for {symbol}")
+
             # Convert to DataFrame format
-            dates = pd.date_range(start=start_date, end=end_date, freq='D')
-            predictions_df = pd.DataFrame(
-                index=dates,
-                columns=list(predictions_dict.keys()),
-                data=[list(predictions_dict.values())] * len(dates)
-            )
+            if predictions_dict:
+                data_matrix = []
+                for i in range(len(dates)):
+                    row = [predictions_dict[symbol][i] for symbol in predictions_dict.keys()]
+                    data_matrix.append(row)
+
+                predictions_df = pd.DataFrame(
+                    index=dates,
+                    columns=list(predictions_dict.keys()),
+                    data=data_matrix
+                )
+            else:
+                predictions_df = pd.DataFrame(index=dates)
 
             logger.info(f"[{self.name}] ✅ Created DataFrame: shape={predictions_df.shape}, symbols={len(predictions_dict)}, processed={symbols_processed}")
             logger.info(f"[{self.name}] 📊 Prediction dict keys: {list(predictions_dict.keys())}")
             logger.info(f"[{self.name}] 📅 Date range: {start_date} to {end_date}")
+
+            # Log some sample predictions to verify they're not all the same
+            if not predictions_df.empty:
+                logger.info(f"[{self.name}] 📈 Sample predictions:")
+                logger.info(f"[{self.name}]   First date: {predictions_df.iloc[0].to_dict()}")
+                logger.info(f"[{self.name}]   Last date: {predictions_df.iloc[-1].to_dict()}")
+                logger.info(f"[{self.name}]   Prediction variance: {predictions_df.var().to_dict()}")
+
             return predictions_df
 
         except Exception as e:

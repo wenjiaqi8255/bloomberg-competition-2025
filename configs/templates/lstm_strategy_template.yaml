@@ -1,0 +1,437 @@
+# LSTM Trading Strategy Configuration Template
+# ===============================================
+#
+# This template demonstrates comprehensive configuration for an LSTM-based
+# trading strategy with integrated hyperparameter optimization and full pipeline
+# from data acquisition to backtesting.
+#
+# Key Features:
+# - LSTM neural network with comprehensive architecture search
+# - Sequence-based feature engineering for time series
+# - Advanced cross-validation for sequential data
+# - Integrated hyperparameter optimization with Optuna
+# - Complete experiment tracking with WandB
+# - Production-ready backtesting with realistic costs
+
+# =============================================================================
+# EXPERIMENT METADATA
+# =============================================================================
+experiment:
+  name: "lstm_strategy_experiment"
+  description: "LSTM neural network trading strategy with sequence-based prediction"
+  tags: ["lstm", "neural_network", "sequence_modeling", "deep_learning", "time_series"]
+  log_to_wandb: true
+  project_name: "bloomberg-competition"
+
+# =============================================================================
+# DATA PROVIDER CONFIGURATION
+# =============================================================================
+data_provider:
+  # Primary data provider for price data
+  type: "YFinanceProvider"
+  parameters:
+    max_retries: 3                # Retry failed API calls 3 times
+    retry_delay: 1.0              # Wait 1 second between retries
+    request_timeout: 30           # API request timeout in seconds
+    cache_enabled: true           # Enable data caching for performance
+
+# =============================================================================
+# TRAINING CONFIGURATION
+# =============================================================================
+training_setup:
+  # Model configuration
+  model:
+    model_type: "lstm"            # Use LSTM neural network model
+    config:
+      # Default architecture (will be optimized)
+      input_size: 10              # Number of input features
+      hidden_size: 64             # Hidden layer size
+      num_layers: 2               # Number of LSTM layers
+      dropout: 0.2                # Dropout rate
+      output_size: 1              # Single output (return prediction)
+      sequence_length: 30         # Input sequence length
+      bidirectional: false        # Unidirectional LSTM
+      batch_first: true           # Batch dimension first
+
+  # Feature engineering configuration (sequence-focused)
+  feature_engineering:
+    enabled_features:
+      - "returns"                 # Price returns (fundamental for prediction)
+      - "volatility"              # Volatility clustering effects
+      - "momentum"                # Short-term momentum patterns
+      - "volume"                  # Volume patterns and price-volume relationship
+      - "technical"               # Technical indicators as features
+
+    # Return-based features (core for time series prediction)
+    return_periods: [1, 5, 10, 20]      # Multiple return horizons
+    return_methods: ["simple", "log"]
+
+    # Volatility features (important for financial time series)
+    volatility_windows: [5, 10, 20, 50]  # Multiple volatility windows
+    volatility_methods: ["std", "parkinson", "garman_klass"]
+
+    # Momentum features for capturing trends
+    momentum_periods: [5, 10, 20]       # Multiple momentum lookbacks
+    momentum_methods: ["simple", "exponential"]
+
+    # Volume-based features
+    volume_periods: [5, 10, 20]         # Volume moving averages
+    volume_ratios: true                  # Volume price ratios
+
+    # Technical indicators as supplementary features
+    technical_indicators:
+      - "rsi"                    # Relative Strength Index
+      - "macd"                   # Moving Average Convergence Divergence
+      - "bollinger_position"     # Position within Bollinger Bands
+      - "stochastic"             # Stochastic oscillator
+      - "williams_r"             # Williams %R
+
+    # Sequence-specific feature engineering
+    sequence_features:
+      enable_autoregressive: true       # Include lagged returns
+      enable_rolling_stats: true        # Rolling statistics
+      enable_differencing: true         # Stationarity transformations
+      enable_normalization: true        # Feature normalization per sequence
+
+    # Feature selection and preprocessing
+    lookback_periods: [252]            # Maximum lookback for features
+    min_ic_threshold: 0.015             # Minimum information coefficient
+    feature_lag: 0                      # No lag for sequence models
+    include_technical: true
+    feature_importance_threshold: 0.005 # Lower threshold for ensemble methods
+    normalize_features: true             # Normalize features for neural networks
+    handle_missing: "interpolate"        # Handle missing data
+
+  # Training data parameters
+  parameters:
+    start_date: "2018-01-01"           # Training start date
+    end_date: "2023-12-31"             # Training end date
+    symbols:
+      # Technology stocks (good for pattern recognition)
+      - "AAPL"    # Apple
+      - "MSFT"    # Microsoft
+      - "GOOGL"   # Alphabet
+      - "AMZN"    # Amazon
+      - "META"    # Meta
+      - "TSLA"    # Tesla
+      - "NVDA"    # NVIDIA
+
+      # Financial stocks (different dynamics)
+      - "JPM"     # JPMorgan Chase
+      - "BAC"     # Bank of America
+      - "GS"      # Goldman Sachs
+
+      # Consumer stocks
+      - "WMT"     # Walmart
+      - "PG"      # Procter & Gamble
+      - "KO"      # Coca-Cola
+
+      # ETFs for market exposure
+      - "SPY"     # S&P 500
+      - "QQQ"     # Nasdaq 100
+
+# =============================================================================
+# LSTM HYPERPARAMETER OPTIMIZATION
+# =============================================================================
+lstm_hyperparameter_optimization:
+  # Enable/disable hyperparameter optimization
+  enabled: true
+
+  # Optimization method
+  optimization_method: "optuna"
+
+  # Number of optimization trials
+  n_trials: 50
+
+  # Cross-validation settings (time series aware)
+  cv_folds: 3                          # 3-fold time series cross-validation
+  purge_days: 10                       # Days to purge between train/test
+  embargo_days: 5                      # Days to embargo before test
+
+  # Optimization objective
+  objective: "sharpe_ratio"            # Optimize for risk-adjusted returns
+  direction: "maximize"                # Higher Sharpe ratio is better
+
+  # Optuna sampler configuration
+  sampler:
+    type: "tpe"                        # Tree-structured Parzen Estimator
+    seed: 42                           # Random seed for reproducibility
+    n_startup_trials: 10               # Random trials before TPE
+
+  # Pruner configuration (early stopping for neural networks)
+  pruner:
+    type: "median"                     # Median pruning
+    n_startup_trials: 5                # Trials before pruning starts
+    n_warmup_steps: 10                 # Steps before pruning evaluation (more for NN)
+    interval_steps: 5                  # Check pruning every 5 steps
+
+  # Search space configuration
+  search_space:
+    # Use built-in preset search space for LSTM
+    preset: "lstm_default"
+
+    # Custom search space parameters (override preset)
+    custom_space:
+      # Architecture parameters
+      hidden_size:
+        type: "categorical"
+        choices: [32, 64, 128, 256]
+        description: "Hidden layer size (number of neurons)"
+
+      num_layers:
+        type: "int"
+        low: 1
+        high: 4
+        step: 1
+        description: "Number of LSTM layers"
+
+      dropout:
+        type: "float"
+        low: 0.1
+        high: 0.5
+        step: 0.05
+        description: "Dropout rate for regularization"
+
+      # Sequence parameters
+      sequence_length:
+        type: "categorical"
+        choices: [10, 20, 30, 60]
+        description: "Length of input sequences"
+
+      # Training parameters
+      learning_rate:
+        type: "float"
+        low: 0.001
+        high: 0.01
+        step: 0.001
+        log_scale: true
+        description: "Learning rate for gradient descent"
+
+      batch_size:
+        type: "categorical"
+        choices: [16, 32, 64]
+        description: "Training batch size"
+
+      num_epochs:
+        type: "int"
+        low: 50
+        high: 200
+        step: 10
+        description: "Number of training epochs"
+
+      # Network architecture variations
+      bidirectional:
+        type: "categorical"
+        choices: [true, false]
+        description: "Use bidirectional LSTM"
+
+      # Regularization parameters
+      weight_decay:
+        type: "float"
+        low: 1e-6
+        high: 1e-3
+        step: 1e-6
+        log_scale: true
+        description: "L2 regularization for weights"
+
+      # Optimization parameters
+      optimizer:
+        type: "categorical"
+        choices: ["adam", "adamw", "sgd"]
+        description: "Optimizer algorithm"
+
+  # Sequence data analysis
+  sequence_analysis:
+    enabled: true
+    analyze_autocorrelation: true        # Analyze autocorrelation patterns
+    test_stationarity: true             # Test for stationarity
+    detect_patterns: true               # Detect repeating patterns
+    analyze_volatility_clustering: true # Analyze volatility clustering
+
+  # Training monitoring
+  training_monitoring:
+    enabled: true
+    early_stopping: true                # Enable early stopping
+    patience: 10                        # Early stopping patience
+    monitor_validation_loss: true       # Monitor validation loss
+    gradient_clipping: true             # Enable gradient clipping
+    max_gradient_norm: 1.0             # Maximum gradient norm
+
+  # Logging and tracking
+  logging:
+    log_optimization: true              # Log optimization progress to WandB
+    log_all_trials: true                # Log all trials (not just best)
+    create_optimization_plot: true      # Create optimization history plots
+    log_training_curves: true           # Log training/validation curves
+    log_sequence_samples: true          # Log example sequences
+    log_model_architecture: true        # Log model architecture diagrams
+
+  # Model validation settings
+  validation:
+    out_of_sample_test: true            # Perform out-of-sample testing
+    time_series_split: true             # Use time series cross-validation
+    sequence_validation: true           # Validate on sequence data
+    stability_check: true               # Check model stability over time
+    calibration_analysis: true          # Analyze model calibration
+    residual_analysis: true             # Analyze prediction residuals
+
+# =============================================================================
+# BACKTESTING CONFIGURATION
+# =============================================================================
+backtest:
+  name: "LSTM_Strategy_Backtest"
+  start_date: "2024-01-01"             # Out-of-sample test period
+  end_date: "2024-12-31"
+
+  # Portfolio settings
+  initial_capital: 1000000             # $1M initial capital
+  benchmark_symbol: "SPY"              # S&P 500 as benchmark
+
+  # Transaction cost settings (realistic costs)
+  commission_rate: 0.001               # 0.1% commission per trade
+  slippage_rate: 0.0005                # 0.05% slippage per trade
+  short_borrow_cost: 0.002             # 0.2% annual short borrow cost
+
+  # Trading constraints (adjusted for neural network predictions)
+  rebalance_frequency: "weekly"        # Portfolio rebalancing frequency
+  position_limit: 0.08                 # Maximum 8% in single position
+  rebalance_threshold: 0.015           # 1.5% change threshold for rebalancing
+
+  # Risk management (important for neural networks)
+  stop_loss_threshold: 0.12            # 12% stop-loss on positions
+  drawdown_limit: 0.18                 # 18% maximum drawdown
+  volatility_target: 0.12              # 12% annual volatility target
+  prediction_confidence_threshold: 0.6 # Minimum confidence for trading
+
+# =============================================================================
+# STRATEGY CONFIGURATION
+# =============================================================================
+strategy:
+  name: "LSTM_Sequence_Strategy"
+  type: "lstm_ml"                     # Strategy type identifier
+
+  # Model configuration
+  parameters:
+    # Model ID will be automatically set by the orchestrator
+    model_id: "placeholder_model_id"
+
+    # Sequence prediction parameters
+    sequence_length: 30                # Input sequence length
+    prediction_horizon: 1              # 1-day ahead prediction
+    confidence_threshold: 0.6          # Minimum confidence for signals
+    ensemble_predictions: false        # Use ensemble of models
+
+    # Signal generation parameters
+    signal_smoothing: true             # Smooth predictions to reduce noise
+    signal_threshold: 0.02             # Minimum signal magnitude
+    position_sizing_method: "volatility_adjusted"  # Volatility-adjusted sizing
+    max_positions: 8                   # Maximum concurrent positions
+
+    # Risk management parameters
+    risk_adjusted_signals: true        # Apply risk adjustments to signals
+    volatility_scaling: true           # Scale signals by volatility
+    trend_confirmation: true           # Require trend confirmation
+    regime_detection: true             # Detect market regimes
+
+# =============================================================================
+# ADVANCED CONFIGURATION
+# =============================================================================
+advanced:
+  # Ensemble methods (particularly useful for neural networks)
+  ensemble:
+    enabled: true
+    methods:
+      - method: "lstm"
+        weight: 0.6
+      - method: "xgboost"
+        weight: 0.4
+    combination_method: "weighted_average"
+
+  # Robustness testing (important for neural networks)
+  robustness_tests:
+    enabled: true
+    tests:
+      - "data_corruption"              # Test with corrupted/noisy data
+      - "parameter_sensitivity"        # Test parameter sensitivity
+      - "outlier_impact"               # Test outlier impact
+      - "sequence_length_sensitivity"   # Test different sequence lengths
+      - "market_regime_change"         # Test different market regimes
+      - "overfitting_detection"        # Test for overfitting
+
+  # Neural network specific analysis
+  neural_analysis:
+    enabled: true
+    analyze_attention_patterns: false   # Not applicable to standard LSTM
+    weight_analysis: true              # Analyze learned weights
+    activation_analysis: true          # Analyze activation patterns
+    gradient_analysis: true            # Analyze gradient flow
+    sequence_interpretation: true      # Interpret sequence predictions
+
+  # Performance attribution
+  attribution_analysis:
+    enabled: true
+    analyze_sequence_contributions: true # Analyze how different sequence positions contribute
+    calculate_feature_importance: true  # Calculate feature importance
+    risk_decomposition: true           # Decompose risk sources
+
+# =============================================================================
+# OUTPUT AND REPORTING
+# =============================================================================
+reporting:
+  # Generate comprehensive reports
+  generate_report: true
+  output_format: ["html", "json", "pdf"]
+
+  # Report sections (neural network specific)
+  sections:
+    - "executive_summary"              # High-level performance summary
+    - "optimization_results"           # Hyperparameter optimization results
+    - "sequence_analysis"              # Sequence pattern analysis
+    - "neural_network_diagnostics"     # Model health and diagnostics
+    - "training_analysis"              # Training process analysis
+    - "risk_metrics"                   # Detailed risk metrics
+    - "performance_attribution"        # Performance attribution analysis
+    - "robustness_tests"               # Robustness test results
+
+  # Visualizations (including neural network specific)
+  plots:
+    - "cumulative_returns"             # Cumulative returns chart
+    - "drawdown_chart"                 # Drawdown visualization
+    - "rolling_sharpe"                 # Rolling Sharpe ratio
+    - "prediction_vs_actual"           # Prediction vs actual returns
+    - "training_curves"                # Training/validation loss curves
+    - "optimization_history"           # Optimization progress
+    - "parameter_importance"           # Parameter importance from Optuna
+    - "sequence_predictions"           # Example sequence predictions
+    - "attention_weights"              # If using attention mechanisms
+    - "feature_importance_sequences"   # Feature importance over time
+
+# =============================================================================
+# NOTES AND USAGE
+# =============================================================================
+#
+# To use this configuration:
+# 1. Copy this file to configs/your_experiment_name.yaml
+# 2. Modify symbols, dates, and parameters as needed
+# 3. Run with: poetry run python run_experiment.py --config configs/your_experiment_name.yaml
+#
+# Key customization points for LSTM:
+# - Adjust sequence_length based on your prediction horizon needs
+# - Modify hidden_size and num_layers based on computational budget
+# - Tune learning_rate and batch_size for stable training
+# - Adjust rebalance_threshold to account for prediction noise
+# - Enable ensemble methods for more robust predictions
+#
+# Expected computational requirements:
+# - Training: ~10-30 minutes per model (depends on architecture)
+# - Hyperparameter optimization: ~60-180 minutes (50 trials)
+# - Memory: 4-8 GB for sequence data and models
+# - Storage: 200-1000 MB for models and results
+# - GPU recommended for faster training (but CPU works fine)
+#
+# Tips for LSTM success:
+# - Start with simpler architectures and increase complexity gradually
+# - Normalize features for better convergence
+# - Use early stopping to prevent overfitting
+# - Monitor training/validation curves for signs of overfitting
+# - Consider ensemble methods for more robust predictions

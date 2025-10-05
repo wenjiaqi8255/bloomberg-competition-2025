@@ -22,7 +22,7 @@ training_setup:
       random_state: 42
 
   feature_engineering:
-    enabled_features: ['momentum']
+    enabled_features: ['momentum', 'volatility', 'technical', 'volume']
     momentum_periods: [21, 63, 252]
     volatility_windows: [20, 60]
     lookback_periods: [20, 60, 252]
@@ -47,6 +47,29 @@ training_setup:
       - V
       - WMT
 
+  # Hyperparameter optimization configuration
+  hyperparameter_optimization:
+    enabled: true
+    optimization_method: "optuna"
+    n_trials: 100  # More trials for XGBoost due to faster training
+    cv_folds: 5
+    objective: "sharpe_ratio"
+
+    # Search space using XGBoost model defaults
+    search_space_preset: "xgboost_default"
+
+    # Optuna sampler and pruner settings
+    sampler_type: "tpe"
+    pruner_type: "median"
+
+    # Training optimization
+    enable_early_stopping: true
+    early_stopping_rounds: 50
+
+    # Logging
+    log_to_wandb: true
+    log_all_trials: true
+
 # Part 3: Strategy Configuration
 # ------------------------------
 strategy:
@@ -56,6 +79,122 @@ strategy:
   # Model configuration
   model_id: placeholder_model_id  # Will be overwritten by orchestrator
   min_signal_strength: 0.00001       # Minimum signal strength threshold
+
+# XGBoost Hyperparameter Optimization Settings
+xgboost_hyperparameter_optimization:
+  # Enable/disable hyperparameter optimization
+  enabled: true
+
+  # Optimization method (optuna, grid_search, random_search)
+  optimization_method: "optuna"
+
+  # Number of optimization trials
+  n_trials: 100
+
+  # Optimization timeout (in seconds) - alternative to n_trials
+  timeout: null  # e.g., 7200 for 2 hours
+
+  # Cross-validation settings
+  cv_folds: 5
+  purge_days: 10  # Days to purge after train period
+  embargo_days: 5  # Days to embargo before test period
+
+  # Optimization objective (sharpe_ratio, sortino_ratio, max_drawdown, total_return, r2, mse)
+  objective: "sharpe_ratio"
+  direction: "maximize"  # maximize or minimize
+
+  # Sampler settings (optuna specific)
+  sampler:
+    type: "tpe"  # tpe, random, cmaes, grid
+    seed: 42
+
+  # Pruner settings (for early stopping of bad trials)
+  pruner:
+    type: "median"  # median, hyperband, successional_halving
+    n_startup_trials: 10  # Number of trials before pruning starts
+    n_warmup_steps: 5  # Number of steps before pruning starts
+    interval_steps: 1  # Interval between pruning checks
+
+  # Search space configuration (uses model defaults if not specified)
+  search_space:
+    # Use preset search space from SearchSpaceBuilder
+    preset: "xgboost_default"  # xgboost_default, xgboost_fast, xgboost_accurate, or custom
+
+    # Custom search space (if preset is "custom")
+    custom_space:
+      n_estimators:
+        type: "int"
+        low: 50
+        high: 500
+        step: 10
+      max_depth:
+        type: "int"
+        low: 3
+        high: 12
+        step: 1
+      learning_rate:
+        type: "float"
+        low: 0.01
+        high: 0.3
+        step: 0.01
+        log_scale: true
+      subsample:
+        type: "float"
+        low: 0.6
+        high: 1.0
+        step: 0.05
+      colsample_bytree:
+        type: "float"
+        low: 0.6
+        high: 1.0
+        step: 0.05
+      min_child_weight:
+        type: "int"
+        low: 1
+        high: 10
+        step: 1
+      gamma:
+        type: "float"
+        low: 0.0
+        high: 1.0
+        step: 0.05
+      reg_alpha:
+        type: "float"
+        low: 0.0
+        high: 1.0
+        step: 0.05
+      reg_lambda:
+        type: "float"
+        low: 0.5
+        high: 2.0
+        step: 0.1
+
+  # Early stopping settings
+  early_stopping:
+    enabled: true
+    early_stopping_rounds: 50  # Number of rounds without improvement
+    eval_metric: "rmse"  # Evaluation metric for early stopping
+
+  # Trial logging and visualization
+  logging:
+    log_optimization: true  # Log optimization progress to wandb
+    log_all_trials: true  # Log all trials (not just best)
+    create_optimization_plot: true  # Create optimization history plots
+    log_feature_importance: true  # Log feature importance from best model
+    log_tree_visualization: true  # Log tree structure for best model
+
+  # Performance optimization
+  performance:
+    n_jobs: -1  # Use all available CPU cores
+    tree_method: "auto"  # auto, exact, approx, hist
+    gpu_id: -1  # GPU device ID (-1 for no GPU)
+
+  # Feature selection during optimization
+  feature_selection:
+    enabled: true
+    method: "importance"  # importance, correlation, mutual_info
+    n_features_to_select: null  # null for automatic selection
+    importance_threshold: 0.01  # Minimum importance threshold
 
 # Part 4: Backtesting Configuration
 # --------------------------------
