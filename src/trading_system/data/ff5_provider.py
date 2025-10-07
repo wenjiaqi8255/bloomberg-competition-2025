@@ -21,7 +21,7 @@ import requests
 from io import StringIO
 
 from ..types.enums import DataSource
-from ..utils.validation import DataValidator, DataValidationError
+from .validation import DataValidator, DataValidationError
 from .base_data_provider import FactorDataProvider
 
 logger = logging.getLogger(__name__)

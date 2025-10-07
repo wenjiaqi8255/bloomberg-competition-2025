@@ -79,23 +79,54 @@ class PanelDataTransformer:
         # Determine current index order
         index_names = features.index.names
         
-        # Check if already in panel format (date, symbol)
-        if index_names[0] == 'date' and index_names[1] == 'symbol':
-            logger.debug("Data already in panel format (date, symbol)")
-            features_panel = features.sort_index()
-            target_panel = target.sort_index() if target is not None else None
+        # Apply panel data standardization to ensure consistent format
+        try:
+            from .panel_formatter import PanelDataFormatter
+            logger.debug("Applying panel data standardization in PanelDataTransformer...")
+
+            features_panel = PanelDataFormatter.ensure_panel_format(
+                features,
+                index_order=('date', 'symbol'),
+                validate=True,
+                auto_fix=True
+            )
+
+            target_panel = None
+            if target is not None:
+                # Convert target to DataFrame for standardization, then back to Series
+                target_df = target.to_frame() if isinstance(target, pd.Series) else target
+                target_df = PanelDataFormatter.ensure_panel_format(
+                    target_df,
+                    index_order=('date', 'symbol'),
+                    validate=True,
+                    auto_fix=True
+                )
+                target_panel = target_df.iloc[:, 0] if len(target_df.columns) == 1 else target_df
+
+            logger.debug("Panel data standardized successfully in PanelDataTransformer")
             return features_panel, target_panel
-        
-        # Check if in time series format (symbol, date)
-        elif index_names[0] == 'symbol' and index_names[1] == 'date':
-            logger.debug("Converting from time series (symbol, date) to panel (date, symbol) format")
-            features_panel = features.swaplevel(0, 1).sort_index()
-            target_panel = target.swaplevel(0, 1).sort_index() if target is not None else None
-            return features_panel, target_panel
-        
-        else:
-            raise ValueError(f"Unexpected MultiIndex names: {index_names}. "
-                           f"Expected ('symbol', 'date') or ('date', 'symbol')")
+
+        except Exception as e:
+            logger.warning(f"Panel data standardization failed in PanelDataTransformer: {e}, using fallback logic")
+
+            # Fallback to original logic
+            # Check if already in panel format (date, symbol)
+            if index_names[0] == 'date' and index_names[1] == 'symbol':
+                logger.debug("Data already in panel format (date, symbol)")
+                features_panel = features.sort_index()
+                target_panel = target.sort_index() if target is not None else None
+                return features_panel, target_panel
+
+            # Check if in time series format (symbol, date)
+            elif index_names[0] == 'symbol' and index_names[1] == 'date':
+                logger.debug("Converting from time series (symbol, date) to panel (date, symbol) format")
+                features_panel = features.swaplevel(0, 1).sort_index()
+                target_panel = target.swaplevel(0, 1).sort_index() if target is not None else None
+                return features_panel, target_panel
+
+            else:
+                raise ValueError(f"Unexpected MultiIndex names: {index_names}. "
+                               f"Expected ('symbol', 'date') or ('date', 'symbol')")
     
     @staticmethod
     def to_time_series_format(

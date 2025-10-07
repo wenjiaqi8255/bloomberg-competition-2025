@@ -145,11 +145,12 @@ class ExperimentOrchestrator:
         model_config = training_setup.get('model', {})
         feature_config = training_setup.get('feature_engineering', {})
         training_params = training_setup.get('parameters', {})
+        model_type = model_config.get('model_type')
 
-        feature_pipeline = FeatureEngineeringPipeline.from_config(feature_config)
+        feature_pipeline = FeatureEngineeringPipeline.from_config(feature_config, model_type=model_type)
 
         train_pipeline = TrainingPipeline(
-            model_type=model_config.get('model_type'),
+            model_type=model_type,
             feature_pipeline=feature_pipeline,
             registry_path="./models/"  # Explicitly set the model registry path
         )

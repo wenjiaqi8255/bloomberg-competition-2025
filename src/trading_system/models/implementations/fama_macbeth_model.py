@@ -135,7 +135,35 @@ class FamaMacBethModel(BaseModel):
         try:
             # Validate input data
             self._validate_panel_data(X, y)
-            
+
+            # Ensure data follows standard panel format convention
+            try:
+                from feature_engineering.utils.panel_formatter import PanelDataFormatter
+                logger.debug("Standardizing panel data format in Fama-MacBeth model...")
+
+                X = PanelDataFormatter.ensure_panel_format(
+                    X,
+                    index_order=('date', 'symbol'),
+                    validate=True,
+                    auto_fix=True
+                )
+
+                # Convert y to DataFrame for standardization, then back to Series
+                y_df = y.to_frame() if isinstance(y, pd.Series) else y
+                y_df = PanelDataFormatter.ensure_panel_format(
+                    y_df,
+                    index_order=('date', 'symbol'),
+                    validate=True,
+                    auto_fix=True
+                )
+                y = y_df.iloc[:, 0] if len(y_df.columns) == 1 else y_df
+
+                logger.debug("Panel data format standardized successfully")
+
+            except Exception as e:
+                logger.warning(f"Panel data standardization failed in Fama-MacBeth model: {e}")
+                # Continue without standardization if it fails
+
             # Ensure data is aligned
             aligned_data = pd.concat([y.rename('target'), X], axis=1).dropna()
             if len(aligned_data) == 0:

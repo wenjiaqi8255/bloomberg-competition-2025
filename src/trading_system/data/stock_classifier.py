@@ -20,7 +20,7 @@ from enum import Enum
 import yfinance as yf
 
 from ..types.enums import DataSource
-from ..utils.validation import DataValidationError
+from .validation import DataValidationError
 from .yfinance_provider import YFinanceProvider
 from .base_data_provider import ClassificationProvider
 

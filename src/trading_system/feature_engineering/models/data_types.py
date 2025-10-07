@@ -83,40 +83,6 @@ ForwardReturns = Dict[str, pd.Series]  # Symbol -> forward returns
 FeatureData = pd.DataFrame  # Combined feature DataFrame
 ValidationData = Dict[str, FeatureMetrics]  # Feature validation metrics
 
-
-# ============================================================================
-# Simplified Interface
-# ============================================================================
-
-class IFeatureEngine:
-    """Simplified feature engineering interface."""
-
-    def compute_features(self,
-                        price_data: PriceData,
-                        forward_returns: Optional[ForwardReturns] = None,
-                        config: Optional[FeatureConfig] = None) -> FeatureResult:
-        """
-        Compute features for all symbols.
-
-        Args:
-            price_data: Dictionary of price DataFrames by symbol
-            forward_returns: Optional forward returns for validation
-            config: Optional configuration, uses defaults if None
-
-        Returns:
-            FeatureResult object with features and metrics
-        """
-        raise NotImplementedError
-
-    def get_feature_names(self) -> List[str]:
-        """Get list of feature names this engine generates."""
-        raise NotImplementedError
-
-    def get_config(self) -> FeatureConfig:
-        """Get current configuration."""
-        raise NotImplementedError
-
-
 # ============================================================================
 # Utility Functions
 # ============================================================================
@@ -178,4 +144,3 @@ def align_data(price_data: PriceData,
 Config = FeatureConfig
 Metrics = FeatureMetrics
 Result = FeatureResult
-Engine = IFeatureEngine

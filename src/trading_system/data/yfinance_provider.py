@@ -12,7 +12,7 @@ import yfinance as yf
 from pandas.tseries.offsets import BDay
 
 from ..types.enums import DataSource
-from ..utils.validation import DataValidator, DataValidationError
+from .validation import DataValidator, DataValidationError
 from .base_data_provider import PriceDataProvider
 
 logger = logging.getLogger(__name__)

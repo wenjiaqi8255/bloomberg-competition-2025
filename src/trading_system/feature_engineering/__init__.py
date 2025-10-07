@@ -36,12 +36,11 @@ import pandas as pd
 from typing import Optional, List, Dict
 from .models.data_types import (
     FeatureMetrics, FeatureResult,
-    IFeatureEngine, PriceData, ForwardReturns, ValidationData, FeatureData,
+    PriceData, ForwardReturns, ValidationData, FeatureData,
     validate_price_data, align_data, create_default_config
 )
 from ..config.feature import FeatureType, FeatureConfig
 from .utils.technical_features import TechnicalIndicatorCalculator
-from .utils.validation import FeatureValidator, validate_features
 
 
 # ============================================================================
@@ -162,20 +161,6 @@ def validate_feature_performance(features: FeatureData,
     return validate_features(features, forward_returns, min_ic_threshold)
 
 
-def get_feature_summary(metrics: Dict[str, FeatureMetrics]) -> pd.DataFrame:
-    """
-    Get summary DataFrame of feature validation results.
-
-    Args:
-        metrics: Dictionary of feature metrics
-
-    Returns:
-        Summary DataFrame sorted by IC
-    """
-    validator = FeatureValidator()
-    return validator.get_validation_summary(metrics)
-
-
 # ============================================================================
 # Configuration Helpers
 # ============================================================================
@@ -256,14 +241,12 @@ __all__ = [
     'FeatureType',
     'FeatureResult',
     'FeatureMetrics',
-    'FeatureValidator',
     'TechnicalIndicatorCalculator',
 
     # Main functions
     'compute_technical_features',
     'compute_features',
     'validate_feature_performance',
-    'get_feature_summary',
 
     # Specialized feature creators
     'create_momentum_features',

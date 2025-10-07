@@ -19,7 +19,7 @@ import pandas as pd
 import numpy as np
 
 from ..types.enums import DataSource
-from ..utils.validation import DataValidator, DataValidationError
+from .validation import DataValidator, DataValidationError
 
 logger = logging.getLogger(__name__)
 

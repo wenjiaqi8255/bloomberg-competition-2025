@@ -1,0 +1,102 @@
+# ============================================================================
+# 具体特征配置演示 - Specific Features Configuration Demo
+# ============================================================================
+#
+# 这个配置文件展示了如何使用具体的特征名称来选择特征
+# 而不是使用高层次的类型 (如 'momentum', 'volatility')
+#
+# 可用特征列表请参考: FEATURES.md
+# ============================================================================
+
+# 特征工程配置
+feature_engineering:
+  # 启用具体特征选择 (而不是高层次类型)
+  use_specific_features: true
+
+  # 具体特征选择 - 从 FEATURES.md 中选择
+  specific_features:
+    # 动量特征 (从可用特征中选择)
+    momentum:
+      - momentum_21d              # 21日动量
+      - momentum_63d              # 63日动量
+      - momentum_vol_ratio        # 动量波动率比率
+      - momentum_vol_interaction  # 动量波动率交互作用
+      - volume_price_trend        # 量价趋势
+
+    # 波动率特征
+    volatility:
+      - volatility_20d            # 20日波动率
+      - volatility_60d            # 60日波动率
+      - garman_klass_volatility   # Garman-Klass波动率估计
+      - parkinson_volatility      # Parkinson波动率估计
+      - range_volatility          # 价格范围波动率
+
+    # 技术指标特征
+    technical:
+      - rsi_14                    # 14日RSI
+      - macd_line                 # MACD线
+      - macd_signal               # MACD信号线
+      - macd_histogram            # MACD柱状图
+      - adx                       # 平均趋向指数
+      - cci                       # 商品通道指数
+      - williams_r                # 威廉姆斯%R
+      - stochastic_k              # 随机指标%K
+      - stochastic_d              # 随机指标%D
+
+    # 截面特征 (需要多只股票数据)
+    cross_sectional:
+      - market_cap_proxy          # 市值代理变量
+      - book_to_market_proxy      # 账面市值比代理
+      - size_factor               # 规模因子
+      - value_factor              # 价值因子
+
+  # 截面特征专用配置 (用于 Fama-MacBeth 等模型)
+  include_cross_sectional: true
+  cross_sectional_lookback:
+    momentum: 252      # 12个月动量回顾期
+    volatility: 60     # 60天波动率回顾期
+    ma_long: 200       # 长期移动平均
+    ma_short: 50       # 短期移动平均
+
+  # 数据预处理
+  winsorize_percentile: 0.01     # 1%和99%分位数缩尾
+  normalize_features: true       # 特征标准化
+  handle_missing: "forward_fill" # 缺失值处理
+
+  # 特征验证
+  min_ic_threshold: 0.02         # 最小信息系数
+  min_significance: 0.10         # 10%显著性水平
+  feature_lag: 1                 # 使用滞后特征避免前瞻偏差
+
+# 模型配置示例
+model:
+  model_type: "fama_macbeth"
+  params:
+    # 使用具体的特征进行回归
+    feature_columns:
+      # 从 specific_features 中选择的特征
+      - momentum_21d
+      - momentum_63d
+      - volatility_20d
+      - garman_klass_volatility
+      - rsi_14
+      - macd_line
+      # 截面特征 (如果有多股票数据)
+      - market_cap_proxy
+      - book_to_market_proxy
+      - size_factor
+
+# ============================================================================
+# 使用说明:
+#
+# 1. 查看可用特征: 运行 `python discover_features.py` 生成 FEATURES.md
+# 2. 选择特征: 从 FEATURES.md 中复制需要的特征名称
+# 3. 配置文件: 在 specific_features 部分添加特征名称
+# 4. 运行实验: `python run_experiment.py -c specific_features_demo.yaml`
+#
+# 优势:
+# - 明确知道使用了哪些具体特征
+# - 避免不需要的特征计算，提高效率
+# - 更容易控制和复现实验结果
+# - 遵循 KISS 和 YAGNI 原则
+# ============================================================================

@@ -1,18 +1,18 @@
 """
-Centralized Feature Engineering Pipeline
+Refactored Feature Engineering Pipeline
 
-This module provides a unified pipeline for feature engineering that ensures
-consistency across training, backtesting, and live execution environments.
+This module provides a simplified pipeline that leverages existing components
+instead of reimplementing functionality.
 
-Key Features:
-- Versionable and configurable from a file.
-- `fit` method to learn parameters (e.g., for scaling) from training data.
-- `transform` method to apply the learned transformations consistently.
-- Saves/loads its state to be bundled with a trained model.
+Key Principles:
+- KISS: Simple coordination of existing components
+- SRP: Pipeline only coordinates, doesn't implement
+- DRY: Reuses all existing components
+- DIP: Depends on abstractions, not concrete implementations
 """
 
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 from datetime import datetime
 import yaml
@@ -23,759 +23,554 @@ import joblib
 
 from .models.data_types import FeatureConfig
 from .utils.technical_features import TechnicalIndicatorCalculator
+from .utils.cross_sectional_features import CrossSectionalFeatureCalculator
+from .utils.panel_data_transformer import PanelDataTransformer
 from .cache_provider import FeatureCacheProvider
 from .local_cache_provider import LocalCacheProvider
-from .utils.cross_sectional_features import CrossSectionalFeatureCalculator
 
 logger = logging.getLogger(__name__)
 
 
 class FeatureEngineeringPipeline:
     """
-    Orchestrates the entire feature engineering process, ensuring consistency.
+    Simplified feature engineering pipeline that coordinates existing components.
+
+    This pipeline acts as a coordinator rather than reimplementing functionality,
+    leveraging the existing ecosystem of feature engineering components.
     """
 
-    def __init__(self, config: FeatureConfig, feature_cache: Optional[FeatureCacheProvider] = None,
+    def __init__(self,
+                 config: FeatureConfig,
+                 feature_cache: Optional[FeatureCacheProvider] = None,
                  auto_cleanup_cache: bool = True,
-                 cross_sectional_calculator: Optional[CrossSectionalFeatureCalculator] = None):
+                 model_type: Optional[str] = None):
         """
-        Initialize the pipeline with a feature configuration.
+        Initialize the pipeline with dependency injection of existing components.
 
         Args:
-            config: A FeatureConfig object detailing which features to compute.
-            feature_cache: Optional cache provider for feature caching
-            auto_cleanup_cache: Whether to automatically clean invalid cache on init
-            cross_sectional_calculator: Optional calculator for cross-sectional features
-                                       (used for Fama-MacBeth and other panel data methods)
+            config: Feature configuration
+            feature_cache: Optional cache provider (uses LocalCacheProvider if None)
+            auto_cleanup_cache: Whether to auto-clean invalid cache on init
+            model_type: Model type for data format determination
         """
         self.config = config
+        self.model_type = model_type
         self.scalers: Dict[str, StandardScaler] = {}
         self._is_fitted = False
 
-        # 使用提供的缓存，或创建默认的本地缓存
+        # Use existing cache provider
         self.feature_cache = feature_cache or LocalCacheProvider()
 
-        # Cross-sectional feature calculator (optional, for Fama-MacBeth)
-        if cross_sectional_calculator is not None:
-            self.cross_sectional_calculator = cross_sectional_calculator
-        elif hasattr(config, 'include_cross_sectional') and config.include_cross_sectional:
-            # Auto-create calculator if config requests cross-sectional features
+        # Initialize existing calculators
+        self.technical_calculator = TechnicalIndicatorCalculator(config)
+
+        # Initialize cross-sectional calculator if needed
+        if hasattr(config, 'include_cross_sectional') and config.include_cross_sectional:
             lookback = getattr(config, 'cross_sectional_lookback', None)
             winsorize = getattr(config, 'winsorize_percentile', 0.01)
             self.cross_sectional_calculator = CrossSectionalFeatureCalculator(
                 lookback_periods=lookback,
                 winsorize_percentile=winsorize
             )
-            logger.info("Auto-created CrossSectionalFeatureCalculator from config")
+            logger.info("Initialized CrossSectionalFeatureCalculator")
         else:
             self.cross_sectional_calculator = None
 
-        # 定义哪些特征是"慢变"的，需要缓存
-        # 注意：这些名称必须与technical_features.py中实际生成的特征名称完全匹配
-        self.SLOW_FEATURES = {
-            'sma_200', 'sma_50',  # SMA特征
-            'ema_12', 'ema_26',   # EMA特征（实际生成的是ema_12和ema_26，而不是ema_50/ema_200）
-            'volatility_60d', 'volatility_30d',  # 波动率特征
-            'bb_upper', 'bb_middle', 'bb_lower',  # Bollinger Bands（实际生成时不带_20后缀）
-            'macd_line', 'macd_signal', 'macd_histogram',  # MACD相关特征
-            'adx', 'cci'  # 其他技术指标
-        }
-
-        # 自动清理无效缓存
+        # Auto cleanup cache if requested
         if auto_cleanup_cache and hasattr(self.feature_cache, 'clear_invalid_cache'):
             try:
                 cleared_count = self.feature_cache.clear_invalid_cache()
                 if cleared_count > 0:
-                    logger.info(f"Auto-cleaned {cleared_count} invalid cache files on initialization")
+                    logger.info(f"Auto-cleaned {cleared_count} invalid cache files")
             except Exception as e:
                 logger.warning(f"Failed to auto-clean cache: {e}")
 
-        logger.info(f"Initialized pipeline with {self.feature_cache.__class__.__name__}, "
-                   f"cross_sectional={'enabled' if self.cross_sectional_calculator else 'disabled'}")
+        logger.info(f"Initialized pipeline with existing components, "
+                   f"cross_sectional={'enabled' if self.cross_sectional_calculator else 'disabled'}, "
+                   )
+
+    def _get_index_format_for_model(self) -> Tuple[str, str]:
+        """
+        Determine the appropriate MultiIndex format based on model type.
+
+        Returns:
+            Tuple of (level_0_name, level_1_name) for the MultiIndex
+        """
+        if self.model_type is None:
+            return ('date', 'symbol')
+
+        # Model types that should use time series format (symbol, date)
+        time_series_models = {
+            'ff5_regression', 'linear_regression', 'ridge_regression', 'lasso_regression',
+            'xgboost', 'lightgbm', 'random_forest', 'lstm', 'gru'
+        }
+
+        # Model types that should use panel data format (date, symbol)
+        panel_data_models = {
+            'fama_macbeth', 'panel_regression', 'cross_sectional', 'panel_ml'
+        }
+
+        model_type_lower = self.model_type.lower()
+
+        if model_type_lower in time_series_models:
+            return ('symbol', 'date')
+        elif model_type_lower in panel_data_models:
+            return ('date', 'symbol')
+        else:
+            # Default to time series format for unknown models
+            return ('symbol', 'date')
 
     def fit(self, data: Dict[str, pd.DataFrame]):
         """
-        Learn scaling parameters from the training data.
+        Learn scaling parameters from training data using existing components.
 
         Args:
-            data: A dictionary of DataFrames, expecting keys like 'price_data'.
-                   The data should cover the entire training period.
+            data: Dictionary of DataFrames with 'price_data' key
         """
         logger.info("Fitting FeatureEngineeringPipeline...")
-        # First, compute the features on the training data to know what to scale
+
+        # Compute features using existing components
         features = self.transform(data, is_fitting=True)
 
-        # Now, fit scalers for the columns that are configured to be scaled
-        if self.config.normalize_features and self.config.normalization_method == 'robust':
-            # For now, we'll scale all numeric features when normalization is enabled
-            # This could be made more configurable in the future
-            pass  # Robust scaling will be handled differently if needed
-        elif self.config.normalize_features:
-            # Use standard scaling for all numeric features when normalize_features is True
-            features_to_scale = features.select_dtypes(include=['number']).columns.tolist()
-            for col in features_to_scale:
-                if col in features.columns:
+        # Fit scalers for numeric features if normalization is enabled
+        if self.config.normalize_features and not features.empty:
+            numeric_features = features.select_dtypes(include=['number']).columns
+            for col in numeric_features:
+                if not features[col].isna().all():
                     scaler = StandardScaler()
-                    # Reshape is needed as StandardScaler expects 2D array
-                    self.scalers[col] = scaler.fit(features[[col]])
+                    self.scalers[col] = scaler.fit(features[[col]].dropna())
                     logger.info(f"Fitted scaler for feature: {col}")
-                else:
-                    logger.warning(f"Column '{col}' not found in features for scaling.")
-        
+
         self._is_fitted = True
         logger.info("FeatureEngineeringPipeline fitting complete.")
 
     def transform(self, data: Dict[str, pd.DataFrame], is_fitting: bool = False) -> pd.DataFrame:
         """
-        Apply feature engineering and scaling transformations.
+        Apply feature engineering using existing components.
 
         Args:
-            data: A dictionary of DataFrames, expecting keys like 'price_data' and optionally 'factor_data'.
-            is_fitting: If True, skips scaling as it's done post-transform during the fit phase.
+            data: Dictionary of DataFrames with 'price_data' and optionally 'factor_data'
+            is_fitting: If True, skips scaling during fit phase
 
         Returns:
-            A DataFrame with all computed features.
+            DataFrame with all computed features
         """
         if not data or 'price_data' not in data:
             raise ValueError("Input data dictionary must contain 'price_data'.")
 
         price_data = data['price_data']
+        logger.info(f"Processing features for {len(price_data)} symbols")
 
-        # Step 1: Compute technical features using TechnicalIndicatorCalculator
-        calculator = TechnicalIndicatorCalculator()
-        features = self._compute_all_features(price_data, calculator)
+        # Step 1: Compute technical features using existing TechnicalIndicatorCalculator
+        technical_features = self._compute_technical_features_with_cache(price_data)
 
-        # Step 2: Apply NaN handling strategies (only if we have features)
-        if not features.empty:
-            logger.info("Applying NaN handling strategies...")
-            features = self._handle_nan_values(features)
-        else:
-            logger.info("No technical features computed, skipping NaN handling")
-
-        # Step 3: Add cross-sectional features if enabled
+        # Step 2: Compute cross-sectional features using existing CrossSectionalFeatureCalculator
+        cross_sectional_features = pd.DataFrame()
         if self.cross_sectional_calculator is not None:
-            logger.info("Computing cross-sectional features...")
-            cross_sectional_features = self._compute_cross_sectional_features_for_panel(price_data)
-            if not cross_sectional_features.empty:
-                if features.empty:
-                    # If no technical features, use cross-sectional features directly
-                    features = cross_sectional_features
-                    logger.info(f"Using {len(cross_sectional_features.columns)} cross-sectional features only")
-                else:
-                    # Merge cross-sectional features with existing features
-                    features = self._merge_cross_sectional_features(features, cross_sectional_features)
-                    logger.info(f"Added {len(cross_sectional_features.columns)} cross-sectional features")
+            cross_sectional_features = self._compute_cross_sectional_features_with_cache(price_data)
+
+        # Step 3: Merge features using existing PanelDataTransformer
+        features = self._merge_features_using_transformer(
+            technical_features, cross_sectional_features
+        )
 
         # Step 4: Add factor data if available
         if 'factor_data' in data and data['factor_data'] is not None:
-            logger.info("Merging factor data with features...")
-            factor_data = data['factor_data']
-            features = self._merge_factor_data(features, factor_data)
+            features = self._merge_factor_data(features, data['factor_data'])
 
-        # Step 5: Apply scaling if the pipeline is already fitted
+        # Step 5: Handle NaN values using simplified approach
+        if not features.empty:
+            features = self._handle_nan_values(features)
+
+        # Step 6: Apply scaling if fitted and not in fitting mode
         if self._is_fitted and not is_fitting:
-            logger.debug("Applying learned scaling to features...")
-            for col, scaler in self.scalers.items():
-                if col in features.columns:
-                    # Transform returns a 2D array, so we flatten and assign
-                    features[col] = scaler.transform(features[[col]])
-                else:
-                    logger.warning(f"Scaled column '{col}' not found during transform.")
+            features = self._apply_scaling(features)
 
-        # Step 6: Add more feature steps here in the future (e.g., PCA, feature selection)
-
+        # Step 7: Return processed features
+        logger.info(f"Feature transformation complete: {features.shape}")
         return features
+
+    def _compute_technical_features_with_cache(self, price_data: Dict[str, pd.DataFrame]) -> pd.DataFrame:
+        """
+        Compute technical features using existing TechnicalIndicatorCalculator.
+
+        This method leverages the existing TechnicalIndicatorCalculator instead of
+        reimplementing technical indicator calculations.
+        """
+        logger.info("Computing technical features using TechnicalIndicatorCalculator...")
+        all_features = []
+
+        for symbol, data in price_data.items():
+            logger.debug(f"Processing technical features for symbol: {symbol}")
+
+            try:
+                symbol_features = pd.DataFrame(index=data.index)
+
+                # Validate input data using simplified validation
+                self._validate_input_data(data, symbol)
+
+                # Use existing TechnicalIndicatorCalculator for all technical indicators
+                if hasattr(self.config, 'include_technical') and self.config.include_technical:
+                    # Use existing _calculate_technical_for_group method
+                    technical = self.technical_calculator._calculate_technical_for_group(data)
+
+                    # Use existing _calculate_momentum_for_group method if configured
+                    if hasattr(self.config, 'momentum_periods') and self.config.momentum_periods:
+                        momentum_methods = getattr(self.config, 'momentum_methods', ['simple'])
+                        momentum = self.technical_calculator._calculate_momentum_for_group(
+                            data, self.config.momentum_periods, momentum_methods
+                        )
+                    else:
+                        momentum = pd.DataFrame(index=data.index)
+
+                    # Use existing _calculate_volatility_for_group method if configured
+                    if hasattr(self.config, 'volatility_windows') and self.config.volatility_windows:
+                        volatility_methods = getattr(self.config, 'volatility_methods', ['std'])
+                        volatility = self.technical_calculator._calculate_volatility_for_group(
+                            data, self.config.volatility_windows, volatility_methods
+                        )
+                    else:
+                        volatility = pd.DataFrame(index=data.index)
+
+                    # Combine all technical features for this symbol
+                    combined_technical = pd.concat([technical, momentum, volatility], axis=1)
+
+                    # Remove any all-NaN columns
+                    valid_cols = [col for col in combined_technical.columns
+                                if not combined_technical[col].isna().all()]
+                    combined_technical = combined_technical[valid_cols]
+
+                    if not combined_technical.empty:
+                        symbol_features = pd.concat([symbol_features, combined_technical], axis=1)
+                        logger.debug(f"Added {len(combined_technical.columns)} technical features for {symbol}")
+
+                # Create MultiIndex for this symbol's features
+                index_format = self._get_index_format_for_model()
+                level_0_name, level_1_name = index_format
+
+                # Convert date index to datetime
+                date_index = pd.to_datetime(symbol_features.index)
+
+                if index_format == ('symbol', 'date'):
+                    # Time series format: (symbol, date)
+                    symbol_multiindex = pd.MultiIndex.from_arrays([
+                        [symbol] * len(date_index), date_index
+                    ], names=[level_0_name, level_1_name])
+                else:
+                    # Panel data format: (date, symbol)
+                    symbol_multiindex = pd.MultiIndex.from_arrays([
+                        date_index, [symbol] * len(date_index)
+                    ], names=[level_0_name, level_1_name])
+
+                symbol_features.index = symbol_multiindex
+                all_features.append(symbol_features)
+
+                logger.debug(f"Completed technical features for {symbol}: {len(symbol_features.columns)} features")
+
+            except Exception as e:
+                logger.error(f"Failed to compute technical features for {symbol}: {e}")
+                continue
+
+        # Combine all features
+        if all_features:
+            combined_features = pd.concat(all_features, axis=0)
+            combined_features.sort_index(inplace=True)
+            logger.info(f"Technical features computation complete: {combined_features.shape}")
+            return combined_features
+        else:
+            logger.warning("No technical features computed from any symbols")
+            return pd.DataFrame()
+
+    def _compute_cross_sectional_features_with_cache(self, price_data: Dict[str, pd.DataFrame]) -> pd.DataFrame:
+        """
+        Compute cross-sectional features using existing CrossSectionalFeatureCalculator.
+
+        This method leverages the existing CrossSectionalFeatureCalculator instead of
+        reimplementing cross-sectional feature calculations.
+        """
+        if self.cross_sectional_calculator is None:
+            return pd.DataFrame()
+
+        logger.info("Computing cross-sectional features using CrossSectionalFeatureCalculator...")
+
+        try:
+            # Get all unique dates across all symbols
+            all_dates = set()
+            for symbol, data in price_data.items():
+                all_dates.update(data.index.tolist())
+            all_dates = sorted(list(all_dates))
+
+            # Determine which features to calculate from config
+            feature_names = None
+            if hasattr(self.config, 'cross_sectional_features'):
+                feature_names = self.config.cross_sectional_features
+
+            # Use existing CrossSectionalFeatureCalculator to compute panel features
+            panel_features = self.cross_sectional_calculator.calculate_panel_features(
+                price_data=price_data,
+                dates=all_dates,
+                feature_names=feature_names
+            )
+
+            # Use existing PanelDataTransformer to ensure consistent format
+            if not panel_features.empty:
+                try:
+                    index_format = self._get_index_format_for_model()
+                    if index_format == ('date', 'symbol'):
+                        # Already in correct format
+                        standardized_features = panel_features
+                    else:
+                        # Convert to time series format
+                        standardized_features, _ = PanelDataTransformer.to_time_series_format(
+                            panel_features
+                        )
+
+                    logger.info(f"Cross-sectional features computation complete: {standardized_features.shape}")
+                    return standardized_features
+
+                except Exception as e:
+                    logger.warning(f"Cross-sectional feature format standardization failed: {e}")
+                    return panel_features
+            else:
+                logger.warning("No cross-sectional features computed")
+                return pd.DataFrame()
+
+        except Exception as e:
+            logger.error(f"Failed to compute cross-sectional features: {e}")
+            return pd.DataFrame()
+
+    def _merge_features_using_transformer(self,
+                                        technical_features: pd.DataFrame,
+                                        cross_sectional_features: pd.DataFrame) -> pd.DataFrame:
+        """
+        Merge features using existing PanelDataTransformer for format standardization.
+
+        This method uses the existing PanelDataTransformer instead of manually
+        handling MultiIndex format conversions.
+        """
+        if technical_features.empty and cross_sectional_features.empty:
+            return pd.DataFrame()
+
+        if technical_features.empty:
+            features = cross_sectional_features
+        elif cross_sectional_features.empty:
+            features = technical_features
+        else:
+            # Merge features, handling different index formats
+            try:
+                # Use existing PanelDataTransformer for format standardization
+                index_format = self._get_index_format_for_model()
+
+                if index_format == ('date', 'symbol'):
+                    # Convert technical features to panel format if needed
+                    if not technical_features.empty:
+                        technical_panel, _ = PanelDataTransformer.to_panel_format(technical_features)
+                    else:
+                        technical_panel = technical_features
+
+                    # Cross-sectional features should already be in panel format
+                    # Ensure both have the same index structure before concatenation
+                    if not technical_panel.empty and not cross_sectional_features.empty:
+                        # Check if indices are compatible
+                        if isinstance(technical_panel.index, pd.MultiIndex) and isinstance(cross_sectional_features.index, pd.MultiIndex):
+                            # Use concat with join='outer' to handle any index mismatches
+                            features = pd.concat([technical_panel, cross_sectional_features], axis=1, join='outer')
+                        else:
+                            # Fallback: convert both to same format
+                            features = pd.concat([technical_panel, cross_sectional_features], axis=1, ignore_index=False)
+                    else:
+                        # One of them is empty, just return the non-empty one
+                        features = technical_panel if not technical_panel.empty else cross_sectional_features
+                else:
+                    # Convert cross-sectional features to time series format if needed
+                    if not cross_sectional_features.empty:
+                        cross_sectional_ts, _ = PanelDataTransformer.to_time_series_format(cross_sectional_features)
+                    else:
+                        cross_sectional_ts = cross_sectional_features
+
+                    # Technical features should already be in time series format
+                    # Ensure both have the same index structure before concatenation
+                    if not technical_features.empty and not cross_sectional_ts.empty:
+                        features = pd.concat([technical_features, cross_sectional_ts], axis=1, join='outer')
+                    else:
+                        # One of them is empty, just return the non-empty one
+                        features = technical_features if not technical_features.empty else cross_sectional_ts
+
+                # Remove duplicate columns if any
+                if features.columns.duplicated().any():
+                    features = features.loc[:, ~features.columns.duplicated()]
+
+                logger.debug(f"Features merged successfully: {features.shape}")
+                return features
+
+            except Exception as e:
+                logger.warning(f"Feature merging with PanelDataTransformer failed: {e}, using robust merge")
+                # Robust fallback: reset indices and merge
+                try:
+                    if not technical_features.empty:
+                        tech_reset = technical_features.reset_index()
+                    else:
+                        tech_reset = pd.DataFrame()
+
+                    if not cross_sectional_features.empty:
+                        cross_reset = cross_sectional_features.reset_index()
+                    else:
+                        cross_reset = pd.DataFrame()
+
+                    # Merge and recreate index
+                    merged = pd.concat([tech_reset, cross_reset], axis=1, ignore_index=False)
+
+                    # Recreate MultiIndex if needed
+                    if 'date' in merged.columns and 'symbol' in merged.columns:
+                        merged = merged.set_index(['date', 'symbol'])
+
+                    logger.debug(f"Robust merge completed: {merged.shape}")
+                    return merged
+
+                except Exception as e2:
+                    logger.error(f"Robust merge also failed: {e2}")
+                    # Final fallback: return non-empty features
+                    return technical_features if not technical_features.empty else cross_sectional_features
+
+        logger.debug(f"Single feature type returned: {features.shape}")
+        return features
+
+    def _merge_factor_data(self, features: pd.DataFrame, factor_data: pd.DataFrame) -> pd.DataFrame:
+        """
+        Merge factor data with features (simplified implementation).
+
+        This is a simplified version that focuses on the essential merging logic.
+        """
+        if factor_data is None or not isinstance(factor_data, pd.DataFrame):
+            logger.info("No factor data available or invalid format, skipping merge")
+            return features
+
+        if factor_data.empty:
+            logger.info("Factor data is empty, skipping merge")
+            return features
+
+        try:
+            # Simplified factor data merging
+            # This is a basic implementation - could be enhanced with more sophisticated alignment
+            logger.info(f"Merging factor data with shape {factor_data.shape}")
+
+            # Filter out non-numeric columns (metadata like DataSource, Provider, etc.)
+            # Only keep numeric factor data for feature engineering
+            numeric_factor_data = factor_data.select_dtypes(include=[np.number])
+            non_numeric_cols = set(factor_data.columns) - set(numeric_factor_data.columns)
+            if non_numeric_cols:
+                logger.info(f"Filtering out non-numeric factor columns: {non_numeric_cols}")
+                logger.debug(f"Keeping numeric columns: {list(numeric_factor_data.columns)}")
+            factor_data = numeric_factor_data
+
+            # Ensure factor data index is datetime
+            factor_data.index = pd.to_datetime(factor_data.index)
+
+            # Get date range from features
+            if isinstance(features.index, pd.MultiIndex):
+                feature_dates = features.index.get_level_values('date').unique()
+            else:
+                feature_dates = features.index.unique()
+
+            # Resample factor data to match feature dates
+            factor_data_resampled = factor_data.reindex(feature_dates, method='ffill')
+
+            # For each symbol, add factor data
+            if isinstance(features.index, pd.MultiIndex):
+                symbols = features.index.get_level_values('symbol').unique()
+                all_features = []
+
+                for symbol in symbols:
+                    symbol_features = features.xs(symbol, level='symbol')
+
+                    # Add factor columns
+                    for factor_col in factor_data_resampled.columns:
+                        symbol_features[factor_col] = factor_data_resampled[factor_col].values
+
+                    # Recreate MultiIndex
+                    symbol_multiindex = pd.MultiIndex.from_product(
+                        [[symbol], symbol_features.index], names=['symbol', 'date']
+                    )
+                    symbol_features.index = symbol_multiindex
+                    all_features.append(symbol_features)
+
+                merged_features = pd.concat(all_features, axis=0)
+            else:
+                # Simple concatenation for non-MultiIndex data
+                merged_features = features.copy()
+                for factor_col in factor_data_resampled.columns:
+                    merged_features[factor_col] = factor_data_resampled[factor_col].values
+
+            logger.info(f"Factor data merge complete: {merged_features.shape}")
+            return merged_features
+
+        except Exception as e:
+            logger.error(f"Failed to merge factor data: {e}")
+            return features
 
     def _handle_nan_values(self, features: pd.DataFrame) -> pd.DataFrame:
         """
-        Apply multi-level NaN handling strategies based on feature analysis.
+        Simplified NaN handling using existing validation patterns.
 
-        This method implements the optimal strategies identified by the debugger:
-        - Forward fill for time-series features
-        - Interpolation for gap filling
-        - Median fill for remaining values
-        - Drop features with >80% NaN values
-
-        Args:
-            features: DataFrame with computed features that may contain NaN values
-
-        Returns:
-            DataFrame with NaN values handled appropriately
+        This is a simplified version that uses the most robust NaN handling strategies.
         """
         if features.empty:
             return features
 
-        logger.info(f"Starting NaN handling on {features.shape[0]} rows, {features.shape[1]} columns")
+        logger.info(f"Handling NaN values in features with shape {features.shape}")
 
-        # Analyze NaN percentages for each column
-        nan_analysis = {}
-        for col in features.columns:
-            nan_count = features[col].isnull().sum()
-            # Ensure we have a scalar value (handle MultiIndex case)
-            if isinstance(nan_count, pd.Series):
-                nan_count = nan_count.iloc[0] if len(nan_count) > 0 else 0
+        # Drop features with >95% NaN values (too corrupted to be useful)
+        nan_percentages = features.isnull().sum() / len(features)
+        cols_to_drop = nan_percentages[nan_percentages > 0.95].index.tolist()
 
-            nan_pct = (nan_count / len(features)) * 100
-            nan_analysis[col] = {'count': nan_count, 'percentage': nan_pct}
-
-        # Identify columns to drop (>98% NaN) - Very permissive threshold for ML models that can handle missing data patterns
-        cols_to_drop = [col for col, info in nan_analysis.items() if info['percentage'] > 98]
         if cols_to_drop:
-            logger.warning(f"Dropping {len(cols_to_drop)} features with >98% NaN values: {cols_to_drop}")
+            logger.warning(f"Dropping {len(cols_to_drop)} features with >95% NaN values")
             features = features.drop(columns=cols_to_drop)
-            # Remove from analysis
-            for col in cols_to_drop:
-                del nan_analysis[col]
-        else:
-            logger.info("No features exceeded 98% NaN threshold - keeping all features for ML model to handle")
 
-        # Log initial NaN state with detailed breakdown
-        initial_total_nan = sum(info['count'] for info in nan_analysis.values())
-        logger.info(f"Initial NaN values: {initial_total_nan} across {len(features.columns)} features")
+        # Apply robust NaN handling strategy
+        # Forward fill, then backward fill, then interpolate, then median fill
+        features_clean = features.ffill().bfill().interpolate(method='linear')
 
-        # Log top 10 features with highest NaN percentages for debugging
-        sorted_features = sorted(nan_analysis.items(), key=lambda x: x[1]['percentage'], reverse=True)
-        high_nan_features = [f"{col} ({info['percentage']:.1f}%)" for col, info in sorted_features[:10]]
-        logger.info(f"Top 10 features by NaN percentage: {high_nan_features}")
+        # Final median fill for any remaining NaNs
+        median_values = features_clean.median()
+        features_clean = features_clean.fillna(median_values)
 
-        # Apply multi-level NaN handling strategy
-        # Step 1: Forward fill (time series appropriate)
-        logger.debug("Applying forward fill for time-series features...")
-        features_ffill = features.ffill()
+        # Handle infinite values
+        features_clean = features_clean.replace([float('inf'), float('-inf')], [1e10, -1e10])
 
-        # Step 2: Backward fill for leading NaNs
-        logger.debug("Applying backward fill for leading NaNs...")
-        features_bfill = features_ffill.bfill()
-
-        # Step 3: Linear interpolation for remaining gaps
-        logger.debug("Applying linear interpolation for remaining gaps...")
-        features_interp = features_bfill.interpolate(method='linear')
-
-        # Step 4: Median fill for any remaining NaNs (most robust)
-        logger.debug("Applying median fill for remaining NaNs...")
-        median_values = features_interp.median()
-        features_clean = features_interp.fillna(median_values)
-
-        # Verify no NaNs remain
-        remaining_nan = features_clean.isnull().sum().sum()
-        if remaining_nan > 0:
-            logger.warning(f"Still have {remaining_nan} NaN values after all strategies - applying zero fill as last resort")
-            features_clean = features_clean.fillna(0)
-
-        # Handle infinite values (XGBoost can't handle inf/-inf)
-        logger.info("Checking for infinite values...")
-        inf_count = (features_clean == float('inf')).sum().sum() + (features_clean == float('-inf')).sum().sum()
-        if inf_count > 0:
-            logger.warning(f"Found {inf_count} infinite values - clipping to reasonable range")
-            # Clip infinite values to reasonable bounds
-            features_clean = features_clean.replace([float('inf'), float('-inf')], [1e10, -1e10])
-
-        # Additional check for extreme values that might cause numerical issues
-        logger.info("Checking for extreme values...")
+        # Clip extreme values to prevent numerical issues
         max_val = features_clean.abs().max().max()
         if max_val > 1e9:
-            logger.warning(f"Found extreme values (max abs: {max_val}) - clipping to prevent numerical issues")
             features_clean = features_clean.clip(-1e9, 1e9)
+            logger.warning(f"Clipped extreme values to prevent numerical issues")
 
-        # Log final state
-        final_total_nan = features_clean.isnull().sum().sum()
-        nan_reduction = ((initial_total_nan - final_total_nan) / initial_total_nan * 100) if initial_total_nan > 0 else 100
+        # Log results
+        remaining_nan = features_clean.isnull().sum().sum()
+        if remaining_nan > 0:
+            logger.warning(f"Still have {remaining_nan} NaN values after cleaning, applying zero fill")
+            features_clean = features_clean.fillna(0)
 
-        logger.info(f"NaN handling complete:")
-        logger.info(f"  - Initial NaN: {initial_total_nan}")
-        logger.info(f"  - Final NaN: {final_total_nan}")
-        logger.info(f"  - NaN reduction: {nan_reduction:.1f}%")
-        logger.info(f"  - Features dropped: {len(cols_to_drop)}")
-        logger.info(f"  - Infinite values fixed: {inf_count}")
-        logger.info(f"  - Final shape: {features_clean.shape}")
-        logger.info(f"  - Max absolute value: {features_clean.abs().max().max():.2e}")
-
+        logger.info(f"NaN handling complete: final shape {features_clean.shape}")
         return features_clean
 
-    def save(self, file_path: Path):
-        """Saves the fitted pipeline (including scalers) to a file."""
-        if not self._is_fitted:
-            raise RuntimeError("Cannot save a pipeline that has not been fitted yet.")
-        logger.info(f"Saving feature pipeline to {file_path}")
-        joblib.dump(self, file_path)
-
-    @staticmethod
-    def load(file_path: Path) -> 'FeatureEngineeringPipeline':
-        """Loads a fitted pipeline from a file."""
-        logger.info(f"Loading feature pipeline from {file_path}")
-        if not file_path.exists():
-            raise FileNotFoundError(f"Feature pipeline file not found at {file_path}")
-        return joblib.load(file_path)
-
-    @classmethod
-    def from_config(cls, config: Dict[str, Any]) -> 'FeatureEngineeringPipeline':
-        """Creates a pipeline instance from a dictionary configuration."""
-        feature_config = FeatureConfig(**config)
-        return cls(feature_config)
-
-    @classmethod
-    def from_yaml(cls, file_path: Path) -> 'FeatureEngineeringPipeline':
-        """Creates a pipeline instance from a YAML configuration file."""
-        logger.info(f"Creating feature pipeline from config: {file_path}")
-        with open(file_path, 'r') as f:
-            config_dict = yaml.safe_load(f)
-        
-        # Assuming the feature config is under a 'feature_engineering' key
-        if 'feature_engineering' not in config_dict:
-            raise ValueError(f"Key 'feature_engineering' not found in {file_path}")
-            
-        return cls.from_config(config_dict['feature_engineering'])
-    
-    def get_max_lookback(self) -> int:
+    def _apply_scaling(self, features: pd.DataFrame) -> pd.DataFrame:
         """
-        Determines the maximum lookback period required by the feature configuration.
-
-        This is crucial for ensuring enough historical data is loaded to prevent
-        NaNs at the start of the training period.
-
-        Returns:
-            The maximum number of days required for feature calculation.
+        Apply learned scaling to features.
         """
-        max_lookback = 0
-        if self.config.momentum_periods:
-            max_lookback = max(max_lookback, max(self.config.momentum_periods))
-        
-        if self.config.volatility_windows:
-            max_lookback = max(max_lookback, max(self.config.volatility_windows))
-            
-        # Add lookbacks from other feature types as they are implemented
-        # e.g., technical indicators might have their own windows
-        
-        # A small buffer is often a good idea
-        return max_lookback + 5
-
-    def _compute_all_features(self, price_data: Dict[str, pd.DataFrame],
-                              calculator: TechnicalIndicatorCalculator) -> pd.DataFrame:
-        """
-        Compute all features from price data using optimized calculation order.
-
-        This method implements the optimized feature computation order identified
-        by the debugger to minimize NaN propagation and improve data quality.
-
-        Args:
-            price_data: Dictionary mapping symbols to OHLCV DataFrames
-            calculator: Technical indicator calculator instance
-
-        Returns:
-            DataFrame with all computed features
-        """
-        logger.info("Starting optimized feature computation with data quality checkpoints...")
-        all_features = []
-
-        for symbol, data in price_data.items():
-            logger.debug(f"Processing features for symbol: {symbol}")
-            symbol_features = pd.DataFrame(index=data.index)
-
-            # === Data Quality Checkpoint 1: Input Data Validation ===
-            self._validate_input_data(data, symbol)
-
-            # === Optimized Feature Computation Order ===
-            # Order: Basic indicators -> Momentum -> Volatility -> Advanced technical -> Derived features
-            # This minimizes NaN propagation by computing stable features first
-
-            # Step 1: Basic technical indicators (lowest NaN generation) - with caching
-            if hasattr(self.config, 'include_technical') and self.config.include_technical:
-                logger.debug(f"Step 1: Computing basic technical indicators for {symbol}")
-
-                # Try to compute technical indicators with caching for individual features
-                technical_cached = pd.DataFrame(index=data.index)
-                cached_features_count = 0
-
-                # 技术指标列表 - 分为可缓存和不可缓存的
-                # 注意：这些名称必须与technical_features.py中实际生成的特征名称完全匹配
-                cacheable_features = ['sma_200', 'sma_50', 'ema_12', 'ema_26', 'bb_upper', 'bb_middle', 'bb_lower', 'macd_line', 'macd_signal', 'macd_histogram', 'adx', 'cci']
-                non_cacheable_features = []  # 目前所有技术指标都支持缓存
-
-                # Step 1: 尝试从缓存获取可缓存的特征
-                logger.debug(f"Attempting to fetch {len(cacheable_features)} cacheable features for {symbol}")
-                for feature_name in cacheable_features:
-                    cached_feature = self._get_single_feature_cached(symbol, feature_name, data.index[0], data.index[-1])
-                    if cached_feature is not None and not cached_feature.empty:
-                        try:
-                            # 将缓存数据对齐到当前索引
-                            aligned_data = cached_feature.reindex(data.index, method='ffill').reindex(data.index, method='bfill')
-                            if not aligned_data.empty and not aligned_data['value'].isna().all():
-                                technical_cached[feature_name] = aligned_data['value']
-                                cached_features_count += 1
-                                logger.debug(f"✓ Cache HIT: {feature_name} for {symbol} ({len(aligned_data)} rows)")
-                            else:
-                                logger.debug(f"✗ Cache INVALID: {feature_name} for {symbol} (no valid data after alignment)")
-                        except Exception as e:
-                            logger.debug(f"✗ Cache ALIGN FAILED: {feature_name} for {symbol}: {e}")
-                    else:
-                        logger.debug(f"✗ Cache MISS: {feature_name} for {symbol}")
-
-                # Step 2: 计算缺失的特征（包括不可缓存的特征）
-                missing_features = [f for f in cacheable_features + non_cacheable_features if f not in technical_cached.columns]
-                logger.debug(f"Computing {len(missing_features)} missing features for {symbol}: {missing_features}")
-
-                if missing_features:
+        if not features.empty and self.scalers:
+            logger.debug("Applying feature scaling...")
+            for col, scaler in self.scalers.items():
+                if col in features.columns:
                     try:
-                        # 计算所有技术指标
-                        technical = calculator._calculate_technical_for_group(data)
-
-                        # 添加缺失的特征
-                        for feature_name in missing_features:
-                            if feature_name in technical.columns:
-                                technical_cached[feature_name] = technical[feature_name]
-                                logger.debug(f"✓ Computed: {feature_name} for {symbol}")
-
-                                # 如果是可缓存特征，缓存它
-                                if feature_name in self.SLOW_FEATURES:
-                                    try:
-                                        self._cache_single_feature(symbol, feature_name, technical[feature_name])
-                                        logger.debug(f"✓ Cached: {feature_name} for {symbol}")
-                                    except Exception as e:
-                                        logger.debug(f"✗ Cache save failed: {feature_name} for {symbol}: {e}")
-                            else:
-                                logger.warning(f"Feature {feature_name} not found in computed technical indicators")
-
-                        # 添加其他计算出的特征（如果有的话）
-                        additional_features = [f for f in technical.columns if f not in cacheable_features + non_cacheable_features]
-                        for feature_name in additional_features:
-                            technical_cached[feature_name] = technical[feature_name]
-                            if feature_name in self.SLOW_FEATURES:
-                                try:
-                                    self._cache_single_feature(symbol, feature_name, technical[feature_name])
-                                    logger.debug(f"✓ Cached additional: {feature_name} for {symbol}")
-                                except Exception as e:
-                                    logger.debug(f"✗ Cache save failed (additional): {feature_name} for {symbol}: {e}")
-
+                        features[col] = scaler.transform(features[[col]])
                     except Exception as e:
-                        logger.error(f"Failed to compute technical indicators for {symbol}: {e}")
-                        # 如果计算失败，至少保留缓存的特征
+                        logger.warning(f"Failed to apply scaling to {col}: {e}")
 
-                # Step 3: 验证并清理最终结果
-                if technical_cached.empty:
-                    logger.warning(f"No technical features available for {symbol}")
-                else:
-                    # 清理全为 NaN 的列
-                    valid_cols = []
-                    for col in technical_cached.columns:
-                        if not technical_cached[col].isna().all():
-                            valid_cols.append(col)
-                        else:
-                            logger.debug(f"Removing all-NaN column: {col} for {symbol}")
-
-                    technical_cached = technical_cached[valid_cols]
-                    logger.info(f"Technical features for {symbol}: {cached_features_count} cached, {len(technical_cached.columns)} total")
-
-                # 添加到主特征集合
-                symbol_features = pd.concat([symbol_features, technical_cached], axis=1)
-
-                # Quality checkpoint after basic indicators
-                self._quality_checkpoint(symbol_features, f"{symbol}_basic_technical", step=1)
-
-            # Step 2: Volatility features (moderate NaN generation) - with caching
-            if hasattr(self.config, 'volatility_windows') and self.config.volatility_windows:
-                logger.debug(f"Step 2: Computing volatility features for {symbol}")
-                volatility_cached = pd.DataFrame(index=data.index)
-                cached_volatility_count = 0
-
-                volatility_methods = getattr(self.config, 'volatility_methods', ['std'])
-
-                # Step 1: 尝试从缓存获取波动率特征
-                for window in self.config.volatility_windows:
-                    feature_name = f'volatility_{window}d'
-                    if feature_name in self.SLOW_FEATURES:  # 只缓存定义的慢变特征
-                        cached_feature = self._get_single_feature_cached(symbol, feature_name, data.index[0], data.index[-1])
-                        if cached_feature is not None and not cached_feature.empty:
-                            try:
-                                # 将缓存数据对齐到当前索引
-                                aligned_data = cached_feature.reindex(data.index, method='ffill').reindex(data.index, method='bfill')
-                                if not aligned_data.empty and not aligned_data['value'].isna().all():
-                                    volatility_cached[feature_name] = aligned_data['value']
-                                    cached_volatility_count += 1
-                                    logger.debug(f"✓ Cache HIT: {feature_name} for {symbol}")
-                                else:
-                                    logger.debug(f"✗ Cache INVALID: {feature_name} for {symbol}")
-                            except Exception as e:
-                                logger.debug(f"✗ Cache ALIGN FAILED: {feature_name} for {symbol}: {e}")
-                        else:
-                            logger.debug(f"✗ Cache MISS: {feature_name} for {symbol}")
-                    else:
-                        logger.debug(f"Non-cachable volatility feature: {feature_name} for {symbol}")
-
-                # Step 2: 计算缺失的波动率特征
-                missing_windows = [w for w in self.config.volatility_windows
-                                 if f'volatility_{w}d' not in volatility_cached.columns]
-
-                if missing_windows:
-                    logger.debug(f"Computing {len(missing_windows)} missing volatility features for {symbol}: {missing_windows}")
-                    try:
-                        volatility = calculator._calculate_volatility_for_group(data, missing_windows, volatility_methods)
-
-                        # 添加计算出的波动率特征
-                        for window in missing_windows:
-                            feature_name = f'volatility_{window}d'
-                            if feature_name in volatility.columns:
-                                volatility_cached[feature_name] = volatility[feature_name]
-                                logger.debug(f"✓ Computed: {feature_name} for {symbol}")
-
-                                # 如果是可缓存特征，缓存它
-                                if feature_name in self.SLOW_FEATURES:
-                                    try:
-                                        self._cache_single_feature(symbol, feature_name, volatility[feature_name])
-                                        logger.debug(f"✓ Cached: {feature_name} for {symbol}")
-                                    except Exception as e:
-                                        logger.debug(f"✗ Cache save failed: {feature_name} for {symbol}: {e}")
-
-                        # 添加其他波动率特征
-                        additional_vol_features = [f for f in volatility.columns if f not in [f'volatility_{w}d' for w in self.config.volatility_windows]]
-                        for feature_name in additional_vol_features:
-                            volatility_cached[feature_name] = volatility[feature_name]
-                            if feature_name in self.SLOW_FEATURES:
-                                try:
-                                    self._cache_single_feature(symbol, feature_name, volatility[feature_name])
-                                    logger.debug(f"✓ Cached additional volatility: {feature_name} for {symbol}")
-                                except Exception as e:
-                                    logger.debug(f"✗ Cache save failed (additional): {feature_name} for {symbol}: {e}")
-
-                    except Exception as e:
-                        logger.error(f"Failed to compute volatility indicators for {symbol}: {e}")
-
-                # Step 3: 验证并清理结果
-                if not volatility_cached.empty:
-                    # 清理全为 NaN 的列
-                    valid_vol_cols = []
-                    for col in volatility_cached.columns:
-                        if not volatility_cached[col].isna().all():
-                            valid_vol_cols.append(col)
-                        else:
-                            logger.debug(f"Removing all-NaN volatility column: {col} for {symbol}")
-
-                    volatility_cached = volatility_cached[valid_vol_cols]
-                    logger.info(f"Volatility features for {symbol}: {cached_volatility_count} cached, {len(volatility_cached.columns)} total")
-
-                # 添加到主特征集合
-                symbol_features = pd.concat([symbol_features, volatility_cached], axis=1)
-
-                # Quality checkpoint after volatility features
-                self._quality_checkpoint(symbol_features, f"{symbol}_volatility", step=2)
-
-            # Step 3: Momentum features (highest NaN generation, but computed after volatility)
-            if hasattr(self.config, 'momentum_periods'):
-                logger.debug(f"Step 3: Computing momentum features for {symbol}")
-                momentum_methods = getattr(self.config, 'momentum_methods', ['simple'])
-                momentum = calculator._calculate_momentum_for_group(data, self.config.momentum_periods, momentum_methods)
-                symbol_features = pd.concat([symbol_features, momentum], axis=1)
-                # Quality checkpoint after momentum features
-                self._quality_checkpoint(symbol_features, f"{symbol}_momentum", step=3)
-
-            # Step 4: Cross-feature calculations (use all previous features)
-            if not symbol_features.empty:
-                logger.debug(f"Step 4: Computing cross-features for {symbol}")
-                cross_features = self._compute_cross_features(symbol_features, data)
-                if not cross_features.empty:
-                    symbol_features = pd.concat([symbol_features, cross_features], axis=1)
-                    # Final quality checkpoint
-                    self._quality_checkpoint(symbol_features, f"{symbol}_final", step=4)
-
-            # Create MultiIndex for this symbol's features (universal feature names)
-            symbol_multiindex = pd.MultiIndex.from_product(
-                [[symbol], symbol_features.index],
-                names=['symbol', 'date']
-            )
-
-            # Debug: Check for potential index issues before setting MultiIndex
-            logger.debug(f"DEBUG: Creating MultiIndex for {symbol}")
-            logger.debug(f"DEBUG: symbol_features.index type: {type(symbol_features.index)}")
-            logger.debug(f"DEBUG: symbol_features.index length: {len(symbol_features.index)}")
-            logger.debug(f"DEBUG: symbol_features.index unique: {symbol_features.index.is_unique}")
-
-            symbol_features.index = symbol_multiindex
-
-            # Debug: Verify MultiIndex is unique
-            logger.debug(f"DEBUG: MultiIndex for {symbol} unique: {symbol_multiindex.is_unique}")
-            logger.debug(f"DEBUG: MultiIndex for {symbol} length: {len(symbol_multiindex)}")
-
-            all_features.append(symbol_features)
-
-            logger.info(f"Completed feature computation for {symbol}: {len(symbol_features.columns)} features")
-
-        # Combine all features with proper MultiIndex structure
-        if all_features:
-            # Debug: Check for index issues before concatenation
-            logger.debug(f"DEBUG: About to concatenate {len(all_features)} feature DataFrames")
-
-            for i, df in enumerate(all_features):
-                logger.debug(f"DEBUG: DataFrame {i}: shape {df.shape}, index type {type(df.index)}")
-                logger.debug(f"DEBUG: DataFrame {i}: index unique: {df.index.is_unique}")
-                if len(df.index) > 0:
-                    logger.debug(f"DEBUG: DataFrame {i}: sample index: {df.index[:3].tolist()}")
-
-                # Check for any potential duplicates
-                if hasattr(df.index, 'duplicated'):
-                    dup_count = df.index.duplicated().sum()
-                    if dup_count > 0:
-                        logger.error(f"ERROR: DataFrame {i} has {dup_count} duplicate indices!")
-
-            # Check combined index uniqueness before concat
-            all_indices = []
-            for i, df in enumerate(all_features):
-                all_indices.extend(df.index.tolist())
-
-            combined_index = pd.MultiIndex.from_tuples(all_indices)
-            logger.debug(f"DEBUG: Combined index unique: {combined_index.is_unique}")
-            logger.debug(f"DEBUG: Combined index length: {len(combined_index)}")
-
-            if not combined_index.is_unique:
-                duplicates = combined_index.duplicated()
-                dup_indices = combined_index[duplicates]
-                logger.error(f"ERROR: Found {duplicates.sum()} duplicate indices before concat!")
-                logger.error(f"ERROR: Duplicate indices sample: {dup_indices[:5].tolist()}")
-
-                # Find source of duplicates
-                from collections import Counter
-                index_counter = Counter(all_indices)
-                problematic_indices = [(idx, count) for idx, count in index_counter.items() if count > 1]
-                logger.error(f"ERROR: Problematic indices: {problematic_indices[:5]}")
-
-                # Fix duplicates by dropping duplicates before concat
-                logger.info("Fixing duplicate indices by dropping duplicates within each DataFrame...")
-                cleaned_features = []
-                for i, df in enumerate(all_features):
-                    original_len = len(df)
-                    df_cleaned = df[~df.index.duplicated(keep='first')]
-                    cleaned_len = len(df_cleaned)
-                    if original_len != cleaned_len:
-                        logger.info(f"DataFrame {i}: Removed {original_len - cleaned_len} duplicate indices")
-                    cleaned_features.append(df_cleaned)
-
-                logger.info("Attempting concat after cleaning duplicates...")
-                combined_features = pd.concat(cleaned_features, axis=0)
-                logger.info("Successfully concatenated after cleaning duplicates")
-            else:
-                combined_features = pd.concat(all_features, axis=0)
-            combined_features.sort_index(inplace=True)
-
-            # Remove duplicate columns (can happen during concatenation)
-            if combined_features.columns.duplicated().any():
-                logger.warning(f"Found {combined_features.columns.duplicated().sum()} duplicate columns, removing duplicates")
-                combined_features = combined_features.loc[:, ~combined_features.columns.duplicated()]
-
-            # Final global quality checkpoint
-            self._final_quality_checkpoint(combined_features)
-
-            return combined_features
-        else:
-            logger.warning("No features computed from any symbols")
-            return pd.DataFrame()
-
-    def _merge_factor_data(self, features: pd.DataFrame, factor_data: pd.DataFrame) -> pd.DataFrame:
-        """
-        Merge factor data with features.
-
-        Args:
-            features: DataFrame with technical features (MultiIndex: symbol, date)
-            factor_data: DataFrame with factor data (index: dates, columns: factors)
-
-        Returns:
-            DataFrame with features and factor data merged
-        """
-        # Check if factor_data is valid (not None, not empty dict, has proper structure)
-        if factor_data is None or not isinstance(factor_data, pd.DataFrame):
-            logger.info("No factor data available or factor_data is not a DataFrame, skipping merge")
-            return features
-
-        if factor_data.empty:
-            logger.info("Factor data is empty DataFrame, skipping merge")
-            return features
-
-        logger.info(f"Merging factor data with shape {factor_data.shape} into features with shape {features.shape}")
-
-        # Factor data has a simple date index, we need to broadcast it to all symbols
-        factor_columns = factor_data.columns.tolist()
-        logger.info(f"Available factor columns: {factor_columns}")
-
-        # Resample factor data to daily frequency using forward fill
-        # This ensures we maintain daily granularity for features
-        features_date_range = features.index.get_level_values('date')
-        min_date, max_date = features_date_range.min(), features_date_range.max()
-
-        # Create daily date range
-        daily_range = pd.date_range(start=min_date, end=max_date, freq='D')
-
-        # Filter to trading days (weekdays) - approximate by excluding weekends
-        trading_days = daily_range[daily_range.dayofweek < 5]
-
-        # Reindex factor data to trading days with forward fill
-        # First, ensure factor data index is datetime
-        factor_data.index = pd.to_datetime(factor_data.index)
-
-        # Reindex to trading days and forward fill
-        daily_factor_data = factor_data.reindex(trading_days, method='ffill')
-
-        # Drop any remaining NaNs at the beginning
-        daily_factor_data = daily_factor_data.dropna()
-
-        logger.info(f"Resampled factor data from {factor_data.shape[0]} monthly rows to {daily_factor_data.shape[0]} daily rows")
-        logger.info(f"Factor data date range after resampling: {daily_factor_data.index.min().date()} to {daily_factor_data.index.max().date()}")
-
-        # For each symbol in features, add the factor data
-        symbols = features.index.get_level_values(0).unique()
-        all_features_with_factors = []
-
-        for symbol in symbols:
-            # Get features for this symbol
-            symbol_features = features.loc[symbol]
-
-            # Align factor data with symbol's dates
-            symbol_dates = symbol_features.index
-
-            # Find common dates between symbol dates and daily factor data
-            common_dates = symbol_dates.intersection(daily_factor_data.index)
-
-            if len(common_dates) > 0:
-                # Get factor data for common dates
-                aligned_factor_data = daily_factor_data.loc[common_dates]
-
-                # Reindex symbol_features to only include common dates
-                aligned_features = symbol_features.loc[common_dates]
-
-                # Add factor columns to the symbol's features
-                for factor_col in factor_columns:
-                    aligned_features[factor_col] = aligned_factor_data[factor_col].values
-
-                # Create MultiIndex for this symbol
-                symbol_multiindex = pd.MultiIndex.from_product(
-                    [[symbol], aligned_features.index],
-                    names=['symbol', 'date']
-                )
-                aligned_features.index = symbol_multiindex
-                all_features_with_factors.append(aligned_features)
-            else:
-                logger.warning(f"No common dates found for symbol {symbol}")
-                # Keep original features without factor data
-                symbol_multiindex = pd.MultiIndex.from_product(
-                    [[symbol], symbol_features.index],
-                    names=['symbol', 'date']
-                )
-                symbol_features.index = symbol_multiindex
-                all_features_with_factors.append(symbol_features)
-
-        # Combine all features with factor data
-        if all_features_with_factors:
-            combined_features = pd.concat(all_features_with_factors, axis=0)
-            logger.info(f"After merging factor data: shape {combined_features.shape}")
-            logger.info(f"Factor columns added: {factor_columns}")
-            return combined_features
-        else:
-            logger.warning("No features to merge with factor data")
-            return features
+        return features
 
     def _validate_input_data(self, data: pd.DataFrame, symbol: str) -> None:
         """
-        Validate input price data before feature computation.
-
-        Args:
-            data: OHLCV DataFrame for a symbol
-            symbol: Symbol name for logging
+        Simplified input data validation.
         """
         required_columns = ['Open', 'High', 'Low', 'Close']
         missing_columns = [col for col in required_columns if col not in data.columns]
@@ -783,444 +578,64 @@ class FeatureEngineeringPipeline:
         if missing_columns:
             raise ValueError(f"Missing required columns for {symbol}: {missing_columns}")
 
-        # Check for data continuity
         if len(data) < 10:
             logger.warning(f"Very short data series for {symbol}: only {len(data)} rows")
 
-        # Check for excessive NaN values in input
-        total_values = len(data) * len(required_columns)
-        nan_values = data[required_columns].isnull().sum().sum()
-        nan_percentage = (nan_values / total_values) * 100
+    def save(self, file_path: Path):
+        """Save the fitted pipeline to a file."""
+        if not self._is_fitted:
+            raise RuntimeError("Cannot save a pipeline that has not been fitted yet.")
+        logger.info(f"Saving feature pipeline to {file_path}")
+        joblib.dump(self, file_path)
 
-        if nan_percentage > 20:
-            logger.warning(f"High NaN percentage in input data for {symbol}: {nan_percentage:.1f}%")
-        elif nan_percentage > 5:
-            logger.info(f"Moderate NaN percentage in input data for {symbol}: {nan_percentage:.1f}%")
+    @staticmethod
+    def load(file_path: Path) -> 'FeatureEngineeringPipeline':
+        """Load a fitted pipeline from a file."""
+        logger.info(f"Loading feature pipeline from {file_path}")
+        if not file_path.exists():
+            raise FileNotFoundError(f"Feature pipeline file not found at {file_path}")
+        return joblib.load(file_path)
 
-        logger.debug(f"Input data validation for {symbol}: {len(data)} rows, {nan_percentage:.1f}% NaN")
+    @classmethod
+    def from_config(cls, config: Dict[str, Any], model_type: Optional[str] = None) -> 'FeatureEngineeringPipeline':
+        """Create pipeline from dictionary configuration."""
+        feature_config = FeatureConfig(**config)
+        return cls(feature_config, model_type=model_type)
 
-    def _quality_checkpoint(self, features: pd.DataFrame, context: str, step: int) -> None:
-        """
-        Quality checkpoint to monitor feature quality at each computation step.
+    @classmethod
+    def from_yaml(cls, file_path: Path, model_type: Optional[str] = None) -> 'FeatureEngineeringPipeline':
+        """Create pipeline from YAML configuration file."""
+        logger.info(f"Creating feature pipeline from config: {file_path}")
+        with open(file_path, 'r') as f:
+            config_dict = yaml.safe_load(f)
 
-        Args:
-            features: DataFrame with computed features
-            context: Context name for logging
-            step: Step number in computation process
-        """
-        if features.empty:
-            logger.warning(f"Quality checkpoint {step} - {context}: No features computed")
-            return
+        if 'feature_engineering' not in config_dict:
+            raise ValueError(f"Key 'feature_engineering' not found in {file_path}")
 
-        total_values = len(features) * len(features.columns)
-        nan_values = features.isnull().sum().sum()
-        nan_percentage = (nan_values / total_values) * 100
+        return cls.from_config(config_dict['feature_engineering'], model_type=model_type)
 
-        # Find features with high NaN percentages
-        problematic_features = []
-        for col in features.columns:
-            col_nan_count = features[col].isnull().sum()
-            # Ensure we have a scalar value (handle MultiIndex case)
-            if isinstance(col_nan_count, pd.Series):
-                col_nan_count = col_nan_count.iloc[0] if len(col_nan_count) > 0 else 0
+    def get_max_lookback(self) -> int:
+        """Determine maximum lookback period required by the configuration."""
+        max_lookback = 0
 
-            col_nan_pct = (col_nan_count / len(features)) * 100
-            if col_nan_pct > 50:
-                problematic_features.append((col, col_nan_pct))
+        if hasattr(self.config, 'momentum_periods') and self.config.momentum_periods:
+            max_lookback = max(max_lookback, max(self.config.momentum_periods))
 
-        # Log quality metrics
-        if nan_percentage > 30:
-            logger.warning(f"Quality checkpoint {step} - {context}: High NaN percentage {nan_percentage:.1f}%")
-        elif nan_percentage > 15:
-            logger.info(f"Quality checkpoint {step} - {context}: Moderate NaN percentage {nan_percentage:.1f}%")
-        else:
-            logger.debug(f"Quality checkpoint {step} - {context}: Low NaN percentage {nan_percentage:.1f}%")
+        if hasattr(self.config, 'volatility_windows') and self.config.volatility_windows:
+            max_lookback = max(max_lookback, max(self.config.volatility_windows))
 
-        # Log problematic features
-        if problematic_features:
-            logger.warning(f"Quality checkpoint {step} - {context}: {len(problematic_features)} features with >50% NaN:")
-            for feature, pct in problematic_features[:5]:  # Log top 5
-                logger.warning(f"  - {feature}: {pct:.1f}% NaN")
+        # Add lookback from technical indicators (SMA 200 is typically the longest)
+        max_lookback = max(max_lookback, 200)
 
-        # Additional quality metrics
-        finite_values = np.isfinite(features.to_numpy()).sum()
-        finite_percentage = (finite_values / total_values) * 100
-        logger.debug(f"Quality checkpoint {step} - {context}: {finite_percentage:.1f}% finite values")
+        # Add cross-sectional lookback if enabled
+        if self.cross_sectional_calculator:
+            cross_sectional_lookback = max(self.cross_sectional_calculator.lookback_periods.values())
+            max_lookback = max(max_lookback, cross_sectional_lookback)
 
-    def _compute_cross_features(self, features: pd.DataFrame, price_data: pd.DataFrame) -> pd.DataFrame:
-        """
-        Compute cross-features that combine multiple basic features.
-
-        These features often provide additional predictive power by capturing
-        interactions between different technical indicators.
-
-        Args:
-            features: DataFrame with basic technical features
-            price_data: Original OHLCV data
-
-        Returns:
-            DataFrame with cross-features
-        """
-        cross_features = pd.DataFrame(index=features.index)
-
-        try:
-            # Price-to-moving average ratios (if SMAs are available)
-            sma_columns = [col for col in features.columns if 'sma_' in col and '_200' not in col]
-            if sma_columns and 'Close' in price_data.columns:
-                for sma_col in sma_columns[:3]:  # Limit to first 3 to avoid explosion
-                    if len(sma_col.split('_')) >= 2:
-                        period = sma_col.split('_')[1]
-                        ratio_col = f'price_sma_ratio_{period}'
-                        cross_features[ratio_col] = price_data['Close'] / features[sma_col]
-
-            # Momentum-volatility interaction (if both are available)
-            momentum_cols = [col for col in features.columns if 'momentum_' in col and 'rank' not in col]
-            vol_cols = [col for col in features.columns if 'volatility_' in col and 'rank' not in col]
-
-            if momentum_cols and vol_cols:
-                # Use shortest period momentum and volatility
-                mom_col = min(momentum_cols, key=lambda x: int(x.split('_')[1]) if x.split('_')[1].isdigit() else 999)
-                vol_col = min(vol_cols, key=lambda x: int(x.split('_')[1]) if x.split('_')[1].isdigit() else 999)
-
-                cross_features['momentum_vol_ratio'] = features[mom_col] / (features[vol_col] + 1e-8)
-                cross_features['momentum_vol_interaction'] = features[mom_col] * features[vol_col]
-
-            # RSI divergence (if RSI and momentum are available)
-            rsi_cols = [col for col in features.columns if 'rsi_' in col]
-            if rsi_cols and momentum_cols:
-                rsi_col = rsi_cols[0]
-                mom_col = momentum_cols[0]  # Use first momentum column
-
-                # Simple divergence: high RSI with negative momentum or vice versa
-                rsi_normalized = (features[rsi_col] - 50) / 50  # Normalize to [-1, 1]
-                momentum_normalized = np.sign(features[mom_col])  # Just use direction
-
-                cross_features['rsi_momentum_divergence'] = rsi_normalized * momentum_normalized
-
-            # Bollinger Band mean reversion strength (if available)
-            bb_cols = [col for col in features.columns if 'bb_position' in col]
-            if bb_cols:
-                bb_pos = features[bb_cols[0]]
-                # Distance from neutral position (0.5)
-                cross_features['bb_mean_reversion_strength'] = abs(bb_pos - 0.5) * 2
-
-            # Volume-price trend (if volume and price features are available)
-            if 'Volume' in price_data.columns and len(features.columns) > 0:
-                price_change = price_data['Close'].pct_change()
-                volume_ratio = price_data['Volume'] / price_data['Volume'].rolling(20).mean()
-                cross_features['volume_price_trend'] = price_change * volume_ratio
-
-            logger.debug(f"Computed {len(cross_features.columns)} cross-features")
-
-        except Exception as e:
-            logger.warning(f"Error computing cross-features: {e}")
-            return pd.DataFrame(index=features.index)
-
-        return cross_features
-
-    def _final_quality_checkpoint(self, combined_features: pd.DataFrame) -> None:
-        """
-        Final quality checkpoint on the combined feature set.
-
-        Args:
-            combined_features: DataFrame with all features for all symbols
-        """
-        if combined_features.empty:
-            logger.error("Final quality checkpoint: No features computed")
-            return
-
-        # Global quality metrics
-        total_values = len(combined_features) * len(combined_features.columns)
-        nan_values = combined_features.isnull().sum().sum()
-        nan_percentage = (nan_values / total_values) * 100
-
-        finite_values = np.isfinite(combined_features.to_numpy()).sum()
-        finite_percentage = (finite_values / total_values) * 100
-
-        # Symbol-wise quality analysis
-        symbols = combined_features.index.get_level_values('symbol').unique()
-        symbol_quality = {}
-
-        for symbol in symbols:
-            symbol_data = combined_features.loc[symbol]
-            symbol_nan_pct = (symbol_data.isnull().sum().sum() / (len(symbol_data) * len(symbol_data.columns))) * 100
-            symbol_quality[symbol] = symbol_nan_pct
-
-        # Log comprehensive quality report
-        logger.info("=== FINAL QUALITY CHECKPOINT ===")
-        logger.info(f"Total features: {len(combined_features.columns)}")
-        logger.info(f"Total data points: {len(combined_features)}")
-        logger.info(f"Overall NaN percentage: {nan_percentage:.2f}%")
-        logger.info(f"Overall finite percentage: {finite_percentage:.2f}%")
-
-        # Symbol quality summary
-        avg_symbol_quality = np.mean(list(symbol_quality.values()))
-        logger.info(f"Average symbol quality: {avg_symbol_quality:.2f}% NaN")
-
-        # Problematic symbols
-        problematic_symbols = [(sym, pct) for sym, pct in symbol_quality.items() if pct > 25]
-        if problematic_symbols:
-            logger.warning(f"Found {len(problematic_symbols)} symbols with >25% NaN:")
-            for symbol, pct in problematic_symbols[:5]:  # Log top 5
-                logger.warning(f"  - {symbol}: {pct:.1f}% NaN")
-
-        # Feature quality summary
-        feature_nan_pct = (combined_features.isnull().sum() / len(combined_features)) * 100
-        high_nan_features = feature_nan_pct[feature_nan_pct > 30].sort_values(ascending=False)
-
-        if len(high_nan_features) > 0:
-            logger.warning(f"Found {len(high_nan_features)} features with >30% NaN:")
-            for feature, pct in high_nan_features.head(10).items():  # Log top 10
-                logger.warning(f"  - {feature}: {pct:.1f}% NaN")
-
-        # Overall quality assessment
-        if nan_percentage < 10 and finite_percentage > 95:
-            logger.info("✅ Overall feature quality: EXCELLENT")
-        elif nan_percentage < 20 and finite_percentage > 90:
-            logger.info("✅ Overall feature quality: GOOD")
-        elif nan_percentage < 35 and finite_percentage > 80:
-            logger.warning("⚠️  Overall feature quality: ACCEPTABLE")
-        else:
-            logger.error("❌ Overall feature quality: POOR - Consider reviewing feature engineering")
-
-        logger.info("=== END FINAL QUALITY CHECKPOINT ===")
-
-    # Cache-related methods
-    def _get_single_feature_cached(
-        self,
-        symbol: str,
-        feature_name: str,
-        start_date: datetime,
-        end_date: datetime
-    ) -> Optional[pd.DataFrame]:
-        """尝试从缓存获取单个特征"""
-        # 只缓存慢变特征
-        if feature_name not in self.SLOW_FEATURES:
-            return None
-
-        try:
-            cached_data = self.feature_cache.get(symbol, feature_name, start_date, end_date)
-
-            if cached_data is None:
-                logger.debug(f"Cache MISS: {symbol}/{feature_name}")
-                return None
-
-            # 验证返回数据的格式
-            if not isinstance(cached_data, pd.DataFrame):
-                logger.warning(f"Invalid cached data type for {symbol}/{feature_name}: {type(cached_data)}")
-                return None
-
-            if cached_data.empty:
-                logger.debug(f"Cache HIT but empty: {symbol}/{feature_name}")
-                return None
-
-            # 确保有 'value' 列
-            if 'value' not in cached_data.columns:
-                logger.warning(f"Cached data missing 'value' column for {symbol}/{feature_name}: {cached_data.columns}")
-                return None
-
-            logger.debug(f"Cache HIT: {symbol}/{feature_name} ({len(cached_data)} rows)")
-            return cached_data
-
-        except Exception as e:
-            logger.warning(f"Error retrieving cache for {symbol}/{feature_name}: {e}")
-            return None
-
-    def _cache_single_feature(
-        self,
-        symbol: str,
-        feature_name: str,
-        data: pd.Series
-    ) -> None:
-        """缓存单个特征"""
-        if feature_name not in self.SLOW_FEATURES:
-            return
-
-        try:
-            # 转换为 DataFrame，确保格式正确
-            if isinstance(data, pd.Series):
-                df = data.to_frame(name='value')
-            elif isinstance(data, pd.DataFrame):
-                # 如果是DataFrame，确保只有一列且列名为'value'
-                if len(data.columns) == 1:
-                    df = data.copy()
-                    df.columns = ['value']
-                else:
-                    # 如果有多列，取第一列
-                    df = data.iloc[:, [0]].copy()
-                    df.columns = ['value']
-            else:
-                logger.warning(f"Unexpected data type for caching {feature_name}: {type(data)}")
-                return
-
-            # 确保索引是 DatetimeIndex
-            if not isinstance(df.index, pd.DatetimeIndex):
-                df.index = pd.to_datetime(df.index)
-
-            self.feature_cache.set(symbol, feature_name, df)
-            logger.debug(f"Cached {feature_name} for {symbol}: {len(df)} rows from {df.index.min()} to {df.index.max()}")
-
-        except Exception as e:
-            logger.warning(f"Failed to cache {feature_name} for {symbol}: {e}")
-            # 不抛出异常，继续执行其他操作
+        # Add buffer
+        return max_lookback + 5
 
     def clear_cache(self, symbol: Optional[str] = None):
-        """清空特征缓存"""
+        """Clear feature cache using existing cache provider."""
         self.feature_cache.clear(symbol)
         logger.info(f"Feature cache cleared{' for ' + symbol if symbol else ''}")
-
-    def _compute_feature_with_cache(
-        self,
-        symbol: str,
-        data: pd.DataFrame,
-        feature_name: str,
-        compute_func: callable
-    ) -> Optional[pd.DataFrame]:
-        """
-        使用缓存计算单个特征
-
-        Args:
-            symbol: 股票代码
-            data: 价格数据
-            feature_name: 特征名称
-            compute_func: 计算函数，接受data返回DataFrame
-
-        Returns:
-            包含特征的DataFrame，或None如果计算失败
-        """
-        start_date = data.index[0]
-        end_date = data.index[-1]
-
-        # 尝试从缓存获取
-        cached_feature = self._get_single_feature_cached(symbol, feature_name, start_date, end_date)
-        if cached_feature is not None:
-            logger.debug(f"Using cached {feature_name} for {symbol}")
-            return cached_feature
-
-        # 缓存未命中，计算特征
-        try:
-            computed_features = compute_func(data)
-            if computed_features is not None and not computed_features.empty:
-                if feature_name in computed_features.columns:
-                    # 缓存这个特征
-                    self._cache_single_feature(symbol, feature_name, computed_features[feature_name])
-                    logger.debug(f"Computed and cached {feature_name} for {symbol}")
-                    return computed_features[[feature_name]]
-        except Exception as e:
-            logger.warning(f"Failed to compute {feature_name} for {symbol}: {e}")
-
-        return None
-
-    def _compute_cross_sectional_features_for_panel(
-        self,
-        price_data: Dict[str, pd.DataFrame]
-    ) -> pd.DataFrame:
-        """
-        Compute cross-sectional features for panel data.
-        
-        This method calculates features that vary across stocks at each point in time,
-        which are essential for Fama-MacBeth regression and other cross-sectional methods.
-        
-        Args:
-            price_data: Dictionary mapping symbols to OHLCV DataFrames
-        
-        Returns:
-            DataFrame with MultiIndex(symbol, date) containing cross-sectional features
-        """
-        if self.cross_sectional_calculator is None:
-            return pd.DataFrame()
-        
-        # Get all unique dates across all symbols
-        all_dates = set()
-        for symbol, data in price_data.items():
-            all_dates.update(data.index.tolist())
-        
-        all_dates = sorted(list(all_dates))
-        
-        # Determine which features to calculate
-        feature_names = None
-        if hasattr(self.config, 'cross_sectional_features'):
-            feature_names = self.config.cross_sectional_features
-        
-        # Calculate panel features (all dates at once)
-        logger.info(f"Computing cross-sectional features for {len(all_dates)} dates, "
-                   f"{len(price_data)} symbols")
-        
-        try:
-            panel_features = self.cross_sectional_calculator.calculate_panel_features(
-                price_data=price_data,
-                dates=all_dates,
-                feature_names=feature_names
-            )
-            
-            # Convert from (date, symbol) to (symbol, date) MultiIndex
-            if not panel_features.empty and isinstance(panel_features.index, pd.MultiIndex):
-                # Swap levels to match main features format
-                panel_features = panel_features.swaplevel(0, 1).sort_index()
-                logger.info(f"Computed {len(panel_features.columns)} cross-sectional features")
-            
-            return panel_features
-            
-        except Exception as e:
-            logger.error(f"Failed to compute cross-sectional features: {e}")
-            return pd.DataFrame()
-    
-    def _merge_cross_sectional_features(
-        self,
-        features: pd.DataFrame,
-        cross_sectional_features: pd.DataFrame
-    ) -> pd.DataFrame:
-        """
-        Merge cross-sectional features with existing technical features.
-        
-        Both DataFrames should have MultiIndex(symbol, date).
-        
-        Args:
-            features: Main feature DataFrame
-            cross_sectional_features: Cross-sectional feature DataFrame
-        
-        Returns:
-            Merged DataFrame with all features
-        """
-        if cross_sectional_features.empty:
-            return features
-        
-        try:
-            # Ensure both have the same index structure
-            if not isinstance(features.index, pd.MultiIndex):
-                logger.warning("Main features don't have MultiIndex, cannot merge cross-sectional features")
-                return features
-            
-            if not isinstance(cross_sectional_features.index, pd.MultiIndex):
-                logger.warning("Cross-sectional features don't have MultiIndex, cannot merge")
-                return features
-            
-            # Find common indices
-            common_index = features.index.intersection(cross_sectional_features.index)
-            
-            if len(common_index) == 0:
-                logger.warning("No common indices between features and cross-sectional features")
-                return features
-            
-            logger.info(f"Merging cross-sectional features: {len(common_index)} common observations")
-            
-            # Align data to common index
-            features_aligned = features.loc[common_index]
-            cross_aligned = cross_sectional_features.loc[common_index]
-            
-            # Concatenate along columns
-            merged = pd.concat([features_aligned, cross_aligned], axis=1)
-            
-            # Remove duplicate columns if any
-            if merged.columns.duplicated().any():
-                logger.warning("Duplicate columns detected, keeping first occurrence")
-                merged = merged.loc[:, ~merged.columns.duplicated()]
-            
-            logger.info(f"Merged features shape: {merged.shape} "
-                       f"(original: {features.shape}, added: {cross_sectional_features.shape})")
-            
-            return merged
-            
-        except Exception as e:
-            logger.error(f"Error merging cross-sectional features: {e}")
-            return features

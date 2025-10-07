@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from enum import Enum
 
 
@@ -82,6 +82,12 @@ class FeatureConfig:
     })
     winsorize_percentile: float = field(default=0.01)
 
+    # Data format configuration (for panel data standardization)
+    data_format_index_order: Tuple[str, str] = field(default=('date', 'symbol'))
+    validate_data_format: bool = field(default=True)
+    auto_fix_data_format: bool = field(default=True)
+    standardize_panel_output: bool = field(default=True)
+
     def __post_init__(self):
         """Initialize default values."""
         if self.momentum_periods is None:
@@ -143,3 +149,17 @@ class FeatureConfig:
             True if warning should be logged
         """
         return missing_pct > self.missing_value_threshold
+
+    def get_data_format_config(self) -> Dict[str, Any]:
+        """
+        Get data format configuration for panel data standardization.
+
+        Returns:
+            Dictionary with data format settings
+        """
+        return {
+            'index_order': self.data_format_index_order,
+            'validate': self.validate_data_format,
+            'auto_fix': self.auto_fix_data_format,
+            'standardize_output': self.standardize_panel_output
+        }

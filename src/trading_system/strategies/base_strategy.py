@@ -188,8 +188,9 @@ class BaseStrategy(ABC):
             logger.info(f"[{self.name}] Price data symbols: {list(price_data.keys())}")
             logger.info(f"[{self.name}] Feature pipeline fitted: {getattr(self.feature_pipeline, '_is_fitted', 'Unknown')}")
 
-            # Transform using fitted pipeline
-            features = self.feature_pipeline.transform(pipeline_data)
+            # Use model's feature pipeline if available, otherwise use strategy's pipeline
+            feature_pipeline = self._get_feature_pipeline()
+            features = feature_pipeline.transform(pipeline_data)
 
             logger.info(f"[{self.name}] ✅ Feature pipeline transform completed")
             logger.info(f"[{self.name}] Features shape: {features.shape}")
@@ -322,6 +323,22 @@ class BaseStrategy(ABC):
             logger.error(f"[{self.name}] Traceback: {traceback.format_exc()}")
             return pd.DataFrame()
     
+    def _get_feature_pipeline(self):
+        """
+        Get the appropriate feature pipeline for predictions.
+
+        Returns:
+            Feature pipeline to use for transforming features
+        """
+        # Try to use the model's saved feature pipeline first
+        if (hasattr(self.model_predictor, 'model') and
+            hasattr(self.model_predictor.model, 'feature_pipeline')):
+            logger.info(f"[{self.name}] Using model's saved feature pipeline")
+            return self.model_predictor.model.feature_pipeline
+        else:
+            logger.info(f"[{self.name}] Using strategy's feature pipeline (model pipeline not available)")
+            return self.feature_pipeline
+
     def _extract_symbol_features(self, features: pd.DataFrame, symbol: str) -> pd.DataFrame:
         """
         Extract features for a specific symbol.
@@ -335,10 +352,37 @@ class BaseStrategy(ABC):
         """
         # Extract features for this symbol using MultiIndex structure
         if isinstance(features.index, pd.MultiIndex):
-            # Filter by symbol in MultiIndex
-            symbol_features = features.loc[symbol].copy()
-            symbol_features.reset_index(drop=True, inplace=True)
-            return symbol_features
+            index_names = features.index.names
+
+            # Handle both (symbol, date) and (date, symbol) index orders
+            if index_names[0] == 'symbol' and index_names[1] == 'date':
+                # Traditional (symbol, date) format
+                symbol_features = features.loc[symbol].copy()
+                # For panel data models, we need only the most recent features
+                if len(symbol_features) > 1:
+                    symbol_features = symbol_features.iloc[-1:].copy()
+                symbol_features.reset_index(drop=True, inplace=True)
+                return symbol_features
+            elif index_names[0] == 'date' and index_names[1] == 'symbol':
+                # Panel data (date, symbol) format
+                symbol_features = features.xs(symbol, level='symbol').copy()
+                # For panel data models, we need only the most recent features
+                if len(symbol_features) > 1:
+                    symbol_features = symbol_features.iloc[-1:].copy()
+                symbol_features.reset_index(drop=True, inplace=True)
+                return symbol_features
+            else:
+                # Unknown index order, try to find symbol level
+                if 'symbol' in index_names:
+                    symbol_features = features.xs(symbol, level='symbol').copy()
+                    # For panel data models, we need only the most recent features
+                    if len(symbol_features) > 1:
+                        symbol_features = symbol_features.iloc[-1:].copy()
+                    symbol_features.reset_index(drop=True, inplace=True)
+                    return symbol_features
+                else:
+                    logger.warning(f"Could not find 'symbol' level in MultiIndex with names: {index_names}")
+                    return pd.DataFrame()
 
         # Fallback: return all features (assume single symbol)
         return features

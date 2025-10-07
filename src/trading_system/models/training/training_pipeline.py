@@ -25,6 +25,7 @@ from ..base.model_factory import ModelFactory
 from ..model_persistence import ModelRegistry
 from ...feature_engineering.pipeline import FeatureEngineeringPipeline
 from ...config.feature import FeatureConfig
+from .data_strategies import DataProcessingStrategy, DataStrategyFactory
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,8 @@ class TrainingPipeline:
                  model_type: str,
                  feature_pipeline: FeatureEngineeringPipeline,
                  config: Optional[TrainingConfig] = None,
-                 registry_path: Optional[str] = None):
+                 registry_path: Optional[str] = None,
+                 data_strategy: Optional[DataProcessingStrategy] = None):
         """
         Initialize the training pipeline.
 
@@ -55,12 +57,21 @@ class TrainingPipeline:
             feature_pipeline: The unified feature engineering pipeline.
             config: Training configuration
             registry_path: Path for model registry
+            data_strategy: Strategy for data processing (auto-selected if None)
         """
         self.model_type = model_type
         self.feature_pipeline = feature_pipeline
         self.config = config or TrainingConfig()
         self.registry = ModelRegistry(registry_path or "./models/")
         self.trainer = ModelTrainer(self.config)
+
+        # Select appropriate data processing strategy based on model type
+        if data_strategy is None:
+            self.data_strategy = DataStrategyFactory.create_strategy(model_type)
+            logger.info(f"Auto-selected {self.data_strategy.__class__.__name__} for model type: {model_type}")
+        else:
+            self.data_strategy = data_strategy
+            logger.info(f"Using provided {self.data_strategy.__class__.__name__} for model type: {model_type}")
 
         # Data providers are configured separately
         self.data_provider = None
@@ -286,6 +297,31 @@ class TrainingPipeline:
 
         return price_data, factor_data, target_data
 
+    def _prepare_training_data(self,
+                              features: pd.DataFrame,
+                              target_data: Dict[str, pd.Series],
+                              start_date: datetime,
+                              end_date: datetime) -> Tuple[pd.DataFrame, pd.Series]:
+        """
+        Prepare training data using the configured data processing strategy.
+
+        This method delegates to the appropriate strategy based on model type,
+        following the Strategy pattern for clean separation of concerns.
+        """
+        logger.info(f"Preparing training data using {self.data_strategy.__class__.__name__}")
+        logger.info(f"Strategy expects index order: {self.data_strategy.get_expected_index_order()}")
+
+        # Delegate data alignment and slicing to the strategy
+        X, y = self.data_strategy.align_and_slice_data(
+            features=features,
+            targets=target_data,
+            start_date=start_date,
+            end_date=end_date
+        )
+
+        logger.info(f"Strategy completed: {len(X)} samples, {len(X.columns)} features prepared")
+        return X, y
+
     def _compute_features(self,
                          price_data: Dict[str, pd.DataFrame],
                          target_data: Dict[str, pd.Series]) -> pd.DataFrame:
@@ -294,83 +330,6 @@ class TrainingPipeline:
         """
         raise NotImplementedError("This method is deprecated. Use FeatureEngineeringPipeline.")
 
-    def _prepare_training_data(self,
-                              features: pd.DataFrame,
-                              target_data: Dict[str, pd.Series],
-                              start_date: datetime,
-                              end_date: datetime) -> Tuple[pd.DataFrame, pd.Series]:
-        """
-        Prepare training data by robustly aligning features and targets.
-        """
-        if not isinstance(features.index, pd.MultiIndex):
-            raise ValueError("Features DataFrame must have a MultiIndex of ('symbol', 'date').")
-
-        # Combine all symbol targets into a single Series with a matching MultiIndex
-        all_targets = []
-        for symbol, targets in target_data.items():
-            target_df = targets.to_frame(name='target')
-            target_df['symbol'] = symbol
-            # Ensure the index is a DatetimeIndex before setting the MultiIndex
-            target_df.index.name = 'date'
-            target_df = target_df.set_index('symbol', append=True).reorder_levels(['symbol', 'date'])
-            all_targets.append(target_df)
-        
-        if not all_targets:
-            raise ValueError("No target data could be processed.")
-            
-        y_full = pd.concat(all_targets)['target']
-
-        # Use an inner merge to perfectly align features and targets
-        # We also need to filter the features to the original requested training period
-        # Adjust end_date to account for forward return window (21 days)
-        adjusted_end_date = end_date - pd.Timedelta(days=21)
-        features_in_period = features.loc[(slice(None), slice(start_date, adjusted_end_date)), :]
-        
-        # --- DETAILED DEBUGGING LOGS ---
-        logger.info("--- Preparing Data Alignment: Debugging Info ---")
-        logger.info(f"Original requested training period: {start_date.date()} to {end_date.date()}")
-        logger.info(f"Adjusted training period (accounting for 21-day forward returns): {start_date.date()} to {adjusted_end_date.date()}")
-        
-        # Log info for features
-        logger.info(f"Features (features_in_period) shape: {features_in_period.shape}")
-        if not features_in_period.empty:
-            logger.info(f"Features head:\n{features_in_period.head()}")
-            logger.info(f"Features tail:\n{features_in_period.tail()}")
-            min_date, max_date = features_in_period.index.get_level_values('date').min(), features_in_period.index.get_level_values('date').max()
-            logger.info(f"Features date range: {min_date.date()} to {max_date.date()}")
-
-        # Log info for targets
-        logger.info(f"Targets (y_full) shape: {y_full.shape}")
-        if not y_full.empty:
-            logger.info(f"Targets head:\n{y_full.head()}")
-            logger.info(f"Targets tail:\n{y_full.tail()}")
-            min_date, max_date = y_full.index.get_level_values('date').min(), y_full.index.get_level_values('date').max()
-            logger.info(f"Targets date range: {min_date.date()} to {max_date.date()}")
-        logger.info("--------------------------------------------------")
-
-        combined_data = features_in_period.merge(y_full.rename('target'), left_index=True, right_index=True, how='inner')
-
-        logger.info(f"After initial merge: {combined_data.shape} samples")
-        logger.info(f"NaN count per column before dropping:\n{combined_data.isnull().sum().head(10)}")
-
-        # Drop rows where ALL feature values are NaN (keep rows with partial features)
-        # Also require target to be non-NaN
-        feature_columns = [col for col in combined_data.columns if col != 'target']
-        combined_data = combined_data.dropna(subset=['target'])  # Ensure target is not NaN
-        combined_data = combined_data.dropna(how='all', subset=feature_columns)  # Only drop if ALL features are NaN
-
-        # Log NaN info after filtering
-        remaining_rows = len(combined_data)
-        logger.info(f"After removing rows with all-NaN features and NaN targets: {remaining_rows} samples")
-
-        if combined_data.empty:
-            raise ValueError("No overlapping data found between features and targets after alignment and NaN removal.")
-
-        y = combined_data['target']
-        X = combined_data.drop(columns=['target'])
-
-        logger.info(f"Aligned training data: {len(X)} samples, {len(X.columns)} features.")
-        return X, y
 
     def _generate_pipeline_report(self,
                                  model_id: Optional[str],

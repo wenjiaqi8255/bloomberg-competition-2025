@@ -34,15 +34,19 @@ training_setup:
       newey_west_lags: null
 
   feature_engineering:
-    enabled_features: ['momentum', 'volatility', 'technical', 'volume']
+    # enabled_features: ['momentum', 'volatility', 'technical', 'volume']
+    # Available momentum features: momentum_12m, momentum_vol_interaction, momentum_vol_ratio, rsi_momentum_divergence, volume_price_trend
     momentum_periods: [21, 63, 252]
+    # Available volatility features: garman_klass_volatility, parkinson_volatility, range_volatility, volatility_60d
     volatility_windows: [20, 60]
+    # Available technical features: adx, bb_mean_reversion_strength, cci, macd_histogram, macd_line, macd_signal, mfi, rsi_14, stochastic_d, stochastic_k, williams_r
     lookback_periods: [20, 60, 252]
     min_ic_threshold: 0.02
     min_significance: 0.1
     feature_lag: 1
     include_technical: false  # Disable for pure cross-sectional
     include_cross_sectional: true  # Enable cross-sectional features for Fama-MacBeth
+    # Available cross_sectional features: market_cap_proxy, book_to_market_proxy, size_factor, value_factor
     cross_sectional_features: ['market_cap', 'book_to_market', 'size', 'value', 'momentum', 'volatility']
     cross_sectional_lookback:
       momentum: 252
@@ -106,6 +110,7 @@ feature_engineering:
   include_theoretical: false
   
   # Cross-sectional features to compute
+  # Available cross_sectional features: market_cap_proxy, book_to_market_proxy, size_factor, value_factor
   cross_sectional_features:
     - "market_cap"        # Size factor (SMB proxy)
     - "book_to_market"    # Value factor (HML proxy)

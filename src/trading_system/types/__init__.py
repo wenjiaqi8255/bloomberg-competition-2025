@@ -29,7 +29,7 @@ from .data_types import (
 )
 
 # Validation classes are now imported from utils module
-from ..utils.validation import DataValidationError, DataValidator
+from ..data.validation import DataValidationError, DataValidator
 
 # Strategy classes are now imported from strategies module
 # Avoid circular import by using forward reference in type hints

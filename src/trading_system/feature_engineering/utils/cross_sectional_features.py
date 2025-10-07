@@ -101,76 +101,179 @@ class CrossSectionalFeatureCalculator:
         Raises:
             ValueError: If date is not available in price data
         """
+        # Enhanced logging for debugging
+        logger.info(f"=== CROSS-SECTIONAL FEATURES DEBUG ===")
+        logger.info(f"Target date: {date}")
+        logger.info(f"Requested feature names: {feature_names}")
+        logger.info(f"Available symbols: {list(price_data.keys())}")
+        logger.info(f"Lookback periods: {self.lookback_periods}")
+
         if feature_names is None:
             feature_names = ['market_cap', 'book_to_market', 'size', 'value', 'momentum', 'volatility']
-        
+            logger.info(f"Using default feature names: {feature_names}")
+
         all_features = []
+        successful_symbols = 0
         
         for symbol, data in price_data.items():
+            logger.debug(f"Processing symbol: {symbol}")
+            logger.debug(f"  Data shape: {data.shape}")
+            logger.debug(f"  Date range: {data.index.min()} to {data.index.max()}")
+
             try:
-                # Check if date is available
-                if date not in data.index:
-                    # Try to find the nearest available date
-                    available_dates = data.index[data.index <= date]
-                    if len(available_dates) == 0:
-                        logger.warning(f"Date {date} not available for {symbol}, skipping")
-                        continue
-                    date_to_use = available_dates[-1]
-                else:
+                # Check if date is available - improved date matching
+                date_to_use = None
+
+                # First try exact match
+                if date in data.index:
                     date_to_use = date
-                
+                    logger.debug(f"  Using exact date: {date_to_use}")
+                else:
+                    # Try to find the nearest available date (more flexible)
+                    available_dates = data.index[data.index <= date]
+                    if len(available_dates) > 0:
+                        date_to_use = available_dates[-1]
+                        days_diff = (date - date_to_use).days
+                        logger.debug(f"  Using nearest date: {date_to_use} ({days_diff} days before target)")
+
+                        # Skip if the date is too far from target (configurable tolerance)
+                        max_tolerance_days = 7  # Allow up to 1 week tolerance
+                        if days_diff > max_tolerance_days:
+                            logger.warning(f"Date {date} too far from nearest {date_to_use} "
+                                         f"({days_diff} days > {max_tolerance_days}), skipping {symbol}")
+                            continue
+                    else:
+                        # Try to find any date after target (forward looking)
+                        future_dates = data.index[data.index > date]
+                        if len(future_dates) > 0:
+                            date_to_use = future_dates[0]
+                            days_diff = (date_to_use - date).days
+                            logger.debug(f"  Using future date: {date_to_use} ({days_diff} days after target)")
+
+                            # Smaller tolerance for future dates
+                            max_future_tolerance_days = 3
+                            if days_diff > max_future_tolerance_days:
+                                logger.warning(f"Date {date} too far from future {date_to_use} "
+                                             f"({days_diff} days > {max_future_tolerance_days}), skipping {symbol}")
+                                continue
+                        else:
+                            logger.warning(f"No available dates near {date} for {symbol}, skipping")
+                            continue
+
                 # Get historical data up to this date
                 historical_data = data[data.index <= date_to_use].copy()
-                
-                if len(historical_data) < max(self.lookback_periods.values()):
-                    logger.debug(f"Insufficient history for {symbol} at {date}, skipping")
+
+                # Calculate dynamic requirements based on requested features
+                required_periods = {}
+                for feature_name in feature_names:
+                    if feature_name in self.lookback_periods:
+                        required_periods[feature_name] = self.lookback_periods[feature_name]
+
+                min_required = min(required_periods.values()) if required_periods else 0
+                max_required = max(required_periods.values()) if required_periods else 0
+
+                available_history = len(historical_data)
+                logger.debug(f"  Historical data: {available_history} days available")
+                logger.debug(f"  Feature requirements: {required_periods}")
+                logger.debug(f"  Min required: {min_required}, Max required: {max_required}")
+
+                # More flexible history check: allow processing if at least one feature can be calculated
+                if available_history < min_required:
+                    logger.warning(f"Insufficient history for {symbol} at {date}: "
+                                 f"{available_history} < {min_required}, skipping")
                     continue
+                elif available_history < max_required:
+                    # Filter features that can be calculated with available history
+                    viable_features = []
+                    for feature_name in feature_names:
+                        if feature_name in self.lookback_periods:
+                            if available_history >= self.lookback_periods[feature_name]:
+                                viable_features.append(feature_name)
+                        else:
+                            # Features without specific requirements are assumed viable
+                            viable_features.append(feature_name)
+
+                    if not viable_features:
+                        logger.warning(f"No viable features for {symbol} at {date} with {available_history} days, skipping")
+                        continue
+
+                    logger.info(f"Processing {symbol} with viable features only: {viable_features}")
+                    # Filter feature_names to only viable ones
+                    feature_names = viable_features
                 
                 # Calculate features for this symbol
                 symbol_features = {'symbol': symbol, 'date': date_to_use}
-                
-                if 'market_cap' in feature_names:
-                    symbol_features['market_cap_proxy'] = self._calculate_market_cap_proxy(
-                        historical_data, date_to_use
-                    )
-                
-                if 'book_to_market' in feature_names:
-                    symbol_features['book_to_market_proxy'] = self._calculate_book_to_market_proxy(
-                        historical_data, date_to_use
-                    )
-                
-                if 'size' in feature_names:
-                    symbol_features['size_factor'] = self._calculate_size_factor(
-                        historical_data, date_to_use
-                    )
-                
-                if 'value' in feature_names:
-                    symbol_features['value_factor'] = self._calculate_value_factor(
-                        historical_data, date_to_use
-                    )
-                
-                if 'momentum' in feature_names:
-                    symbol_features['momentum_12m'] = self._calculate_momentum(
-                        historical_data, date_to_use, self.lookback_periods['momentum']
-                    )
-                
-                if 'volatility' in feature_names:
-                    symbol_features['volatility_60d'] = self._calculate_volatility(
-                        historical_data, date_to_use, self.lookback_periods['volatility']
-                    )
-                
+                calculated_features = []
+
+                for feature_name in feature_names:
+                    logger.debug(f"  Calculating feature: {feature_name}")
+
+                    try:
+                        if feature_name == 'market_cap':
+                            symbol_features['market_cap_proxy'] = self._calculate_market_cap_proxy(
+                                historical_data, date_to_use
+                            )
+                            calculated_features.append('market_cap_proxy')
+
+                        elif feature_name == 'book_to_market':
+                            symbol_features['book_to_market_proxy'] = self._calculate_book_to_market_proxy(
+                                historical_data, date_to_use
+                            )
+                            calculated_features.append('book_to_market_proxy')
+
+                        elif feature_name == 'size':
+                            symbol_features['size_factor'] = self._calculate_size_factor(
+                                historical_data, date_to_use
+                            )
+                            calculated_features.append('size_factor')
+
+                        elif feature_name == 'value':
+                            symbol_features['value_factor'] = self._calculate_value_factor(
+                                historical_data, date_to_use
+                            )
+                            calculated_features.append('value_factor')
+
+                        elif feature_name == 'momentum':
+                            symbol_features['momentum_12m'] = self._calculate_momentum(
+                                historical_data, date_to_use, self.lookback_periods['momentum']
+                            )
+                            calculated_features.append('momentum_12m')
+
+                        elif feature_name == 'volatility':
+                            symbol_features['volatility_60d'] = self._calculate_volatility(
+                                historical_data, date_to_use, self.lookback_periods['volatility']
+                            )
+                            calculated_features.append('volatility_60d')
+
+                        else:
+                            logger.warning(f"  Unknown feature name: {feature_name}")
+
+                    except Exception as e:
+                        logger.error(f"  Error calculating {feature_name} for {symbol}: {e}")
+                        continue
+
+                logger.debug(f"  Successfully calculated {len(calculated_features)} features: {calculated_features}")
                 all_features.append(symbol_features)
+                successful_symbols += 1
                 
             except Exception as e:
                 logger.warning(f"Error calculating features for {symbol} at {date}: {e}")
                 continue
         
+        logger.info(f"Cross-sectional calculation summary for {date}:")
+        logger.info(f"  Successfully processed symbols: {successful_symbols}/{len(price_data)}")
+        logger.info(f"  Total feature records: {len(all_features)}")
+
         if not all_features:
-            logger.warning(f"No features calculated for date {date}")
+            logger.error(f"No features calculated for date {date}")
+            logger.error("=== CROSS-SECTIONAL FEATURES DEBUG END ===")
             return pd.DataFrame()
-        
+
         # Create DataFrame
         features_df = pd.DataFrame(all_features)
+        logger.info(f"Created features DataFrame with shape: {features_df.shape}")
+        logger.info(f"Feature columns: {list(features_df.columns)}")
+        logger.info("=== CROSS-SECTIONAL FEATURES DEBUG END ===")
         
         # Add cross-sectional rankings and z-scores
         features_df = self._add_cross_sectional_transformations(features_df)
