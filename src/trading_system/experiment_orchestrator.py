@@ -152,7 +152,8 @@ class ExperimentOrchestrator:
         train_pipeline = TrainingPipeline(
             model_type=model_type,
             feature_pipeline=feature_pipeline,
-            registry_path="./models/"  # Explicitly set the model registry path
+            registry_path="./models/",  # Explicitly set the model registry path
+            model_config=model_config  # Pass model-specific config for LSTM, etc.
         )
         train_pipeline.configure_data(data_provider=data_provider, factor_data_provider=factor_data_provider)
         

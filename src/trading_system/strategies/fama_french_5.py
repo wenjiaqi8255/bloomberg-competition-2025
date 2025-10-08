@@ -123,10 +123,10 @@ class FamaFrench5Strategy(BaseStrategy):
                  **kwargs):
         """
         Initialize Fama-French 5-factor strategy.
-        
+
         Args:
             name: Strategy identifier
-            feature_pipeline: Fitted pipeline (should compute factor proxies)
+            feature_pipeline: Fitted pipeline (computes technical indicators and merges factor data)
             model_predictor: Predictor with FF5RegressionModel loaded
             position_sizer: Position sizing component
             lookback_days: Lookback period for factor calculation
@@ -140,143 +140,51 @@ class FamaFrench5Strategy(BaseStrategy):
             position_sizer=position_sizer,
             **kwargs
         )
-        
+
         self.lookback_days = lookback_days
         self.risk_free_rate = risk_free_rate
 
         logger.info(f"Initialized FamaFrench5Strategy '{name}' with "
                    f"lookback={lookback_days}d, rf_rate={risk_free_rate}")
+        logger.info(f"[{name}] Following SOLID principles - strategy as pure delegate")
 
     def _compute_features(self, price_data: Dict[str, pd.DataFrame]) -> pd.DataFrame:
         """
-        Override feature computation for FF5 strategy.
+        Compute features for FF5 strategy following SOLID principles.
 
-        Instead of using technical indicators, we create factor exposure features
-        based on historical returns and align them with FF5 factor data.
+        KISS + DRY Principle: Strategy is a pure delegate that coordinates components
+        without reimplementing existing functionality.
+
+        The strategy trusts:
+        - FeatureEngineeringPipeline to handle technical indicators and factor data merging
+        - FF5RegressionModel to handle beta estimation and prediction
+        - BaseStrategy framework to handle the signal generation workflow
 
         Args:
             price_data: Dictionary mapping symbols to their price data
 
         Returns:
-            DataFrame with factor features for each symbol
+            DataFrame with features computed by the FeatureEngineeringPipeline
         """
-        logger.info(f"[{self.name}] 🔄 Computing FF5 factor features")
+        logger.info(f"[{self.name}] 🔄 Computing features via FeatureEngineeringPipeline (delegate pattern)")
 
-        if not self.factor_data_provider:
-            raise ValueError("FF5 strategy requires factor_data_provider")
+        # Prepare data in the format expected by the pipeline
+        pipeline_input = {'price_data': price_data}
 
-        if not price_data:
-            raise ValueError("No price data provided")
+        try:
+            # Delegate to the existing feature pipeline (DRY principle)
+            # The pipeline handles technical indicators, factor data merging, and time alignment
+            features = self.feature_pipeline.transform(pipeline_input)
 
-        # Get the latest date from price data
-        all_dates = []
-        for symbol, data in price_data.items():
-            if data is not None and len(data) > 0:
-                all_dates.extend(data.index.tolist())
+            logger.info(f"[{self.name}] ✅ Pipeline computed features: {features.shape}")
+            logger.debug(f"[{self.name}] Feature columns: {list(features.columns)}")
 
-        if not all_dates:
-            raise ValueError("No valid dates found in price data")
+            return features
 
-        latest_date = max(all_dates)
-
-        # Get factor data for the relevant period
-        start_date = latest_date - pd.Timedelta(days=self.lookback_days)
-        factor_data = self.factor_data_provider.get_factor_returns(start_date, latest_date)
-
-        # Filter to only expected factor columns
-        expected_factors = self._expected_factor_columns()
-        if factor_data is not None and not factor_data.empty:
-            factor_data = factor_data[[col for col in expected_factors if col in factor_data.columns]]
-
-        logger.info(f"[{self.name}] Retrieved factor data: {factor_data.shape}")
-        logger.info(f"[{self.name}] Factor columns: {list(factor_data.columns)}")
-
-        all_features = []
-        symbol_list = []
-
-        for symbol, symbol_data in price_data.items():
-            if symbol_data is None or len(symbol_data) < self.lookback_days:
-                logger.warning(f"[{self.name}] Insufficient data for {symbol}")
-                continue
-
-            try:
-                # Calculate stock returns over the lookback period
-                aligned_data = symbol_data.reindex(factor_data.index, method='ffill')
-                stock_returns = aligned_data['Close'].pct_change().dropna()
-
-                if len(stock_returns) < 60:  # Need enough data points
-                    logger.warning(f"[{self.name}] Not enough return data for {symbol}")
-                    continue
-
-                # Align stock returns with factor data
-                aligned_returns, aligned_factors = stock_returns.align(factor_data[self._expected_factor_columns()], join='inner')
-
-                if len(aligned_returns) < 60:
-                    logger.warning(f"[{self.name}] Not enough aligned data for {symbol}")
-                    continue
-
-                # Create features DataFrame for this symbol
-                features_df = pd.DataFrame(index=[symbol])
-
-                # Add current factor values (most recent available)
-                if len(aligned_factors) > 0:
-                    latest_factors = aligned_factors.iloc[-1]
-                    for factor in self._expected_factor_columns():
-                        features_df[factor] = latest_factors[factor]
-                else:
-                    # Use zeros if no factor data available
-                    for factor in self._expected_factor_columns():
-                        features_df[factor] = 0.0
-
-                # Add additional features based on historical data
-                # Historical beta estimation (rolling window)
-                if len(aligned_returns) >= 60:
-                    # Calculate rolling betas for each factor
-                    window_size = min(60, len(aligned_returns))
-
-                    for factor in self._expected_factor_columns():
-                        if factor in aligned_factors.columns:
-                            # Simple rolling beta estimation
-                            factor_returns = aligned_factors[factor]
-                            stock_excess_returns = aligned_returns - self.risk_free_rate/252
-
-                            # Calculate beta
-                            if len(factor_returns) > 1 and factor_returns.std() > 0:
-                                beta = (stock_excess_returns * factor_returns).rolling(window_size).cov() / factor_returns.rolling(window_size).var()
-                                features_df[f'{factor}_beta'] = beta.iloc[-1] if not beta.empty else 0.0
-                            else:
-                                features_df[f'{factor}_beta'] = 0.0
-                        else:
-                            features_df[f'{factor}_beta'] = 0.0
-
-                # Add stock-specific risk metrics
-                if len(aligned_returns) >= 30:
-                    # Volatility
-                    volatility = aligned_returns.rolling(min(30, len(aligned_returns))).std().iloc[-1] if len(aligned_returns) > 0 else 0.0
-                    features_df['stock_volatility'] = volatility
-
-                    # Momentum
-                    momentum = aligned_returns.sum()
-                    features_df['momentum'] = momentum
-
-                all_features.append(features_df)
-                symbol_list.append(symbol)
-                logger.debug(f"[{self.name}] Computed features for {symbol}: {list(features_df.columns)}")
-
-            except Exception as e:
-                logger.error(f"[{self.name}] Failed to compute features for {symbol}: {e}")
-                continue
-
-        if not all_features:
-            raise ValueError("No features computed successfully")
-
-        # Combine all features
-        result = pd.concat(all_features, axis=0)
-        logger.info(f"[{self.name}] ✅ Computed features for {len(result)} symbols")
-        logger.info(f"[{self.name}] Feature columns: {list(result.columns)}")
-        logger.info(f"[{self.name}] Feature sample: {result.iloc[-1].to_dict() if not result.empty else 'Empty'}")
-
-        return result
+        except Exception as e:
+            logger.error(f"[{self.name}] Error computing features via pipeline: {e}")
+            logger.debug(f"[{self.name}] Error details:", exc_info=True)
+            return pd.DataFrame()
 
     def _expected_factor_columns(self) -> list:
         """Get the expected factor columns for FF5 model."""

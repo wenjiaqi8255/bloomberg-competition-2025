@@ -236,10 +236,10 @@ class MLStrategy(BaseStrategy):
                         start_date: datetime,
                         end_date: datetime) -> pd.DataFrame:
         """
-        Override to add signal strength filtering and normalization for ML predictions.
+        Override to add basic signal strength filtering for ML predictions.
 
-        ML models may output weak signals that should be filtered out or extreme values
-        that need to be normalized.
+        SOLID Principle: Strategy only provides expected returns, not position sizing.
+        Weight adjustment is delegated to portfolio optimizer layer.
         """
         # Get base predictions from parent
         predictions = super()._get_predictions(features, price_data, start_date, end_date)
@@ -247,96 +247,62 @@ class MLStrategy(BaseStrategy):
         if predictions.empty:
             return predictions
 
-        logger.info(f"[{self.name}] 📊 Raw predictions statistics:")
+        logger.info(f"[{self.name}] 📊 Raw predictions (expected returns) statistics:")
         logger.info(f"[{self.name}]   Shape: {predictions.shape}")
         logger.info(f"[{self.name}]   Mean: {predictions.mean().mean():.6f}")
         logger.info(f"[{self.name}]   Std: {predictions.std().mean():.6f}")
         logger.info(f"[{self.name}]   Min: {predictions.min().min():.6f}")
         logger.info(f"[{self.name}]   Max: {predictions.max().max():.6f}")
 
-        # Apply signal strength filtering
+        # Apply strategy-layer normalization (Layer 1 of dual-layer architecture)
+        if self.enable_normalization:
+            predictions = self._apply_normalization(predictions, self.normalization_method)
+            logger.info(f"[{self.name}] 🔄 Applied strategy-layer normalization (method: {self.normalization_method})")
+            logger.info(f"[{self.name}]   Normalized range: [{predictions.min().min():.6f}, {predictions.max().max():.6f}]")
+        else:
+            logger.info(f"[{self.name}] ⚪ Strategy-layer normalization disabled")
+
+        # Apply minimal signal strength filtering - only filter extremely weak signals
+        # Strategy layer's role: identify strong vs weak signals, not weight allocation
         filtered_predictions = predictions.copy()
 
-        # Filter weak signals
-        weak_signal_mask = filtered_predictions.abs() < self.min_signal_strength
+        # Only filter out extremely weak signals (keep most information for optimizer)
+        # Use different threshold based on whether signals are normalized
+        if self.enable_normalization and self.normalization_method == 'zscore':
+            # For Z-score normalized signals, use a reasonable threshold
+            weak_signal_threshold = 0.1  # ~0.1 sigma is quite weak
+        else:
+            # For non-normalized or MinMax signals, use absolute threshold
+            weak_signal_threshold = 0.001
+
+        weak_signal_mask = filtered_predictions.abs() < weak_signal_threshold
         num_weak_signals = weak_signal_mask.sum().sum()
         filtered_predictions[weak_signal_mask] = 0.0
 
-        logger.info(f"[{self.name}] 🎯 Filtered {num_weak_signals} weak signals (threshold={self.min_signal_strength})")
+        if num_weak_signals > 0:
+            logger.info(f"[{self.name}] 🎯 Filtered {num_weak_signals} extremely weak signals (threshold={weak_signal_threshold})")
 
-        # Apply outlier detection and normalization
-        normalized_predictions = self._normalize_predictions(filtered_predictions)
+        logger.info(f"[{self.name}] 📈 Expected returns for portfolio optimizer:")
+        logger.info(f"[{self.name}]   Mean: {filtered_predictions.mean().mean():.6f}")
+        logger.info(f"[{self.name}]   Std: {filtered_predictions.std().mean():.6f}")
+        logger.info(f"[{self.name}]   Non-zero signals: {(filtered_predictions != 0).sum().sum()}")
 
-        logger.info(f"[{self.name}] 📈 Normalized predictions statistics:")
-        logger.info(f"[{self.name}]   Mean: {normalized_predictions.mean().mean():.6f}")
-        logger.info(f"[{self.name}]   Std: {normalized_predictions.std().mean():.6f}")
-        logger.info(f"[{self.name}]   Min: {normalized_predictions.min().min():.6f}")
-        logger.info(f"[{self.name}]   Max: {normalized_predictions.max().max():.6f}")
+        return filtered_predictions
 
-        return normalized_predictions
-
-    def _normalize_predictions(self, predictions: pd.DataFrame) -> pd.DataFrame:
-        """
-        Normalize predictions to handle extreme values and ensure reasonable bounds.
-
-        Args:
-            predictions: Raw predictions DataFrame
-
-        Returns:
-            Normalized predictions DataFrame
-        """
-        normalized = predictions.copy()
-
-        # Handle extreme values using quantile-based clipping
-        for column in normalized.columns:
-            series = normalized[column]
-
-            # Calculate quantiles for this symbol
-            q_low = series.quantile(0.01)  # 1st percentile
-            q_high = series.quantile(0.99)  # 99th percentile
-
-            # Clip extreme values
-            clipped_series = series.clip(lower=q_low, upper=q_high)
-            normalized[column] = clipped_series
-
-            if series.min() != clipped_series.min() or series.max() != clipped_series.max():
-                logger.debug(f"[{self.name}] Clipped {column} from [{series.min():.6f}, {series.max():.6f}] to [{clipped_series.min():.6f}, {clipped_series.max():.6f}]")
-
-        # Apply additional normalization to ensure reasonable scale
-        # Use robust scaling based on median and MAD (median absolute deviation)
-        all_values = normalized.values.flatten()
-        non_zero_values = all_values[all_values != 0]
-
-        if len(non_zero_values) > 0:
-            median_val = np.median(non_zero_values)
-            mad_val = np.median(np.abs(non_zero_values - median_val))
-
-            if mad_val > 0:
-                # Robust scaling: (x - median) / MAD
-                for column in normalized.columns:
-                    mask = normalized[column] != 0
-                    normalized.loc[mask, column] = (normalized.loc[mask, column] - median_val) / mad_val
-
-                logger.debug(f"[{self.name}] Applied robust scaling (median={median_val:.6f}, MAD={mad_val:.6f})")
-
-                # Rescale to reasonable range for trading signals (e.g., -0.3 to 0.3)
-                max_abs_val = normalized.abs().max().max()
-                if max_abs_val > 0.3:
-                    scale_factor = 0.3 / max_abs_val
-                    normalized = normalized * scale_factor
-                    logger.debug(f"[{self.name}] Rescaled by factor {scale_factor:.6f} to keep signals in [-0.3, 0.3] range")
-
-        return normalized
+    # NOTE: Strategy-layer normalization re-enabled for dual-layer architecture
+    # Layer 1: Strategy-level normalization (ensures consistent scale within each strategy)
+    # Layer 2: MetaModel-level normalization (ensures fair combination across strategies)
+    # SOLID Principle: Each layer has clear responsibility for normalization
 
     def generate_signals(self,
                         price_data: Dict[str, pd.DataFrame],
                         start_date: datetime,
                         end_date: datetime) -> pd.DataFrame:
         """
-        Generate trading signals using multi-stock enhanced approach.
+        Generate expected returns using multi-stock enhanced approach.
 
-        This method extends the base implementation to ensure the model receives
-        features for all stocks it was trained on, even if we only trade a subset.
+        SOLID Principle: Strategy is a pure delegate that provides expected returns.
+        Portfolio optimization and weight adjustment are handled by separate layers.
 
         Args:
             price_data: Original price data (may only contain trading universe)
@@ -344,10 +310,10 @@ class MLStrategy(BaseStrategy):
             end_date: End date for signal generation
 
         Returns:
-            DataFrame with trading signals for the trading universe only
+            DataFrame with expected returns for the trading universe only
         """
         try:
-            logger.info(f"[{self.name}] Starting multi-stock signal generation...")
+            logger.info(f"[{self.name}] 🔄 Generating expected returns (delegate pattern)...")
 
             # Step 1: Ensure we have data for all model training stocks
             enhanced_price_data = self._fetch_additional_stock_data(price_data, start_date, end_date)
@@ -373,131 +339,38 @@ class MLStrategy(BaseStrategy):
                     logger.error(f"[{self.name}] None of the trading universe stocks found in predictions")
                     return pd.DataFrame()
 
-                filtered_predictions = predictions[available_universe]
-                logger.info(f"[{self.name}] Filtered to {len(available_universe)} trading universe stocks: {available_universe}")
+                expected_returns = predictions[available_universe]
+                logger.info(f"[{self.name}] ✅ Filtered to {len(available_universe)} trading universe stocks: {available_universe}")
             else:
-                filtered_predictions = predictions
+                expected_returns = predictions
 
-            # Step 5: Apply signal strength filtering
-            if hasattr(self, 'min_signal_strength'):
-                filtered_predictions = filtered_predictions.copy()
-                filtered_predictions[filtered_predictions.abs() < self.min_signal_strength] = 0.0
-                logger.debug(f"[{self.name}] Applied signal strength filtering (threshold={self.min_signal_strength})")
+            # Step 5: Apply minimal signal strength filtering (keep most information for optimizer)
+            if hasattr(self, 'min_signal_strength') and self.min_signal_strength > 0:
+                # Use higher threshold to avoid removing valuable information for optimizer
+                threshold = min(self.min_signal_strength, 0.001)
+                expected_returns = expected_returns.copy()
+                weak_signals = expected_returns.abs() < threshold
+                expected_returns[weak_signals] = 0.0
+                logger.debug(f"[{self.name}] Applied minimal filtering (threshold={threshold})")
 
-            # Step 6: Apply position sizing
-            signals = self._apply_position_sizing(filtered_predictions, enhanced_price_data)
+            # Step 6: Validate expected returns diversity (for debugging)
+            if not expected_returns.empty:
+                self._log_expected_returns_validation(expected_returns)
 
-            # Step 7: Validate signal diversity (NEW)
-            if not signals.empty:
-                self.log_signal_validation(signals)
+            logger.info(f"[{self.name}] ✅ Expected returns ready for portfolio optimizer:")
+            logger.info(f"[{self.name}]   Assets: {len(expected_returns.columns)}")
+            logger.info(f"[{self.name}]   Periods: {len(expected_returns.index)}")
+            logger.info(f"[{self.name}]   Non-zero signals: {(expected_returns != 0).sum().sum()}")
 
-            logger.info(f"[{self.name}] ✅ Generated signals for {len(signals.columns)} assets")
-            return signals
+            return expected_returns
 
         except Exception as e:
-            logger.error(f"[{self.name}] ❌ Multi-stock signal generation failed: {e}", exc_info=True)
+            logger.error(f"[{self.name}] ❌ Expected returns generation failed: {e}", exc_info=True)
             return pd.DataFrame()
 
-    def _apply_position_sizing(self, predictions: pd.DataFrame, price_data: Dict[str, pd.DataFrame]) -> pd.DataFrame:
-        """
-        Apply position sizing to predictions based on relative prediction strength.
-
-        Args:
-            predictions: DataFrame with raw model predictions (dates x symbols)
-            price_data: Dictionary with price data for each symbol
-
-        Returns:
-            DataFrame with position-sized signals (dates x symbols)
-        """
-        if predictions.empty:
-            return predictions
-
-        signals = predictions.copy()
-
-        # Log input statistics
-        logger.info(f"[{self.name}] 📊 Input predictions statistics:")
-        logger.info(f"[{self.name}]   Shape: {signals.shape}")
-        logger.info(f"[{self.name}]   Mean: {signals.mean().mean():.6f}")
-        logger.info(f"[{self.name}]   Std: {signals.std().mean():.6f}")
-        logger.info(f"[{self.name}]   Min: {signals.min().min():.6f}")
-        logger.info(f"[{self.name}]   Max: {signals.max().max():.6f}")
-
-        # Normalize signals based on relative prediction strength for each date
-        for date_idx in signals.index:
-            date_signals = signals.loc[date_idx].copy()
-
-            # Separate long and short signals
-            long_signals = date_signals[date_signals > 0]
-            short_signals = date_signals[date_signals < 0]
-
-            # Apply prediction-strength-based weighting for long positions
-            if not long_signals.empty:
-                if len(long_signals) == 1:
-                    # Single long position, give it full weight
-                    signals.loc[date_idx, long_signals.index] = 1.0
-                else:
-                    # Multiple long positions, weight by prediction strength
-                    long_sum = long_signals.sum()
-                    if long_sum > 0:
-                        long_weights = long_signals / long_sum
-                        signals.loc[date_idx, long_signals.index] = long_weights
-                    else:
-                        # Fallback to equal weights if all predictions are zero
-                        equal_weight = 1.0 / len(long_signals)
-                        signals.loc[date_idx, long_signals.index] = equal_weight
-
-            # Apply prediction-strength-based weighting for short positions
-            if not short_signals.empty:
-                if len(short_signals) == 1:
-                    # Single short position, give it full negative weight
-                    signals.loc[date_idx, short_signals.index] = -1.0
-                else:
-                    # Multiple short positions, weight by prediction strength (absolute values)
-                    short_abs = short_signals.abs()
-                    short_sum = short_abs.sum()
-                    if short_sum > 0:
-                        short_weights = -short_abs / short_sum
-                        signals.loc[date_idx, short_signals.index] = short_weights
-                    else:
-                        # Fallback to equal weights if all predictions are zero
-                        equal_weight = -1.0 / len(short_signals)
-                        signals.loc[date_idx, short_signals.index] = equal_weight
-
-        # Apply max position size limit if configured
-        if hasattr(self, 'max_position_size') and self.max_position_size < 1.0:
-            signals = signals.clip(lower=-self.max_position_size, upper=self.max_position_size)
-            # Renormalize to maintain sum constraint
-            for date_idx in signals.index:
-                date_signals = signals.loc[date_idx]
-                total_long = date_signals[date_signals > 0].sum()
-                total_short = date_signals[date_signals < 0].sum()
-
-                if total_long > 0:
-                    long_mask = date_signals > 0
-                    signals.loc[date_idx, long_mask] = date_signals[long_mask] / total_long
-
-                if total_short < 0:
-                    short_mask = date_signals < 0
-                    signals.loc[date_idx, short_mask] = date_signals[short_mask] / abs(total_short)
-
-        # Log output statistics
-        logger.info(f"[{self.name}] 📈 Output signals statistics:")
-        logger.info(f"[{self.name}]   Mean: {signals.mean().mean():.6f}")
-        logger.info(f"[{self.name}]   Std: {signals.std().mean():.6f}")
-        logger.info(f"[{self.name}]   Min: {signals.min().min():.6f}")
-        logger.info(f"[{self.name}]   Max: {signals.max().max():.6f}")
-
-        # Log sample date to verify diversity
-        if not signals.empty:
-            sample_date = signals.index[0]
-            sample_signals = signals.loc[sample_date]
-            logger.info(f"[{self.name}] 📊 Sample signals for {sample_date}:")
-            for symbol, signal in sample_signals.items():
-                if abs(signal) > 0.01:  # Only log non-trivial signals
-                    logger.info(f"[{self.name}]   {symbol}: {signal:.6f}")
-
-        logger.debug(f"[{self.name}] Applied prediction-strength-based position sizing to {signals.shape[0]} dates")
-        return signals
+      # REMOVED: _apply_position_sizing method
+    # SOLID Principle: Position sizing and weight allocation are portfolio optimizer's responsibility
+    # Strategy layer only provides expected returns; optimizer handles risk-adjusted weight allocation
 
     def get_info(self) -> Dict:
         """Get multi-stock ML strategy information."""
@@ -590,46 +463,51 @@ class MLStrategy(BaseStrategy):
 
         return validation_results
 
-    def log_signal_validation(self, signals: pd.DataFrame):
+    def _log_expected_returns_validation(self, expected_returns: pd.DataFrame):
         """
-        Log validation results to help with debugging.
+        Log validation results for expected returns to help with debugging.
+
+        SOLID Principle: Simple validation without weight adjustment or normalization.
 
         Args:
-            signals: Generated signals DataFrame
+            expected_returns: Generated expected returns DataFrame
         """
-        logger.info(f"[{self.name}] 🔍 Validating signal diversity...")
+        logger.info(f"[{self.name}] 🔍 Validating expected returns diversity...")
 
-        validation_results = self.validate_signal_diversity(signals)
-
-        if 'error' in validation_results:
-            logger.error(f"[{self.name}] ❌ Validation failed: {validation_results['error']}")
+        if expected_returns.empty:
+            logger.error(f"[{self.name}] ❌ No expected returns to validate")
             return
 
-        # Log key metrics
-        logger.info(f"[{self.name}] 📊 Signal Validation Results:")
-        logger.info(f"[{self.name}]   Average time variance: {validation_results['avg_time_variance']:.8f}")
-        logger.info(f"[{self.name}]   Cross-sectional variance: {validation_results['cross_sectional_variance_stats']['mean']:.8f}")
-        logger.info(f"[{self.name}]   Average unique values per symbol: {validation_results['avg_unique_values']:.1f}")
+        # Basic validation metrics
+        logger.info(f"[{self.name}] 📊 Expected Returns Validation:")
+        logger.info(f"[{self.name}]   Shape: {expected_returns.shape}")
+        logger.info(f"[{self.name}]   Mean: {expected_returns.mean().mean():.6f}")
+        logger.info(f"[{self.name}]   Std: {expected_returns.std().mean():.6f}")
+        logger.info(f"[{self.name}]   Min: {expected_returns.min().min():.6f}")
+        logger.info(f"[{self.name}]   Max: {expected_returns.max().max():.6f}")
 
-        if 'avg_pairwise_correlation' in validation_results:
-            logger.info(f"[{self.name}]   Average pairwise correlation: {validation_results['avg_pairwise_correlation']:.4f}")
+        # Check signal diversity (important for portfolio optimizer)
+        time_variance = expected_returns.var(axis=0)
+        logger.info(f"[{self.name}]   Average time variance: {time_variance.mean():.8f}")
 
-        pos_dist = validation_results['position_distribution']
-        logger.info(f"[{self.name}]   Position distribution: {pos_dist['long_percentage']:.1f}% long, {pos_dist['short_percentage']:.1f}% short")
+        # Check for static signals (bad)
+        static_signals = (time_variance < 1e-8).sum()
+        if static_signals > 0:
+            logger.warning(f"[{self.name}] ⚠️ Found {static_signals} static signals")
+        else:
+            logger.info(f"[{self.name}] ✅ No static signals found")
 
-        # Log validation summary
-        summary = validation_results['validation_summary']
-        logger.info(f"[{self.name}] ✅ Validation summary:")
-        for key, value in summary.items():
-            status = "✅" if value else "❌"
-            logger.info(f"[{self.name}]   {status} {key}: {value}")
+        # Check cross-sectional variance
+        cross_sectional_variance = expected_returns.var(axis=1)
+        logger.info(f"[{self.name}]   Cross-sectional variance: {cross_sectional_variance.mean():.8f}")
 
-        # Sample signal patterns
-        if not signals.empty:
-            logger.info(f"[{self.name}] 📈 Sample signal patterns:")
-            sample_dates = signals.index[:min(3, len(signals.index))]
-            for date in sample_dates:
-                date_signals = signals.loc[date]
-                non_zero = date_signals[abs(date_signals) > 0.01]
-                if not non_zero.empty:
-                    logger.info(f"[{self.name}]   {date.date()}: {non_zero.to_dict()}")
+        # Log sample expected returns for verification
+        if not expected_returns.empty:
+            sample_date = expected_returns.index[0]
+            sample_returns = expected_returns.loc[sample_date]
+            non_zero = sample_returns[abs(sample_returns) > 0.001]
+            logger.info(f"[{self.name}] 📈 Sample expected returns for {sample_date.date()}:")
+            for symbol, ret in non_zero.items():
+                logger.info(f"[{self.name}]   {symbol}: {ret:.6f}")
+
+        logger.info(f"[{self.name}] ✅ Expected returns validation complete")

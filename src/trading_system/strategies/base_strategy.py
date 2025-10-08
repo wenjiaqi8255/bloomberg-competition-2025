@@ -88,6 +88,10 @@ class BaseStrategy(ABC):
         # Short selling control (default to long-only for safety)
         self.enable_short_selling = kwargs.get('enable_short_selling', False)
 
+        # Normalization configuration (dual-layer architecture)
+        self.enable_normalization = kwargs.get('enable_normalization', True)
+        self.normalization_method = kwargs.get('normalization_method', 'zscore')  # 'zscore' or 'minmax'
+
         # Signal tracking and diagnostics
         self._last_signals = None
         self._last_price_data = None
@@ -245,19 +249,20 @@ class BaseStrategy(ABC):
                 logger.info(f"[{self.name}] Processing symbol {symbol}...")
                 symbols_processed += 1
 
-                # Extract symbol features
-                symbol_features = self._extract_symbol_features(features, symbol)
-                logger.info(f"[{self.name}] Symbol {symbol}: extracted {len(symbol_features.columns)} features")
-
-                if symbol_features.empty:
-                    logger.warning(f"[{self.name}] No features found for symbol {symbol}")
-                    continue
-
                 # Get predictions for each date
                 symbol_predictions = []
 
                 for date in dates:
                     try:
+                        # Extract symbol features for this specific date (time-varying features)
+                        symbol_features = self._extract_symbol_features(features, symbol, date)
+                        logger.info(f"[{self.name}] Symbol {symbol}: extracted {len(symbol_features.columns)} features for {date}")
+
+                        if symbol_features.empty:
+                            logger.warning(f"[{self.name}] No features found for {symbol} on {date}")
+                            symbol_predictions.append(0.0)
+                            continue
+
                         # Get prediction from model for this specific date
                         logger.debug(f"[{self.name}] Getting prediction for {symbol} on {date}")
                         logger.debug(f"[{self.name}] Symbol features shape: {symbol_features.shape}, columns: {list(symbol_features.columns)}")
@@ -339,13 +344,14 @@ class BaseStrategy(ABC):
             logger.info(f"[{self.name}] Using strategy's feature pipeline (model pipeline not available)")
             return self.feature_pipeline
 
-    def _extract_symbol_features(self, features: pd.DataFrame, symbol: str) -> pd.DataFrame:
+    def _extract_symbol_features(self, features: pd.DataFrame, symbol: str, prediction_date: Optional[datetime] = None) -> pd.DataFrame:
         """
         Extract features for a specific symbol.
 
         Args:
-            features: Full feature DataFrame
+            features: Full feature DataFrame with MultiIndex (symbol, date) or (date, symbol)
             symbol: Symbol to extract
+            prediction_date: Specific date for prediction (for time-varying features)
 
         Returns:
             Features for the symbol
@@ -358,24 +364,95 @@ class BaseStrategy(ABC):
             if index_names[0] == 'symbol' and index_names[1] == 'date':
                 # Traditional (symbol, date) format
                 symbol_features = features.loc[symbol].copy()
-                # For panel data models, we need only the most recent features
+
+                # If prediction_date is specified, extract features for that specific date
+                if prediction_date is not None and len(symbol_features) > 1:
+                    # Find the closest date to prediction_date
+                    if hasattr(symbol_features.index, 'get_loc'):
+                        try:
+                            # Try to get exact match first
+                            date_features = symbol_features.loc[prediction_date]
+                            if isinstance(date_features, pd.Series):
+                                date_features = pd.DataFrame([date_features])
+                                date_features.index = [prediction_date]
+                            else:
+                                date_features.index = [prediction_date]
+                            return date_features
+                        except KeyError:
+                            # If exact date not found, find closest date
+                            available_dates = symbol_features.index
+                            if len(available_dates) > 0:
+                                closest_date = available_dates[available_dates <= prediction_date][-1]
+                                date_features = symbol_features.loc[closest_date]
+                                if isinstance(date_features, pd.Series):
+                                    date_features = pd.DataFrame([date_features])
+                                    date_features.index = [prediction_date]
+                                else:
+                                    date_features.index = [prediction_date]
+                                return date_features
+
+                # Fallback: use most recent features (for backward compatibility)
                 if len(symbol_features) > 1:
                     symbol_features = symbol_features.iloc[-1:].copy()
                 symbol_features.reset_index(drop=True, inplace=True)
                 return symbol_features
+
             elif index_names[0] == 'date' and index_names[1] == 'symbol':
                 # Panel data (date, symbol) format
                 symbol_features = features.xs(symbol, level='symbol').copy()
-                # For panel data models, we need only the most recent features
+
+                # If prediction_date is specified, extract features for that specific date
+                if prediction_date is not None and len(symbol_features) > 1:
+                    try:
+                        # Try to get exact match first
+                        if prediction_date in symbol_features.index:
+                            date_features = symbol_features.loc[prediction_date]
+                            if isinstance(date_features, pd.Series):
+                                date_features = pd.DataFrame([date_features])
+                                date_features.index = [prediction_date]
+                            else:
+                                date_features.index = [prediction_date]
+                            return date_features
+                        else:
+                            # If exact date not found, find closest date
+                            available_dates = symbol_features.index
+                            if len(available_dates) > 0:
+                                closest_date = available_dates[available_dates <= prediction_date][-1]
+                                date_features = symbol_features.loc[closest_date]
+                                if isinstance(date_features, pd.Series):
+                                    date_features = pd.DataFrame([date_features])
+                                    date_features.index = [prediction_date]
+                                else:
+                                    date_features.index = [prediction_date]
+                                return date_features
+                    except Exception as e:
+                        logger.warning(f"[{self.name}] Failed to extract date-specific features for {symbol} on {prediction_date}: {e}")
+
+                # Fallback: use most recent features (for backward compatibility)
                 if len(symbol_features) > 1:
                     symbol_features = symbol_features.iloc[-1:].copy()
                 symbol_features.reset_index(drop=True, inplace=True)
                 return symbol_features
+
             else:
                 # Unknown index order, try to find symbol level
                 if 'symbol' in index_names:
                     symbol_features = features.xs(symbol, level='symbol').copy()
-                    # For panel data models, we need only the most recent features
+                    # If prediction_date is specified, try to extract date-specific features
+                    if prediction_date is not None and len(symbol_features) > 1:
+                        try:
+                            if prediction_date in symbol_features.index:
+                                date_features = symbol_features.loc[prediction_date]
+                                if isinstance(date_features, pd.Series):
+                                    date_features = pd.DataFrame([date_features])
+                                    date_features.index = [prediction_date]
+                                else:
+                                    date_features.index = [prediction_date]
+                                return date_features
+                        except Exception as e:
+                            logger.warning(f"[{self.name}] Failed to extract date-specific features for {symbol} on {prediction_date}: {e}")
+
+                    # Fallback: use most recent features
                     if len(symbol_features) > 1:
                         symbol_features = symbol_features.iloc[-1:].copy()
                     symbol_features.reset_index(drop=True, inplace=True)
@@ -424,8 +501,14 @@ class BaseStrategy(ABC):
 
                     if len(positive_signals) > 0:
                         # Normalize positive signals to maintain equal relative weighting
-                        # This preserves the relative strength of long signals
-                        filtered_predictions.loc[date_idx, positive_signals.index] = positive_signals.values
+                        # Scale them so that they sum to 1 (or less if few signals)
+                        positive_sum = positive_signals.sum()
+                        if positive_sum > 0:
+                            # Scale to maintain relative proportions but keep within reasonable range
+                            scaled_signals = positive_signals / positive_sum
+                            # Ensure individual signals don't exceed 1.0
+                            scaled_signals = scaled_signals.clip(0, 1.0)
+                            filtered_predictions.loc[date_idx, positive_signals.index] = scaled_signals
 
                 logger.debug(f"[{self.name}] Renormalized positive signals after filtering negatives")
             else:
@@ -587,7 +670,110 @@ class BaseStrategy(ABC):
             return 0.0
         
         return PortfolioCalculator.calculate_concentration_risk(signals_to_eval)
-    
+
+    # ========================================================================
+    # NORMALIZATION UTILITY METHODS (DUAL-LAYER ARCHITECTURE)
+    # ========================================================================
+
+    def _cross_sectional_zscore(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Apply cross-sectional Z-score normalization to signals.
+
+        This method normalizes each row (each date) independently, ensuring that
+        the relative strength of signals within each time period is preserved
+        while putting all signals on a common scale.
+
+        Mathematical Formula:
+            z_score = (x - mean) / std
+
+        Args:
+            df: DataFrame with dates as index and assets as columns
+
+        Returns:
+            DataFrame with Z-score normalized values, clipped to [-3, 3] range
+        """
+        if df.empty:
+            return df
+
+        logger.debug(f"[{self.name}] Applying cross-sectional Z-score normalization...")
+        logger.debug(f"[{self.name}] Input range: [{df.min().min():.6f}, {df.max().max():.6f}]")
+
+        # Calculate row-wise mean and standard deviation
+        row_means = df.mean(axis=1)
+        row_stds = df.std(axis=1)
+
+        # Apply Z-score normalization
+        normalized = df.sub(row_means, axis=0).div(row_stds, axis=0)
+
+        # Clip extreme values to +/- 3 standard deviations
+        normalized = normalized.clip(-3, 3)
+
+        # Fill any remaining NaN values with 0
+        normalized = normalized.fillna(0)
+
+        logger.debug(f"[{self.name}] Output range: [{normalized.min().min():.6f}, {normalized.max().max():.6f}]")
+        logger.debug(f"[{self.name}] Cross-sectional normalization complete")
+
+        return normalized
+
+    def _min_max_normalize(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Apply cross-sectional Min-Max normalization to signals.
+
+        This method scales each row (each date) to the range [0, 1] independently.
+        Alternative to Z-score normalization when absolute ranking is preferred.
+
+        Mathematical Formula:
+            scaled = (x - min) / (max - min)
+
+        Args:
+            df: DataFrame with dates as index and assets as columns
+
+        Returns:
+            DataFrame with Min-Max normalized values in range [0, 1]
+        """
+        if df.empty:
+            return df
+
+        logger.debug(f"[{self.name}] Applying cross-sectional Min-Max normalization...")
+
+        # Calculate row-wise min and max
+        row_mins = df.min(axis=1)
+        row_maxs = df.max(axis=1)
+
+        # Apply Min-Max normalization
+        row_ranges = row_maxs - row_mins
+        # Avoid division by zero for constant rows
+        row_ranges = row_ranges.replace(0, 1)
+
+        normalized = df.sub(row_mins, axis=0).div(row_ranges, axis=0)
+
+        # Fill any NaN values with 0.5 (neutral position)
+        normalized = normalized.fillna(0.5)
+
+        logger.debug(f"[{self.name}] Min-Max normalization complete")
+
+        return normalized
+
+    def _apply_normalization(self, df: pd.DataFrame, method: str = 'zscore') -> pd.DataFrame:
+        """
+        Apply normalization using the specified method.
+
+        Args:
+            df: DataFrame to normalize
+            method: Normalization method ('zscore' or 'minmax')
+
+        Returns:
+            Normalized DataFrame
+        """
+        if method == 'zscore':
+            return self._cross_sectional_zscore(df)
+        elif method == 'minmax':
+            return self._min_max_normalize(df)
+        else:
+            logger.warning(f"[{self.name}] Unknown normalization method: {method}, using zscore")
+            return self._cross_sectional_zscore(df)
+
     def __str__(self):
         return f"{self.__class__.__name__}(name='{self.name}')"
     

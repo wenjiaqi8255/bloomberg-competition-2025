@@ -19,6 +19,7 @@ from typing import Dict, Any, Optional, List, Tuple
 from pathlib import Path
 
 import pandas as pd
+import numpy as np
 
 from .trainer import ModelTrainer, TrainingResult, TrainingConfig
 from ..base.model_factory import ModelFactory
@@ -48,7 +49,8 @@ class TrainingPipeline:
                  feature_pipeline: FeatureEngineeringPipeline,
                  config: Optional[TrainingConfig] = None,
                  registry_path: Optional[str] = None,
-                 data_strategy: Optional[DataProcessingStrategy] = None):
+                 data_strategy: Optional[DataProcessingStrategy] = None,
+                 model_config: Optional[Dict[str, Any]] = None):
         """
         Initialize the training pipeline.
 
@@ -58,16 +60,26 @@ class TrainingPipeline:
             config: Training configuration
             registry_path: Path for model registry
             data_strategy: Strategy for data processing (auto-selected if None)
+            model_config: Model-specific configuration (e.g., sequence_length for LSTM)
         """
         self.model_type = model_type
         self.feature_pipeline = feature_pipeline
         self.config = config or TrainingConfig()
+        self.model_config = model_config or {}
         self.registry = ModelRegistry(registry_path or "./models/")
         self.trainer = ModelTrainer(self.config)
 
         # Select appropriate data processing strategy based on model type
         if data_strategy is None:
-            self.data_strategy = DataStrategyFactory.create_strategy(model_type)
+            # Extract model-specific parameters for strategy initialization
+            strategy_kwargs = {}
+            if model_type.lower() in ['lstm', 'gru']:
+                strategy_kwargs['sequence_length'] = self.model_config.get('sequence_length', 10)
+
+            self.data_strategy = DataStrategyFactory.create_strategy(
+                model_type,
+                **strategy_kwargs
+            )
             logger.info(f"Auto-selected {self.data_strategy.__class__.__name__} for model type: {model_type}")
         else:
             self.data_strategy = data_strategy
@@ -165,31 +177,44 @@ class TrainingPipeline:
 
             logger.info(f"DEBUG: After _prepare_training_data:")
             logger.info(f"DEBUG: X shape: {X.shape}, y shape: {y.shape}")
-            logger.info(f"DEBUG: X date range: {X.index.min()} to {X.index.max()}")
-            logger.info(f"DEBUG: y date range: {y.index.min()} to {y.index.max()}")
-            logger.info(f"DEBUG: y stats: mean={y.mean():.6f}, std={y.std():.6f}, min={y.min():.6f}, max={y.max():.6f}")
-            logger.info(f"DEBUG: X has NaN values: {X.isnull().any().any()}, Total NaN count: {X.isnull().sum().sum()}")
-            logger.info(f"DEBUG: y has NaN values: {y.isnull().any()}, NaN count: {y.isnull().sum()}")
-            logger.info(f"DEBUG: X feature types sample: {dict(list(X.dtypes.head(10).items()))}")
 
-            # DEBUG: Check for any DataFrame columns (shouldn't exist but let's verify)
-            problematic_cols = []
-            for col in X.columns:
-                if isinstance(X[col], pd.DataFrame):
-                    problematic_cols.append(col)
-                    logger.error(f"DEBUG: Column '{col}' is a DataFrame with shape {X[col].shape}")
-                    logger.error(f"DEBUG: Column '{col}' columns: {list(X[col].columns)}")
-                    logger.error(f"DEBUG: Column '{col}' index: {X[col].index}")
+            # Handle different data types in debug logging
+            if isinstance(X, pd.DataFrame):
+                logger.info(f"DEBUG: X date range: {X.index.min()} to {X.index.max()}")
+                logger.info(f"DEBUG: y date range: {y.index.min()} to {y.index.max()}")
+                logger.info(f"DEBUG: y stats: mean={y.mean():.6f}, std={y.std():.6f}, min={y.min():.6f}, max={y.max():.6f}")
+                logger.info(f"DEBUG: X has NaN values: {X.isnull().any().any()}, Total NaN count: {X.isnull().sum().sum()}")
+                logger.info(f"DEBUG: y has NaN values: {y.isnull().any()}, NaN count: {y.isnull().sum()}")
+                logger.info(f"DEBUG: X feature types sample: {dict(list(X.dtypes.head(10).items()))}")
 
-            if problematic_cols:
-                logger.error(f"DEBUG: Found {len(problematic_cols)} DataFrame columns that should be Series: {problematic_cols}")
-                # Try to fix the issue by taking the first column if it's a single-column DataFrame
-                for col in problematic_cols:
-                    if isinstance(X[col], pd.DataFrame) and len(X[col].columns) == 1:
-                        logger.info(f"DEBUG: Attempting to fix column '{col}' by extracting first column")
-                        X[col] = X[col].iloc[:, 0]
+                # DEBUG: Check for any DataFrame columns (shouldn't exist but let's verify)
+                problematic_cols = []
+                for col in X.columns:
+                    if isinstance(X[col], pd.DataFrame):
+                        problematic_cols.append(col)
+                        logger.error(f"DEBUG: Column '{col}' is a DataFrame with shape {X[col].shape}")
+                        logger.error(f"DEBUG: Column '{col}' columns: {list(X[col].columns)}")
+                        logger.error(f"DEBUG: Column '{col}' index: {X[col].index}")
+
+                if problematic_cols:
+                    logger.error(f"DEBUG: Found {len(problematic_cols)} DataFrame columns that should be Series: {problematic_cols}")
+                    # Try to fix the issue by taking the first column if it's a single-column DataFrame
+                    for col in problematic_cols:
+                        if isinstance(X[col], pd.DataFrame) and len(X[col].columns) == 1:
+                            logger.info(f"DEBUG: Attempting to fix column '{col}' by extracting first column")
+                            X[col] = X[col].iloc[:, 0]
+                else:
+                    logger.info("DEBUG: All columns are properly formatted as Series")
+            elif isinstance(X, np.ndarray):
+                logger.info(f"DEBUG: LSTM array data - shape: {X.shape}, dtype: {X.dtype}")
+                if X.ndim == 3:
+                    logger.info(f"DEBUG: LSTM sequences: {X.shape[0]} samples, {X.shape[1]} timesteps, {X.shape[2]} features")
+                logger.info(f"DEBUG: y shape: {y.shape}, dtype: {y.dtype}")
+                logger.info(f"DEBUG: y stats: mean={y.mean():.6f}, std={y.std():.6f}, min={y.min():.6f}, max={y.max():.6f}")
+                logger.info(f"DEBUG: X has NaN values: {np.isnan(X).any()}, Total NaN count: {np.isnan(X).sum()}")
+                logger.info(f"DEBUG: y has NaN values: {np.isnan(y).any()}, NaN count: {np.isnan(y).sum()}")
             else:
-                logger.info("DEBUG: All columns are properly formatted as Series")
+                logger.info(f"DEBUG: Unknown data type: {type(X)}")
 
             # Step 4: Create and train model
             logger.info("Step 4: Training model...")
@@ -319,17 +344,18 @@ class TrainingPipeline:
             end_date=end_date
         )
 
-        logger.info(f"Strategy completed: {len(X)} samples, {len(X.columns)} features prepared")
+        # Handle both DataFrame and numpy array formats
+        if isinstance(X, pd.DataFrame):
+            logger.info(f"Strategy completed: {len(X)} samples, {len(X.columns)} features prepared")
+        elif isinstance(X, np.ndarray):
+            if X.ndim == 3:  # LSTM format: (samples, timesteps, features)
+                logger.info(f"Strategy completed: {X.shape[0]} sequences, {X.shape[1]} timesteps, {X.shape[2]} features prepared")
+            else:  # 2D array format
+                logger.info(f"Strategy completed: {X.shape[0]} samples, {X.shape[1]} features prepared")
+        else:
+            logger.info(f"Strategy completed: prepared data with shape {getattr(X, 'shape', 'unknown')}")
+
         return X, y
-
-    def _compute_features(self,
-                         price_data: Dict[str, pd.DataFrame],
-                         target_data: Dict[str, pd.Series]) -> pd.DataFrame:
-        """
-        [DEPRECATED] This method's logic has been moved to FeatureEngineeringPipeline.
-        """
-        raise NotImplementedError("This method is deprecated. Use FeatureEngineeringPipeline.")
-
 
     def _generate_pipeline_report(self,
                                  model_id: Optional[str],

@@ -4,8 +4,6 @@ Capital Allocator - Strategy Capital Management
 Manages capital allocation between different strategies, enforces allocation
 constraints, and tracks allocation drift and rebalancing needs.
 
-应该可以处理单个strategy的情况，而不是必须两个strategy
-而且不应该和core+satellite的逻辑混在一起
 """
 
 import logging

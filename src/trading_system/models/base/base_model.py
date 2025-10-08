@@ -302,20 +302,37 @@ class BaseModel(ABC):
         Raises:
             ValueError: If data is invalid
         """
-        if not isinstance(X, pd.DataFrame):
-            raise ValueError("X must be a pandas DataFrame")
+        # Support both DataFrame and numpy array inputs for different model types
+        if isinstance(X, pd.DataFrame):
+            if X.empty:
+                raise ValueError("X cannot be empty")
+        elif isinstance(X, np.ndarray):
+            if X.size == 0:
+                raise ValueError("X cannot be empty")
+        else:
+            # For neural network models that can accept numpy arrays
+            if len(X) == 0:
+                raise ValueError("X cannot be empty")
 
-        if X.empty:
+        # Additional DataFrame-specific validations
+        if isinstance(X, pd.DataFrame) and X.empty:
             raise ValueError("X cannot be empty")
 
-        if self.status == ModelStatus.TRAINED and hasattr(self, '_expected_features'):
+        # DataFrame-specific feature validation
+        if isinstance(X, pd.DataFrame) and self.status == ModelStatus.TRAINED and hasattr(self, '_expected_features'):
             missing_features = set(self._expected_features) - set(X.columns)
             if missing_features:
                 raise ValueError(f"Missing features: {missing_features}")
 
         if y is not None:
-            if not isinstance(y, pd.Series):
-                raise ValueError("y must be a pandas Series")
+            # Support both Series and numpy array for y
+            if isinstance(y, pd.Series):
+                pass  # Series is valid
+            elif isinstance(y, np.ndarray):
+                pass  # numpy array is valid for neural networks
+            else:
+                if not hasattr(y, '__len__'):
+                    raise ValueError("y must be a pandas Series or numpy array")
 
             if len(X) != len(y):
                 raise ValueError("X and y must have the same length")

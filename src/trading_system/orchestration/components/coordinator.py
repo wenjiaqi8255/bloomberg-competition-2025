@@ -4,8 +4,6 @@ Strategy Coordinator - Multi-Strategy Signal Management
 Coordinates multiple trading strategies, merges conflicting signals, and applies
 capacity constraints to ensure proper signal integration.
 
-应该可以处理单个strategy的情况，而不是必须两个strategy
-而且不应该和core+satellite的逻辑混在一起
 """
 
 import logging

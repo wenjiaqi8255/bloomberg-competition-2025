@@ -7,9 +7,12 @@ coordinating multiple trading strategies in a production environment.
 """
 
 from .system_orchestrator import SystemOrchestrator, SystemResult
+from .modern_system_orchestrator import ModernSystemOrchestrator, ModernSystemConfig
 
 __all__ = [
     'SystemOrchestrator',
     'SystemResult',
+    'ModernSystemOrchestrator',
+    'ModernSystemConfig',
 ]
 

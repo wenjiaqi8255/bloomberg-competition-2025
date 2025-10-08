@@ -266,8 +266,17 @@ class ModelTrainer:
         Raises:
             ValueError: If data is invalid
         """
-        if X.empty or y.empty:
-            raise ValueError("Training data cannot be empty")
+        # Handle both DataFrame and numpy array validation
+        if isinstance(X, pd.DataFrame):
+            if X.empty or y.empty:
+                raise ValueError("Training data cannot be empty")
+        elif isinstance(X, np.ndarray):
+            if X.size == 0 or y.size == 0:
+                raise ValueError("Training data cannot be empty")
+        else:
+            # Fallback for other data types
+            if len(X) == 0 or len(y) == 0:
+                raise ValueError("Training data cannot be empty")
 
         if len(X) != len(y):
             raise ValueError("X and y must have the same length")
@@ -306,8 +315,17 @@ class ModelTrainer:
 
         # Perform time series cross-validation
         for fold_idx, (train_idx, val_idx) in enumerate(self.cv.split(X)):
-            X_train_fold, X_val_fold = X.iloc[train_idx], X.iloc[val_idx]
-            y_train_fold, y_val_fold = y.iloc[train_idx], y.iloc[val_idx]
+            # Handle both DataFrame and numpy array indexing
+            if isinstance(X, pd.DataFrame):
+                X_train_fold, X_val_fold = X.iloc[train_idx], X.iloc[val_idx]
+                y_train_fold, y_val_fold = y.iloc[train_idx], y.iloc[val_idx]
+            elif isinstance(X, np.ndarray):
+                X_train_fold, X_val_fold = X[train_idx], X[val_idx]
+                y_train_fold, y_val_fold = y[train_idx], y[val_idx]
+            else:
+                # Fallback for other types
+                X_train_fold, X_val_fold = [X[i] for i in train_idx], [X[i] for i in val_idx]
+                y_train_fold, y_val_fold = [y[i] for i in train_idx], [y[i] for i in val_idx]
 
             # Create a copy of the model for this fold
             fold_model = self._create_model_copy(model)

@@ -143,6 +143,45 @@ class MetaModel(BaseModel):
             logger.warning(f"Fit method not implemented for '{self.method}'. Using equal weights as fallback.")
             self._fit_strategy_weights({'equal': pd.Series()}, pd.Series()) # Fallback to equal
 
+    def _cross_sectional_zscore(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Apply cross-sectional Z-score normalization to combined signals.
+
+        This method normalizes each row (each date) independently, ensuring that
+        the weighted combination of multiple strategies maintains consistent scaling.
+        This is Layer 2 of the dual-layer normalization architecture.
+
+        Mathematical Formula:
+            z_score = (x - mean) / std
+
+        Args:
+            df: DataFrame with dates as index and assets as columns
+
+        Returns:
+            DataFrame with Z-score normalized values, clipped to [-3, 3] range
+        """
+        if df.empty:
+            return df
+
+        logger.debug("Applying MetaModel cross-sectional Z-score normalization...")
+
+        # Calculate row-wise mean and standard deviation
+        row_means = df.mean(axis=1)
+        row_stds = df.std(axis=1)
+
+        # Apply Z-score normalization
+        normalized = df.sub(row_means, axis=0).div(row_stds, axis=0)
+
+        # Clip extreme values to +/- 3 standard deviations
+        normalized = normalized.clip(-3, 3)
+
+        # Fill any remaining NaN values with 0
+        normalized = normalized.fillna(0)
+
+        logger.debug("MetaModel cross-sectional normalization complete")
+
+        return normalized
+
     def combine(self, strategy_signals: Dict[str, pd.DataFrame]) -> pd.DataFrame:
         """
         Combines signals from multiple strategies using the learned weights.
@@ -193,6 +232,22 @@ class MetaModel(BaseModel):
             logger.warning("Combined signal is empty after processing all strategies.")
         else:
             logger.info(f"Successfully combined signals into a single DataFrame with shape {combined_signal.shape}")
+
+            # Apply MetaModel-layer normalization (Layer 2 of dual-layer architecture)
+            if self.params.get('enable_normalization', True):
+                logger.info("🔄 Applying MetaModel-layer normalization (Layer 2)")
+
+                # Log pre-normalization statistics
+                logger.debug(f"Pre-normalization range: [{combined_signal.min().min():.6f}, {combined_signal.max().max():.6f}]")
+
+                # Apply cross-sectional Z-score normalization
+                combined_signal = self._cross_sectional_zscore(combined_signal)
+
+                # Log post-normalization statistics
+                logger.debug(f"Post-normalization range: [{combined_signal.min().min():.6f}, {combined_signal.max().max():.6f}]")
+                logger.info("✅ MetaModel-layer normalization complete")
+            else:
+                logger.info("⚪ MetaModel-layer normalization disabled")
 
         return combined_signal
 

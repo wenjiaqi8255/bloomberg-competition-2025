@@ -329,8 +329,8 @@ class SystemOrchestrator:
             logger.info("[Stage 3/7] Reducing investment universe dimensionality...")
             universe_size = self.custom_configs.get('optimization_universe_size', 100)
             top_assets = combined_signal.iloc[0].abs().nlargest(universe_size).index
-            reduced_signals = combined_signal.iloc[0][top_assets]
-            logger.info(f"Reduced universe to top {len(reduced_signals)} assets.")
+            expected_returns = combined_signal.iloc[0][top_assets]
+            logger.info(f"Reduced universe to top {len(expected_returns)} assets.")
 
             # Stage 4: Estimate Risk (Covariance)
             logger.info("[Stage 4/7] Estimating covariance matrix...")
@@ -360,15 +360,14 @@ class SystemOrchestrator:
 
             # Stage 6: Portfolio Optimization
             logger.info("[Stage 6/7] Optimizing portfolio...")
-            logger.info(f"Reduced signals: {reduced_signals.to_dict()}")
+            logger.info(f"Expected returns for optimizer: {expected_returns.to_dict()}")
             box_constraints = self.portfolio_optimizer.build_box_constraints(classifications, self.box_limits)
             logger.info(f"Box constraints: {box_constraints}")
 
-            # Add other constraints like max position weight
-            # (Note: This is simplified. A more robust implementation would fetch this from config)
-            # For now, bounds handle the 0-1 constraint, and compliance checks post-facto.
+            # SOLID Principle: Portfolio optimizer handles weight adjustment based on expected returns
+            # Strategy layer provides expected returns; optimizer manages risk-adjusted allocation
 
-            final_weights = self.portfolio_optimizer.optimize(reduced_signals, cov_matrix, box_constraints)
+            final_weights = self.portfolio_optimizer.optimize(expected_returns, cov_matrix, box_constraints)
             logger.info(f"Final weights: {final_weights.to_dict()}")
             logger.info(f"Final weights sum: {final_weights.sum()}")
             logger.info(f"Final weights type: {type(final_weights)}")
