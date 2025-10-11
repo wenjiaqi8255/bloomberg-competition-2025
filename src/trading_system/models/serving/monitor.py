@@ -12,16 +12,15 @@ import logging
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
-from typing import Dict, Any, Optional, List, Tuple, Union
+from typing import Dict, Any, Optional, List, Union
 from dataclasses import dataclass, field
 from pathlib import Path
 import json
 from scipy import stats
-import warnings
 
 from ..base.base_model import BaseModel
-from ..utils.performance_evaluator import PerformanceEvaluator
-from ...utils.experiment_tracking.interface import ExperimentTrackerInterface
+from ..utils.performance_evaluator import PerformanceEvaluator as PerformanceEvaluator
+from src.trading_system.experiment_tracking import ExperimentTrackerInterface
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +106,7 @@ class ModelMonitor:
         self.monitor_run_id = None
         if self.tracker:
             try:
-                from ...utils.experiment_tracking.config import ExperimentConfig
+                from src.trading_system.experiment_tracking import ExperimentConfig
                 monitor_config = ExperimentConfig(
                     project_name="model_monitoring",
                     experiment_name=f"monitor_{model_id}",

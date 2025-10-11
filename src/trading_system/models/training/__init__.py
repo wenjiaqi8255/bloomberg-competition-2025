@@ -15,13 +15,10 @@ Key Features:
 
 from .trainer import ModelTrainer, TrainingResult, TrainingConfig
 from .training_pipeline import TrainingPipeline
-from .experiment_manager import TrainingExperimentManager, ExperimentMetadata
 
 __all__ = [
     'ModelTrainer',
     'TrainingResult',
     'TrainingConfig',
-    'TrainingPipeline',
-    'TrainingExperimentManager',
-    'ExperimentMetadata'
+    'TrainingPipeline'
 ]

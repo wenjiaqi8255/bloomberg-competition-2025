@@ -32,15 +32,14 @@ Usage:
 """
 
 # Core imports
-import pandas as pd
 from typing import Optional, List, Dict
 from .models.data_types import (
     FeatureMetrics, FeatureResult,
     PriceData, ForwardReturns, ValidationData, FeatureData,
     validate_price_data, align_data, create_default_config
 )
-from ..config.feature import FeatureType, FeatureConfig
-from .utils.technical_features import TechnicalIndicatorCalculator
+from src.trading_system.feature_engineering.base.feature import FeatureType, FeatureConfig
+from .components.technical_features import TechnicalIndicatorCalculator
 
 
 # ============================================================================

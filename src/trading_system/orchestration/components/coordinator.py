@@ -15,6 +15,8 @@ from ...types.signals import TradingSignal
 from ...types.enums import SignalType
 from ...strategies.base_strategy import BaseStrategy
 from ...types.enums import AssetClass
+from ..utils.performance_tracker import ComponentPerformanceTrackerMixin
+from ..utils.config_validator import ComponentConfigValidator
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +41,7 @@ class CoordinatorConfig:
             self.strategy_priority = {}
 
 
-class StrategyCoordinator:
+class StrategyCoordinator(ComponentPerformanceTrackerMixin):
     """
     Coordinates multiple strategies and manages signal integration.
 
@@ -58,19 +60,12 @@ class StrategyCoordinator:
             strategies: List of trading strategies
             config: Coordinator configuration
         """
+        super().__init__()
         self.strategies = strategies
         self.config = config
 
         # Signal history for debugging
         self.signal_history: List[Dict[str, Any]] = []
-
-        # Performance tracking
-        self.coordination_stats = {
-            'total_signals_processed': 0,
-            'conflicts_resolved': 0,
-            'signals_filtered': 0,
-            'capacity_rejections': 0
-        }
 
         logger.info(f"Initialized StrategyCoordinator with {len(strategies)} strategies")
         logger.info(f"Conflict resolution method: {config.signal_conflict_resolution}")
@@ -85,11 +80,14 @@ class StrategyCoordinator:
         Returns:
             Dictionary mapping strategy names to their signals
         """
+        operation_id = self.track_operation("coordinate_strategies", {"date": date.isoformat()})
+        
         try:
             logger.info(f"Coordinating strategies for {date}")
 
             # Step 1: Collect signals from all strategies
             all_signals = self._collect_strategy_signals(date)
+            self.track_counter("signals_processed", len(all_signals))
 
             # Step 2: Apply capacity constraints if enabled
             if self.config.capacity_scaling:
@@ -97,6 +95,7 @@ class StrategyCoordinator:
 
             # Step 3: Filter weak signals
             all_signals = self._filter_weak_signals(all_signals)
+            self.track_counter("signals_filtered", len(all_signals))
 
             # Step 4: Group signals by strategy
             strategy_signals = self._group_signals_by_strategy(all_signals)
@@ -105,10 +104,12 @@ class StrategyCoordinator:
             self._record_coordination(date, all_signals, strategy_signals)
 
             logger.info(f"Coordination completed: {len(all_signals)} total signals")
+            self.end_operation(operation_id, success=True, metadata={"total_signals": len(all_signals)})
             return strategy_signals
 
         except Exception as e:
             logger.error(f"Strategy coordination failed for {date}: {e}")
+            self.end_operation(operation_id, success=False, metadata={"error": str(e)})
             return {}
 
     def _collect_strategy_signals(self, date: datetime) -> List[TradingSignal]:
@@ -130,9 +131,9 @@ class StrategyCoordinator:
 
             except Exception as e:
                 logger.error(f"Failed to get signals from {strategy.name}: {e}")
+                self.track_counter("strategy_failures", 1)
                 continue
 
-        self.coordination_stats['total_signals_processed'] += len(all_signals)
         return all_signals
 
     def _apply_capacity_constraints(self, signals: List[TradingSignal], date: datetime) -> List[TradingSignal]:
@@ -147,7 +148,7 @@ class StrategyCoordinator:
         constrained_signals = signals[:self.config.max_signals_per_day]
 
         rejected_count = len(signals) - len(constrained_signals)
-        self.coordination_stats['capacity_rejections'] += rejected_count
+        self.track_counter("capacity_rejections", rejected_count)
 
         logger.warning(f"Capacity constraint: rejected {rejected_count} signals (kept {len(constrained_signals)})")
         return constrained_signals
@@ -160,7 +161,7 @@ class StrategyCoordinator:
         ]
 
         filtered_count = len(signals) - len(filtered_signals)
-        self.coordination_stats['signals_filtered'] += filtered_count
+        self.track_counter("weak_signals_filtered", filtered_count)
 
         if filtered_count > 0:
             logger.debug(f"Filtered {filtered_count} weak signals")
@@ -189,7 +190,7 @@ class StrategyCoordinator:
             'signals_per_strategy': {
                 name: len(signals) for name, signals in strategy_signals.items()
             },
-            'coordination_stats': self.coordination_stats.copy()
+            'coordination_stats': self.get_performance_stats()
         }
 
         self.signal_history.append(record)
@@ -201,7 +202,7 @@ class StrategyCoordinator:
     def get_coordination_stats(self) -> Dict[str, Any]:
         """Get coordination statistics."""
         return {
-            'stats': self.coordination_stats.copy(),
+            'stats': self.get_performance_stats(),
             'recent_history': self.signal_history[-10:],  # Last 10 records
             'strategies_count': len(self.strategies),
             'config': {
@@ -213,32 +214,22 @@ class StrategyCoordinator:
 
     def reset_stats(self) -> None:
         """Reset coordination statistics."""
-        self.coordination_stats = {
-            'total_signals_processed': 0,
-            'conflicts_resolved': 0,
-            'signals_filtered': 0,
-            'capacity_rejections': 0
-        }
+        self.reset_performance_stats()
         self.signal_history.clear()
         logger.info("Reset coordination statistics")
 
     def validate_configuration(self) -> Tuple[bool, List[str]]:
         """Validate coordinator configuration."""
-        issues = []
-
-        if self.config.max_signals_per_day <= 0:
-            issues.append("max_signals_per_day must be positive")
-
-        if self.config.min_signal_strength < 0 or self.config.min_signal_strength > 1:
-            issues.append("min_signal_strength must be between 0 and 1")
-
-        if self.config.max_position_size <= 0 or self.config.max_position_size > 1:
-            issues.append("max_position_size must be between 0 and 1")
-
-        if self.config.signal_conflict_resolution not in ["merge", "priority", "cancel"]:
-            issues.append("signal_conflict_resolution must be one of: merge, priority, cancel")
-
+        config_dict = {
+            'max_signals_per_day': self.config.max_signals_per_day,
+            'signal_conflict_resolution': self.config.signal_conflict_resolution,
+            'min_signal_strength': self.config.min_signal_strength,
+            'max_position_size': self.config.max_position_size
+        }
+        
+        is_valid, issues = ComponentConfigValidator.validate_coordinator_config(config_dict)
+        
         if not self.strategies:
             issues.append("At least one strategy must be provided")
 
-        return len(issues) == 0, issues
+        return is_valid and len(issues) == 0, issues

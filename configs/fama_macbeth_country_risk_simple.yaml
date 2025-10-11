@@ -1,0 +1,135 @@
+# Fama-MacBeth Strategy with Country Risk Premium (Simple Version)
+# This configuration integrates static country risk features into Fama-MacBeth cross-sectional regression
+
+# Experiment tracking
+experiment:
+  name: "fama_macbeth_country_risk_simple"
+  project: "bloomberg_competition"
+  tags: ["fama_macbeth", "country_risk", "cross_sectional"]
+
+# Data provider configuration
+data_provider:
+  type: "YFinanceProvider"
+  parameters:
+    symbols: ["AAPL", "GOOGL", "MSFT", "AMZN", "TSLA", "META", "NVDA", "JPM", "JNJ", "V"]
+    start_date: "2020-01-01"
+    # end_date: "2024-01-01"
+
+# Country risk data provider
+factor_data_provider:
+  type: "CountryRiskProvider"
+  parameters:
+    excel_path: "data/country_risk_premium.csv"
+    symbol_country_map:
+      AAPL: "United States"
+      GOOGL: "United States"
+      MSFT: "United States"
+      AMZN: "United States"
+      TSLA: "United States"
+      META: "United States"
+      NVDA: "United States"
+      JPM: "United States"
+      JNJ: "United States"
+      V: "United States"
+
+# Training setup
+training_setup:
+  model:
+    model_type: "fama_macbeth"
+    parameters:
+      # Fama-MacBeth regression parameters
+      lookback_period: 252  # 1 year of daily data for each regression
+      min_observations: 30   # Minimum observations per cross-sectional regression
+      newey_west_lag: 4     # Newey-West HAC adjustment lag
+      robust_standard_errors: true
+
+  # Feature engineering configuration
+  feature_engineering:
+    # Enable cross-sectional features (required for Fama-MacBeth)
+    include_cross_sectional: true
+    cross_sectional_features:
+      - "market_cap"        # Market capitalization proxy
+      - "book_to_market"    # Book-to-market proxy
+      - "size"              # Size factor
+      - "value"             # Value factor
+      - "momentum"          # Momentum factor
+      - "volatility"        # Volatility factor
+      - "country_risk_premium"      # Country risk premium
+      - "equity_risk_premium"       # Equity risk premium
+      - "default_spread"            # Default spread
+      - "corporate_tax_rate"        # Corporate tax rate
+
+    # Cross-sectional feature parameters
+    cross_sectional_lookback:
+      momentum: 252        # 12-month momentum
+      volatility: 60        # 60-day volatility
+      ma_long: 200         # 200-day moving average
+      ma_short: 50         # 50-day moving average
+
+    # Feature normalization and winsorization
+    normalize_features: false
+    winsorize_percentile: 0.01
+
+  
+  # Training parameters
+  parameters:
+    symbols: ["AAPL", "GOOGL", "MSFT", "AMZN", "TSLA", "META", "NVDA", "JPM", "JNJ", "V"]
+    start_date: "2020-01-01"
+    end_date: "2024-01-01"
+    validation_split: 0.2
+    test_split: 0.2
+    random_seed: 42
+
+# Backtest configuration
+backtest:
+  initial_capital: 1000000
+  start_date: "2020-01-01"
+  end_date: "2024-01-01"
+  rebalance_frequency: "monthly"
+  transaction_costs:
+    commission: 0.001  # 0.1% commission
+    spread: 0.0005     # 0.05% spread
+    slippage: 0.0001   # 0.01% slippage
+
+# Strategy configuration
+strategy:
+  type: "FamaMacBethStrategy"
+  parameters:
+    # Use the trained model from training pipeline
+    model_id: "auto"  # Will be replaced with actual model ID from training
+    model_registry_path: "./models/"
+
+    # Portfolio construction parameters
+    long_short_neutral: true
+    max_position_size: 0.1  # 10% max position per stock
+    min_position_size: 0.05 # 5% min position per stock
+
+    # Risk management
+    max_leverage: 1.5
+    stop_loss: 0.15      # 15% stop loss
+    position_sizing: "equal_weight"
+
+    # Signal generation
+    signal_threshold: 0.01  # Minimum signal strength
+    rebalance_threshold: 0.05  # Rebalance when weights change by more than 5%
+
+# Asset universe
+universe: ["AAPL", "GOOGL", "MSFT", "AMZN", "TSLA", "META", "NVDA", "JPM", "JNJ", "V"]
+
+# Performance tracking
+performance:
+  benchmark: "SPY"
+  metrics:
+    - "total_return"
+    - "sharpe_ratio"
+    - "max_drawdown"
+    - "alpha"
+    - "beta"
+    - "information_ratio"
+    - "turnover"
+    - "tracking_error"
+
+# Logging configuration
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"

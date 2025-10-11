@@ -17,6 +17,8 @@ from ...types.signals import TradingSignal
 from ...types.enums import SignalType
 from ...types.portfolio import Portfolio, Position, Trade
 from ...types.enums import AssetClass
+from ..utils.performance_tracker import ComponentPerformanceTrackerMixin
+from ..utils.config_validator import ComponentConfigValidator
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +115,7 @@ class Order:
             self.created_time = datetime.now()
 
 
-class TradeExecutor:
+class TradeExecutor(ComponentPerformanceTrackerMixin):
     """
     Executes trades based on trading signals.
 
@@ -132,6 +134,7 @@ class TradeExecutor:
         Args:
             config: Execution configuration
         """
+        super().__init__()
         self.config = config
 
         # Execution state
@@ -143,16 +146,7 @@ class TradeExecutor:
         self.daily_trades: Dict[str, List[datetime]] = {}
         self.symbol_last_trade: Dict[str, datetime] = {}
 
-        # Performance tracking
-        self.execution_stats = {
-            'total_orders': 0,
-            'successful_executions': 0,
-            'failed_executions': 0,
-            'partial_executions': 0,
-            'average_execution_time_ms': 0,
-            'total_slippage_bps': 0,
-            'total_commission_usd': 0
-        }
+        # Performance tracking is now handled by ComponentPerformanceTrackerMixin
 
         # Risk tracking
         self.daily_order_count = 0
@@ -175,6 +169,8 @@ class TradeExecutor:
         Returns:
             List of executed trades
         """
+        operation_id = self.track_operation("execute_trades", {"signal_count": len(signals)})
+        
         try:
             logger.info(f"Executing {len(signals)} trading signals")
 
@@ -183,21 +179,26 @@ class TradeExecutor:
 
             # Step 1: Convert signals to orders
             orders = self._signals_to_orders(signals, portfolio)
+            self.track_counter("orders_created", len(orders))
 
             # Step 2: Apply execution constraints
             filtered_orders = self._apply_execution_constraints(orders, portfolio)
+            self.track_counter("orders_filtered", len(orders) - len(filtered_orders))
 
             # Step 3: Execute orders
             executed_trades = self._execute_orders(filtered_orders, market_data)
+            self.track_counter("trades_executed", len(executed_trades))
 
             # Step 4: Update tracking
             self._update_execution_tracking(executed_trades)
 
             logger.info(f"Trade execution completed: {len(executed_trades)} trades executed")
+            self.end_operation(operation_id, success=True, result={"trades_executed": len(executed_trades)})
             return executed_trades
 
         except Exception as e:
             logger.error(f"Trade execution failed: {e}")
+            self.end_operation(operation_id, success=False, result={"error": str(e)})
             return []
 
     def _reset_daily_counters(self) -> None:
@@ -351,7 +352,7 @@ class TradeExecutor:
             except Exception as e:
                 logger.error(f"Failed to execute order {order.id}: {e}")
                 order.status = ExecutionStatus.FAILED
-                self.execution_stats['failed_executions'] += 1
+                self.track_counter("failed_executions", 1)
                 continue
 
         return executed_trades
@@ -361,7 +362,7 @@ class TradeExecutor:
         # Update order status
         order.status = ExecutionStatus.SUBMITTED
         order.submitted_time = datetime.now()
-        self.execution_stats['total_orders'] += 1
+        self.track_counter("orders_submitted", 1)
         self.daily_order_count += 1
 
         # Simulate execution delay
@@ -406,9 +407,9 @@ class TradeExecutor:
         self._update_symbol_tracking(order.symbol)
 
         # Update statistics
-        self.execution_stats['successful_executions'] += 1
-        self.execution_stats['total_commission_usd'] += commission
-        self.execution_stats['total_slippage_bps'] += slippage_bps
+        self.track_counter("successful_executions", 1)
+        self.track_counter("total_commission_usd", int(commission * 100))  # Convert to cents for integer tracking
+        self.track_counter("total_slippage_bps", slippage_bps)
 
         return trade
 
@@ -470,15 +471,18 @@ class TradeExecutor:
         # Calculate average slippage (simplified)
         avg_slippage_bps = self.config.expected_slippage_bps  # Would calculate from actual data
 
+        # Get performance stats from the unified tracker
+        performance_stats = self.get_performance_stats()
+        
         return {
             'period_days': days,
             'total_trades': total_trades,
-            'success_rate': self.execution_stats['successful_executions'] / max(1, self.execution_stats['total_orders']),
+            'success_rate': performance_stats['stats']['successful_operations'] / max(1, performance_stats['stats']['total_operations']),
             'average_slippage_bps': avg_slippage_bps,
             'total_commission_usd': total_commission,
             'total_value_usd': total_value,
             'commission_rate_pct': (total_commission / total_value * 100) if total_value > 0 else 0,
-            'stats': self.execution_stats.copy(),
+            'stats': performance_stats,
             'recent_activity': self.execution_history[-10:]  # Last 10 execution records
         }
 
@@ -497,21 +501,12 @@ class TradeExecutor:
 
     def validate_configuration(self) -> Tuple[bool, List[str]]:
         """Validate executor configuration."""
-        issues = []
-
-        if self.config.max_order_size_percent <= 0 or self.config.max_order_size_percent > 0.5:
-            issues.append("max_order_size_percent must be between 0 and 50%")
-
-        if self.config.min_order_size_usd <= 0:
-            issues.append("min_order_size_usd must be positive")
-
-        if self.config.max_positions_per_day <= 0:
-            issues.append("max_positions_per_day must be positive")
-
-        if self.config.commission_rate < 0 or self.config.commission_rate > 0.01:
-            issues.append("commission_rate should be between 0 and 1%")
-
-        if self.config.cooling_period_hours < 0:
-            issues.append("cooling_period_hours must be non-negative")
-
-        return len(issues) == 0, issues
+        config_dict = {
+            'max_order_size_percent': self.config.max_order_size_percent,
+            'min_order_size_usd': self.config.min_order_size_usd,
+            'max_positions_per_day': self.config.max_positions_per_day,
+            'commission_rate': self.config.commission_rate,
+            'cooling_period_hours': self.config.cooling_period_hours
+        }
+        
+        return ComponentConfigValidator.validate_executor_config(config_dict)

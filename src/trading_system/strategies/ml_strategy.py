@@ -255,9 +255,11 @@ class MLStrategy(BaseStrategy):
         logger.info(f"[{self.name}]   Max: {predictions.max().max():.6f}")
 
         # Apply strategy-layer normalization (Layer 1 of dual-layer architecture)
+        # For ML strategies, always use min-max normalization to ensure [0,1] range for TradingSignal compatibility
         if self.enable_normalization:
-            predictions = self._apply_normalization(predictions, self.normalization_method)
-            logger.info(f"[{self.name}] 🔄 Applied strategy-layer normalization (method: {self.normalization_method})")
+            normalization_method = 'minmax'  # Force min-max for ML strategies
+            predictions = self._apply_normalization(predictions, normalization_method)
+            logger.info(f"[{self.name}] 🔄 Applied strategy-layer normalization (method: {normalization_method})")
             logger.info(f"[{self.name}]   Normalized range: [{predictions.min().min():.6f}, {predictions.max().max():.6f}]")
         else:
             logger.info(f"[{self.name}] ⚪ Strategy-layer normalization disabled")

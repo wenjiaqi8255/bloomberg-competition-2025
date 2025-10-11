@@ -1,0 +1,191 @@
+# Optimal System Configuration Template
+# =====================================
+# 一行代码最优系统配置模板
+
+# 系统配置
+system:
+  name: "optimal_system_demo"
+  description: "一行代码找到最佳模型+元模型组合系统"
+
+# 模型选择配置
+model_selection:
+  n_trials: 50  # HPO优化次数
+  primary_metric: "sharpe_ratio"  # 主要优化指标
+  min_trades: 10  # 最小交易次数
+  enable_parallel: true  # 并行优化
+
+  # 模型类型列表
+  model_types:
+    - "xgboost"
+    - "lstm"
+    - "random_forest"
+    - "lightgbm"
+
+  # 验证要求
+  validation_requirements:
+    sharpe_ratio: 0.8
+    max_drawdown: -0.25
+    win_rate: 0.45
+
+# 元模型选择配置
+metamodel_selection:
+  n_trials: 50  # 元模型HPO次数
+  weight_method: "sharpe_weighted"  # 权重方法
+  min_weight: 0.05  # 最小权重
+  max_weight: 0.5  # 最大权重
+  combination_method: "weighted_average"  # 组合方法
+  enable_cross_validation: true  # 交叉验证
+  cv_folds: 5  # CV折数
+
+# 系统评估配置
+system_evaluation:
+  primary_metrics:
+    - "sharpe_ratio"
+    - "sortino_ratio"
+    - "max_drawdown"
+    - "total_return"
+
+  # 最低要求
+  min_requirements:
+    sharpe_ratio: 0.8
+    max_drawdown: -0.25
+    win_rate: 0.45
+    diversification_benefit: 0.1
+    concentration: 0.3
+
+  benchmark_symbol: "SPY"
+  enable_attribution: true
+  enable_risk_analysis: true
+
+# 组合构建配置
+portfolio_construction:
+  method: "mean_variance"  # 组合方法
+  risk_aversion: 2.0  # 风险厌恶系数
+  target_volatility: 0.15  # 目标波动率
+  max_positions: 20  # 最大持仓数
+
+  # 约束条件
+  constraints:
+    min_position_size: 0.01
+    max_position_size: 0.2
+    max_sector_exposure: 0.3
+    turnover_limit: 0.2
+
+# 数据配置
+data:
+  # 训练数据时间范围
+  train_period:
+    start: "2020-01-01"
+    end: "2022-12-31"
+
+  # 测试数据时间范围
+  test_period:
+    start: "2023-01-01"
+    end: "2023-12-31"
+
+  # 数据频率
+  frequency: "daily"
+
+  # 资产池
+  universe:
+    - "AAPL"
+    - "GOOGL"
+    - "MSFT"
+    - "AMZN"
+    - "TSLA"
+    - "NVDA"
+    - "META"
+    - "NFLX"
+    - "AMD"
+    - "INTC"
+
+# 输出配置
+output:
+  save_results: true  # 保存结果
+  output_directory: "./optimal_system_results"  # 输出目录
+  generate_report: true  # 生成报告
+  log_level: "INFO"  # 日志级别
+
+  # 报告格式
+  report_formats:
+    - "json"
+    - "csv"
+    - "html"
+
+  # 可视化
+  visualizations:
+    - "performance_charts"
+    - "risk_analysis"
+    - "attribution_analysis"
+    - "model_comparison"
+
+# 实验跟踪
+experiment:
+  enable_wandb: false  # 是否启用WandB
+  project_name: "optimal_system"
+  experiment_name: "optimal_system_demo"
+
+  # 超参数记录
+  log_hyperparameters: true
+
+  # 性能指标记录
+  log_metrics:
+    - "sharpe_ratio"
+    - "total_return"
+    - "max_drawdown"
+    - "win_rate"
+    - "sortino_ratio"
+    - "calmar_ratio"
+    - "information_ratio"
+    - "alpha"
+    - "beta"
+
+# 高级配置
+advanced:
+  # 风险管理
+  risk_management:
+    enable_stops: true
+    stop_loss_threshold: -0.05
+    take_profit_threshold: 0.1
+    max_drawdown_stop: -0.15
+
+  # 交易成本
+  transaction_costs:
+    commission: 0.001
+    spread: 0.0005
+    slippage: 0.0005
+    short_borrow_cost: 0.002
+
+  # 因子模型
+  factor_model:
+    enable: true
+    factors:
+      - "market"
+      - "size"
+      - "value"
+      - "momentum"
+      - "quality"
+
+  # 机器学习特征
+  features:
+    technical_indicators:
+      - "sma"
+      - "ema"
+      - "rsi"
+      - "macd"
+      - "bollinger_bands"
+      - "stochastic"
+      - "williams_r"
+
+    price_features:
+      - "returns"
+      - "log_returns"
+      - "volatility"
+      - "momentum"
+      - "reversal"
+
+    pattern_features:
+      - "doji"
+      - "hammer"
+      - "shooting_star"
+      - "engulfing"

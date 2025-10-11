@@ -28,6 +28,7 @@ class DataSource(Enum):
     KENNETH_FRENCH = "kenneth_french"
     POLYGON = "polygon"
     IEX = "iex"
+    EXCEL_FILE = "excel_file"
 
 
 class SignalType(Enum):

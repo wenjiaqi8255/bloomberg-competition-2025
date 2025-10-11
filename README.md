@@ -108,6 +108,18 @@ poetry run python run_experiment.py experiment -c configs/lstm_strategy_config.y
 poetry run python run_experiment.py metamodel --config configs/metamodel_experiment_config.yaml
 ```
 
+#### 场景6：FF5 + Box-Based组合构建 (🆕 新功能)
+```bash
+# 快速演示FF5模型与Box-First方法结合
+python run_ff5_box_experiment.py --demo
+
+# 完整FF5 + Box-Based实验
+python run_ff5_box_experiment.py --config configs/ff5_box_based_experiment.yaml
+
+# 使用统一实验运行器
+poetry run python run_experiment.py experiment -c configs/ff5_box_demo.yaml
+```
+
 ## Architecture
 
 ```
@@ -119,11 +131,76 @@ src/trading_system/
 │   ├── base/               # BaseModel interface and ModelRegistry
 │   ├── training/           # TrainingPipeline and MetaModel training
 │   └── finetune/           # Hyperparameter optimization with Optuna
+├── portfolio_construction/  # 🆕 Box-First portfolio construction framework
+│   ├── interfaces.py      # IPortfolioBuilder and supporting interfaces
+│   ├── box_based_builder.py # Box-First methodology implementation
+│   ├── quantitative_builder.py # Traditional optimization wrapper
+│   ├── factory.py         # PortfolioBuilderFactory for method selection
+│   └── box_weight_manager.py # Box weight allocation strategies
 ├── orchestration/           # System orchestration (SystemOrchestrator, MetaModel)
 ├── feature_engineering/     # Technical indicators and feature pipelines
 ├── utils/                   # Utilities (WandB logger, risk metrics, position sizing)
 └── experiment_orchestrator.py  # Unified experiment orchestration
 ```
+
+## 🆕 Box-First Portfolio Construction
+
+The system now includes a **Box-First portfolio construction framework** that solves the concentration problem in traditional optimization methods.
+
+### 🎯 Problem Solved
+Traditional quantitative optimization often concentrates investments in few boxes (e.g., 80% in [large/growth/US/tech], 15% in [large/growth/US/finance]). The **Box-First methodology** ensures:
+
+- ✅ **Systematic box coverage** - Every target box gets representation
+- ✅ **Controlled diversification** - No concentration in few boxes
+- ✅ **Flexible allocation** - Multiple weight strategies supported
+- ✅ **Signal-driven selection** - Top stocks selected within each box
+
+### 🏗️ 4-Dimensional Box Structure
+- **Size**: large, mid, small
+- **Style**: growth, value
+- **Region**: developed, emerging
+- **Sector**: Technology, Financials, Healthcare, etc.
+
+### 📦 Usage Examples
+
+```bash
+# Quick demo
+python run_ff5_box_experiment.py --demo
+
+# Full experiment
+python run_ff5_box_experiment.py --config configs/ff5_box_based_experiment.yaml
+
+# Using unified runner
+poetry run python run_experiment.py experiment -c configs/ff5_box_demo.yaml
+```
+
+### 🔧 Configuration Example
+
+```yaml
+strategy:
+  parameters:
+    portfolio_construction:
+      method: "box_based"
+      stocks_per_box: 2
+      allocation_method: "signal_proportional"
+      box_weights:
+        method: "equal"
+        dimensions:
+          size: ["large", "mid", "small"]
+          style: ["growth", "value"]
+          region: ["developed"]
+          sector: ["Technology", "Financials", "Healthcare"]
+```
+
+### 📊 Key Benefits
+| Feature | Box-Based | Traditional |
+|---------|-----------|------------|
+| Box Coverage | 60-80% | 10-30% |
+| Concentration Risk | Low | High |
+| Industry Diversification | High | Low |
+| Sharpe Ratio Stability | More Stable | Variable |
+
+📖 **Detailed Documentation**: See `FF5_BOX_README.md` for comprehensive usage guide.
 
 ## MetaModel Strategy Combination
 

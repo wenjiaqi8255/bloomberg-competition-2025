@@ -1,0 +1,88 @@
+# Box Features Demo Configuration
+# This configuration demonstrates how to enable box classification features
+# in the feature engineering pipeline
+
+strategy:
+  name: "Box Features Demo"
+  type: "ml_strategy"
+
+data:
+  price_data:
+    provider: "yfinance"
+    symbols:
+      - "AAPL"
+      - "MSFT"
+      - "GOOGL"
+      - "AMZN"
+      - "JPM"
+      - "JNJ"
+      - "V"
+      - "PG"
+      - "UNH"
+      - "HD"
+    start_date: "2020-01-01"
+    end_date: "2023-12-31"
+
+feature_engineering:
+  # Basic feature engineering settings
+  include_technical: true
+  momentum_periods: [21, 63, 126]
+  volatility_windows: [20, 60]
+  normalize_features: true
+
+  # Box features configuration
+  box_features:
+    enabled: true
+    size_categories: true      # Generate Large/Mid/Small dummy variables
+    style_categories: true     # Generate Value/Growth dummy variables
+    region_categories: true    # Generate Developed/Emerging dummy variables
+    sector_categories: true    # Generate sector dummy variables
+    encoding_method: "one_hot"
+    handle_unknown: "ignore"
+
+    # Stock classifier configuration (optional, uses defaults if not specified)
+    stock_classifier_config:
+      size_config:
+        thresholds:
+          large: 10.0    # > $10B market cap = Large
+          mid: 2.0       # > $2B market cap = Mid
+      region_config:
+        developed_markets:
+          - "US"
+          - "CA"
+          - "GB"
+          - "DE"
+          - "FR"
+          - "JP"
+          - "AU"
+      sector_config:
+        # Optional custom sector mappings (uses defaults if not specified)
+        mappings:
+          Technology: ["AAPL", "MSFT", "GOOGL", "NVDA"]
+          Healthcare: ["JNJ", "PFE", "UNH"]
+          Financials: ["JPM", "BAC", "WFC"]
+          Consumer Discretionary: ["AMZN", "HD", "TSLA"]
+          Consumer Staples: ["PG", "KO", "WMT"]
+
+model:
+  type: "xgboost"
+  parameters:
+    n_estimators: 100
+    max_depth: 5
+    learning_rate: 0.1
+    random_state: 42
+
+backtest:
+  initial_capital: 1000000
+  start_date: "2021-01-01"
+  end_date: "2023-12-31"
+  rebalance_frequency: "monthly"
+  transaction_costs:
+    commission: 0.001
+    spread: 0.0005
+    slippage: 0.0005
+
+experiment:
+  name: "box_features_demo"
+  tags: ["box_features", "dummy_variables", "classification"]
+  notes: "Demonstrating box classification features in ML pipeline"

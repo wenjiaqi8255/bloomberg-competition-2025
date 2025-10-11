@@ -12,10 +12,13 @@ from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from enum import Enum
+import pandas as pd
 
 from ...types.portfolio import Portfolio, Position
 from ...types.enums import AssetClass
 from ...data.stock_classifier import StockClassifier, InvestmentBox
+from ..utils.performance_tracker import ComponentPerformanceTrackerMixin
+from ..utils.config_validator import ComponentConfigValidator
 
 logger = logging.getLogger(__name__)
 
@@ -158,7 +161,7 @@ class ComplianceReport:
         return any(rule.status == ComplianceStatus.CRITICAL for rule in self.violations)
 
 
-class ComplianceMonitor:
+class ComplianceMonitor(ComponentPerformanceTrackerMixin):
     """
     Monitors and enforces IPS compliance.
 
@@ -180,6 +183,7 @@ class ComplianceMonitor:
             rules: Compliance rules to monitor
             stock_classifier: Optional classifier for box-based checks.
         """
+        super().__init__()
         self.rules = rules
         self.stock_classifier = stock_classifier
 
@@ -187,13 +191,7 @@ class ComplianceMonitor:
         self.compliance_history: List[ComplianceReport] = []
         self.violation_history: List[Dict[str, Any]] = []
 
-        # Statistics
-        self.compliance_stats = {
-            'total_checks': 0,
-            'violations_detected': 0,
-            'critical_violations': 0,
-            'warnings_generated': 0
-        }
+        # Statistics are now handled by ComponentPerformanceTrackerMixin
 
         # Notification thresholds
         self.notification_thresholds = {
@@ -205,11 +203,86 @@ class ComplianceMonitor:
         logger.info("Initialized ComplianceMonitor")
         logger.info(f"Monitoring {len(self.rules.__dict__)} compliance rules")
 
-    def check_compliance(self, portfolio: Portfolio,
-                        benchmark_data: Optional[Any] = None) -> ComplianceReport:
+    def check_target_compliance(self, portfolio_weights: pd.Series, 
+                              date: datetime,
+                              benchmark_data: Optional[Any] = None) -> ComplianceReport:
         """
-        Perform comprehensive compliance check.
+        Check compliance for target portfolio weights (pre-trade validation).
+        
+        This method is used before trade execution to validate that the proposed
+        portfolio weights comply with all investment policy constraints.
+        
+        Args:
+            portfolio_weights: Target portfolio weights as pandas Series
+            date: Date for compliance check
+            benchmark_data: Optional benchmark data for comparison
+            
+        Returns:
+            Compliance report for target weights
+        """
+        operation_id = self.track_operation("check_target_compliance", {"date": date.isoformat()})
+        
+        try:
+            logger.info(f"Checking target compliance for {len(portfolio_weights)} positions")
+            
+            violations = []
+            warnings = []
+            
+            # Check weight constraints
+            weight_violations = self._check_weight_constraints(portfolio_weights)
+            violations.extend(weight_violations)
+            
+            # Check concentration limits
+            concentration_violations = self._check_concentration_limits(portfolio_weights)
+            violations.extend(concentration_violations)
+            
+            # Check box exposure limits
+            box_violations = self._check_box_exposure_limits(portfolio_weights, date)
+            violations.extend(box_violations)
+            
+            # Separate warnings from violations
+            warnings = [v for v in violations if v.status == ComplianceStatus.WARNING]
+            violations = [v for v in violations if v.status in [ComplianceStatus.VIOLATION, ComplianceStatus.CRITICAL]]
+            
+            # Generate recommendations
+            recommendations = self._generate_recommendations(violations, warnings, portfolio_weights)
+            
+            # Determine overall status
+            overall_status = self._determine_overall_status(violations, warnings)
+            
+            report = ComplianceReport(
+                timestamp=date,
+                overall_status=overall_status,
+                total_violations=len(violations),
+                violations=violations,
+                warnings=warnings,
+                recommendations=recommendations,
+                portfolio_summary=self._create_target_summary(portfolio_weights)
+            )
+            
+            self.compliance_history.append(report)
+            self.track_counter("compliance_checks", 1)
+            if violations:
+                self.track_counter("violations_detected", len(violations))
+            if warnings:
+                self.track_counter("warnings_generated", len(warnings))
+            
+            self.end_operation(operation_id, success=True, metadata={"violations": len(violations), "warnings": len(warnings)})
+            return report
+            
+        except Exception as e:
+            logger.error(f"Target compliance check failed: {e}")
+            self.end_operation(operation_id, success=False, metadata={"error": str(e)})
+            return ComplianceReport.error_result(f"Target compliance check failed: {e}")
 
+    def check_portfolio_compliance(self, portfolio: Portfolio,
+                                  benchmark_data: Optional[Any] = None) -> ComplianceReport:
+        """
+        Check compliance for actual portfolio (post-trade validation).
+        
+        This method is used after trade execution to validate that the actual
+        portfolio state complies with all investment policy constraints.
+        
         Args:
             portfolio: Current portfolio state
             benchmark_data: Optional benchmark data for comparison
@@ -217,6 +290,8 @@ class ComplianceMonitor:
         Returns:
             Complete compliance report
         """
+        operation_id = self.track_operation("check_portfolio_compliance", {"portfolio_value": portfolio.total_value})
+        
         try:
             logger.info("Performing comprehensive compliance check")
 
@@ -257,10 +332,6 @@ class ComplianceMonitor:
             # Determine overall status
             overall_status = self._determine_overall_status(violations, warnings)
 
-            # Create portfolio summary
-            portfolio_summary = self._create_portfolio_summary(portfolio)
-
-            # Create compliance report
             report = ComplianceReport(
                 timestamp=datetime.now(),
                 overall_status=overall_status,
@@ -268,32 +339,38 @@ class ComplianceMonitor:
                 violations=violations,
                 warnings=warnings,
                 recommendations=recommendations,
-                portfolio_summary=portfolio_summary
+                portfolio_summary=self._create_portfolio_summary(portfolio)
             )
 
-            # Update statistics
-            self._update_statistics(report)
-
-            # Store in history
             self.compliance_history.append(report)
-            if len(self.compliance_history) > 100:  # Keep last 100 reports
-                self.compliance_history = self.compliance_history[-100:]
+            self.track_counter("compliance_checks", 1)
+            if violations:
+                self.track_counter("violations_detected", len(violations))
+            if warnings:
+                self.track_counter("warnings_generated", len(warnings))
 
-            logger.info(f"Compliance check completed: {len(violations)} violations, {len(warnings)} warnings")
+            self.end_operation(operation_id, success=True, metadata={"violations": len(violations), "warnings": len(warnings)})
             return report
 
         except Exception as e:
-            logger.error(f"Compliance check failed: {e}")
-            # Return minimal report indicating failure
-            return ComplianceReport(
-                timestamp=datetime.now(),
-                overall_status=ComplianceStatus.CRITICAL,
-                total_violations=1,
-                violations=[],
-                warnings=[],
-                recommendations=["Compliance system error - manual review required"],
-                portfolio_summary={"error": str(e)}
-            )
+            logger.error(f"Portfolio compliance check failed: {e}")
+            self.end_operation(operation_id, success=False, metadata={"error": str(e)})
+            return ComplianceReport.error_result(f"Portfolio compliance check failed: {e}")
+
+    def check_compliance(self, portfolio: Portfolio,
+                        benchmark_data: Optional[Any] = None) -> ComplianceReport:
+        """
+        Legacy method for backward compatibility.
+        Delegates to check_portfolio_compliance.
+        
+        Args:
+            portfolio: Current portfolio state
+            benchmark_data: Optional benchmark data for comparison
+
+        Returns:
+            Complete compliance report
+        """
+        return self.check_portfolio_compliance(portfolio, benchmark_data)
 
     def _check_allocation_compliance(self, portfolio: Portfolio) -> List[ComplianceRule]:
         """Check strategy allocation compliance."""

@@ -1,0 +1,85 @@
+# Simple MetaModel Template - MVP Version
+# ==========================================
+#
+# 极简的MetaModel配置模板，专注核心功能：
+# 1. MetaModel方法配置
+# 2. 策略选择
+# 3. 数据周期
+# 4. 基本训练参数
+#
+# No over-engineering, just essential configuration.
+
+# =============================================================================
+# 实验基本配置
+# =============================================================================
+experiment:
+  name: "simple_metamodel_experiment"
+  description: "极简MetaModel训练实验"
+  tags: ["metamodel", "simple", "ridge_regression"]
+  log_to_wandb: false  # 简化版本默认关闭
+
+# =============================================================================
+# MetaModel训练配置 - 极简版本
+# =============================================================================
+metamodel:
+  # 核心方法参数
+  method: "ridge"                    # equal, lasso, ridge
+  alpha: 0.5                        # 正则化强度 (lasso/ridge适用)
+
+  # 策略配置
+  strategies:
+    - "DualMomentumStrategy"         # 双动量策略
+    - "MLStrategy"                    # 机器学习策略
+    - "FF5Strategy"                   # Fama-French五因子策略
+
+  # 数据配置
+  data_period: "2022-01-01:2023-12-31"  # 训练数据周期
+  data_source: "synthetic"                # synthetic, backtest
+
+  # 训练参数
+  save_model: true                 # 是否保存模型
+  model_name: "simple_metamodel"
+
+# =============================================================================
+# 超参数优化配置 - 可选
+# =============================================================================
+hyperparameter_optimization:
+  enabled: false                    # 默认关闭HPO
+  trials: 50                       # 试验次数
+  method: "tpe"                    # 优化方法 (只支持TPE)
+  metric: "r2"                     # 优化指标
+
+  # 搜索空间 (仅当enabled=true时使用)
+  search_space:
+    alpha:
+      type: "log_float"
+      low: 0.01
+      high: 10.0
+    min_weight:
+      type: "float"
+      low: 0.0
+      high: 0.1
+    max_weight:
+      type: "float"
+      low: 0.3
+      high: 1.0
+
+# =============================================================================
+# 使用示例
+# =============================================================================
+#
+# 1. 基本MetaModel训练：
+#    python run_experiment.py metamodel --method ridge --config configs/simple_metamodel_template.yaml
+#
+# 2. 命令行快速训练：
+#    python run_experiment.py metamodel --method ridge --start-date 2022-01-01 --end-date 2023-12-31
+#
+# 3. 超参数优化：
+#    # 首先设置 enabled: true，然后运行：
+#    python run_experiment.py optimize --type metamodel --trials 50
+#
+# 4. 自定义策略：
+#    metamodel:
+#      strategies: ["CustomStrategy1", "CustomStrategy2"]
+#      method: "lasso"
+#      alpha: 1.0

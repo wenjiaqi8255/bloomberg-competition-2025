@@ -1,0 +1,87 @@
+# System Orchestrator configuration
+
+system:
+  initial_capital: 1000000
+  enable_short_selling: false
+
+data_provider:
+  type: YFinanceProvider
+  parameters:
+    max_retries: 3
+    retry_delay: 1.0
+    request_timeout: 30
+
+# Optional factor provider (uncomment if needed)
+# factor_data_provider:
+#   type: FF5DataProvider
+#   parameters:
+#     cache_dir: ./cache/factors
+
+universe:
+  - SPY
+  - AAPL
+  - MSFT
+  - GOOGL
+  - AMZN
+
+strategies:
+  - name: MLStrategyCore
+    type: MLStrategy
+    parameters:
+      model_id: latest
+      model_registry_path: ./models/
+      universe: [SPY, AAPL, MSFT, GOOGL, AMZN]
+  - name: FF5Satellite
+    type: FF5Strategy
+    parameters:
+      universe: [SPY, AAPL, MSFT, GOOGL, AMZN]
+
+metamodel:
+  method: equal   # or ridge/lasso/dynamic
+  # weights: { MLStrategyCore: 0.6, FF5Satellite: 0.4 }
+
+# Choose portfolio construction method: quantitative | box_based
+portfolio_construction:
+  method: quantitative
+  universe_size: 100
+  optimizer:
+    method: mean_variance
+    risk_aversion: 2.0
+  covariance:
+    method: ledoit_wolf
+    lookback_days: 252
+  classifier:
+    method: four_factor
+    cache_enabled: true
+  # Optional box limits used as constraints in quantitative method
+  box_limits:
+    size: 0.35
+    style: 0.35
+    region: 0.50
+
+# Alternative (Box-First). Switch by setting portfolio_construction.method: box_based
+# portfolio_construction:
+#   method: box_based
+#   stocks_per_box: 3
+#   min_stocks_per_box: 1
+#   allocation_method: equal
+#   allocation_config: {}
+#   box_weights:
+#     method: equal
+#     dimensions:
+#       size: [large, mid, small]
+#       style: [growth, value]
+#       region: [developed, emerging]
+#       sector: [Technology, Financials, Healthcare, Consumer Staples]
+#   classifier:
+#     method: four_factor
+#     cache_enabled: true
+
+run:
+  start_date: "2024-01-01"
+  end_date: "2024-03-31"
+
+# Custom knobs forwarded to orchestrator (optional)
+custom: {}
+
+

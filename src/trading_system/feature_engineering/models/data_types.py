@@ -6,12 +6,10 @@ feature engineering system.
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Union, Any
-from enum import Enum
+from typing import Dict, List, Optional, Any
 import pandas as pd
 import numpy as np
-from datetime import datetime
-from ...config.feature import FeatureConfig
+from src.trading_system.feature_engineering.base.feature import FeatureConfig
 
 
 # ============================================================================

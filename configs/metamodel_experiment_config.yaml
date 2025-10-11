@@ -20,15 +20,14 @@ metamodel_training:
 
   # Strategy configuration (strategies to combine)
   strategies:
-    - "DualMomentumStrategy"
-    - "MLStrategy"
-    - "FF5Strategy"
+    - "ml_strategy_*"  # Pattern matching for ML strategy files
+    - "e2e_ff5_regression_*"  # Pattern matching for FF5 strategy files
 
   # Data collection parameters
-  data_source: "synthetic"  # Options: backtest, synthetic, live
+  data_source: "portfolio_files"  # Options: backtest, portfolio_files, synthetic, live
   start_date: "2022-01-01"
-  end_date: "2023-12-31"
-  target_benchmark: "SPY"  # Optional benchmark for target returns
+  end_date: "2023-12-29"
+  target_benchmark: "equal_weighted"  # Use equal-weighted portfolio as target (financial standard)
 
   # Training parameters
   use_cross_validation: true
@@ -71,8 +70,8 @@ model_registry:
 # 5. Validation and Testing
 validation:
   # Out-of-sample testing period
-  test_start_date: "2024-01-01"
-  test_end_date: "2024-06-30"
+  test_start_date: "2025-10-06"
+  test_end_date: "2025-10-08"
 
   # Performance metrics to compute
   metrics:
@@ -97,8 +96,8 @@ system_integration:
   # Test configuration
   initial_capital: 1000000
   test_period:
-    start_date: "2024-01-01"
-    end_date: "2024-03-31"
+    start_date: "2025-10-06"
+    end_date: "2025-10-08"
 
   # Assets to test with
   universe:

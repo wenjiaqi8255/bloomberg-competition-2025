@@ -22,6 +22,17 @@ data_provider:
     max_retries: 3
     retry_delay: 1.0
 
+  # Liquidity filtering configuration
+  # Filters out small-cap and illiquid stocks early in the data pipeline
+  liquidity_filter:
+    enabled: true
+    min_market_cap: 1000000000  # $1B minimum market cap (institutional-grade liquidity)
+    min_avg_daily_volume: 1000000  # $1M minimum average daily volume
+    min_price: 5.0  # $5 minimum stock price (filter out penny stocks)
+    max_price: 1000.0  # $1000 maximum stock price (filter out extremely high-priced stocks)
+    min_history_days: 252  # 1 year of trading history required
+    volume_lookback_days: 21  # 1 month average for volume calculation
+
 # Part 2: Training Pipeline Configuration
 # ------------------------------------
 training_setup:
@@ -60,16 +71,61 @@ training_setup:
     start_date: "2018-01-01"
     end_date: "2019-12-31"
     symbols:
+      # Technology (Large Growth)
       - AAPL
       - MSFT
       - GOOGL
-      - AMZN
       - META
-      - TSLA
       - NVDA
-      - JPM
-      - V
-      - WMT
+      # Technology (Mid/Large Value)
+      - CSCO
+      - IBM
+      - INTC
+
+      # # Healthcare (Large Growth)
+      # - JNJ
+      # - UNH
+      # - PFE
+      # # Healthcare (Mid/Large Value)
+      # - ABT
+      # - TMO
+      # - DHR
+
+      # # Financials (Large Growth)
+      # - JPM
+      # - BAC
+      # - GS
+      # # Financials (Mid/Large Value)
+      # - WFC
+      # - MS
+      # - AXP
+
+      # # Consumer (Growth)
+      # - AMZN
+      # - TSLA
+      # - HD
+      # - MCD
+      # # Consumer (Value)
+      # - WMT
+      # - PG
+      # - KO
+      # - COST
+
+      # # Industrial
+      # - CAT
+      # - GE
+      # - HON
+      # - UPS
+
+      # # Energy
+      # - XOM
+      # - CVX
+      # - COP
+
+      # # Communication
+      # - VZ
+      # - DIS
+      # - NFLX
 
 # Strategy Configuration
 strategy:
@@ -77,11 +133,15 @@ strategy:
   type: "ml_strategy"  # Uses ML infrastructure for cross-sectional regression
   model_type: "fama_macbeth"
   description: "Cross-sectional asset pricing using Fama-MacBeth methodology"
-  
+
   # Trading parameters
   rebalance_frequency: "monthly"  # Typical for cross-sectional strategies
   lookback_days: 252  # 1 year of historical data
   forward_return_days: 21  # Predict 1-month forward returns
+
+  # Normalization settings
+  enable_normalization: true  # Enable strategy-layer normalization
+  normalization_method: "minmax"  # Use MinMax normalization for [0, 1] range
   
   # Position sizing
   position_sizing:
@@ -101,6 +161,31 @@ strategy:
     max_drawdown: 0.20
     stop_loss: 0.15
     volatility_target: 0.15  # 15% annualized volatility
+
+  # Portfolio construction (Quantitative method for comparison)
+  portfolio_construction:
+    method: "quantitative"  # Traditional quantitative optimization
+
+    # Quantitative optimization parameters
+    universe_size: 100
+    enable_short_selling: false  # Consistent with strategy level
+
+    # Optimizer configuration
+    optimizer:
+      method: "mean_variance"
+      risk_aversion: 2.0
+      max_position_weight: 0.08  # 8% max per position
+      min_position_weight: 0.01  # 1% min position
+
+    # Covariance estimation
+    covariance:
+      lookback_days: 252
+      method: "ledoit_wolf"
+
+    # Stock classifier (for comparison consistency)
+    classifier:
+      method: "four_factor"
+      cache_enabled: true
 
 # Feature Engineering Configuration
 feature_engineering:
@@ -131,7 +216,7 @@ feature_engineering:
   
   # Feature preprocessing
   normalize_features: true
-  normalization_method: "zscore"  # Cross-sectional z-scores
+  normalization_method: "minmax"  # Min-max normalization to [0, 1] range for TradingSignal compatibility
   handle_missing: "forward_fill"
   
   # Feature validation (optional)
@@ -180,7 +265,7 @@ strategy:
 
 # Backtesting Configuration
 backtesting:
-  start_date: "2015-01-01"
+  start_date: "2020-01-01"
   end_date: "2023-12-31"
   initial_capital: 1000000
   
@@ -188,16 +273,19 @@ backtesting:
   universe:
     type: "dynamic"  # Universe can change over time
     min_stocks: 20  # Need sufficient cross-section
-    filters:
-      min_market_cap: 1000000000  # $1B minimum
-      min_liquidity: 1000000  # $1M daily volume
-      exclude_penny_stocks: true
+    # Note: Basic universe filters are now handled by data_provider.liquidity_filter
+    # This ensures liquidity filtering happens early in the data pipeline
       
   # Transaction costs
   transaction_costs:
     commission: 0.001  # 10 bps
     slippage: 0.0005  # 5 bps
     market_impact: "sqrt"  # Square-root market impact model
+
+  # Rebalancing frequency
+  rebalance_frequency: "weekly"
+  position_limit: 0.08  # 8% max per position
+  rebalance_threshold: 0.001
     
   # Benchmark
   benchmark: "SPY"  # S&P 500
@@ -243,23 +331,164 @@ logging:
   log_predictions: true
   log_coefficients: true
   log_cross_sections: true
-  
+
+# System Integration Configuration
+# ==============================
+# Integration with existing system orchestration
+system_integration:
+  enabled: true
+
+  # Use Modern System Orchestrator with quantitative portfolio construction
+  modern_orchestrator:
+    enabled: true
+    portfolio_construction_method: "quantitative"
+
+    # Strategy combination (if using multiple strategies)
+    meta_model:
+      method: "weighted_average"
+      config:
+        normalize_weights: true
+
+    # Multi-strategy allocation
+    capital_allocation:
+      method: "fixed_weights"
+      weights:
+        fama_macbeth_quantitative: 1.0  # 100% allocation to Fama-MacBeth Quantitative strategy
+
+# Experiment Configuration
+# =======================
+experiment:
+  name: "FamaMacBeth_Quantitative_Comparison"
+  description: "Fama-MacBeth cross-sectional model with traditional quantitative portfolio construction"
+
+  # Experiment tracking
+  log_to_wandb: true
+  wandb_project: "fama_macbeth_quantitative_experiments"
+  tags:
+    - "fama_macbeth"
+    - "quantitative"
+    - "portfolio_construction"
+    - "cross_sectional"
+    - "traditional_optimization"
+
+  # Comparison with box-based
+  comparison:
+    enabled: true
+    baseline_method: "box_based"  # Compare with Box-Based method
+    compare_metrics:
+      - "sharpe_ratio"
+      - "max_drawdown"
+      - "information_ratio"
+      - "concentration_risk"
+      - "portfolio_coverage"
+
 # Advanced Options
 advanced:
   # Parallel processing
   n_jobs: -1  # Use all cores
-  
+
   # Caching
   cache_features: true
   cache_predictions: false
-  
+
   # Debugging
   debug_mode: false
   save_intermediate_results: true
   
+# Part 14: Hyperparameter Optimization
+# ==================================
+# Hyperparameter optimization for Fama-MacBeth model
+hyperparameter_optimization:
+  enabled: true
+  optimization_method: "optuna"
+  n_trials: 20  # Reduced for faster demo
+  cv_folds: 3
+  objective: "r2"
+  search_space_preset: "fama_macbeth_default"
+  sampler_type: "tpe"
+  pruner_type: "median"
+  log_to_wandb: true
+  log_all_trials: true
+
+# Fama-MacBeth Hyperparameter Optimization Settings
+# ================================================
+fama_macbeth_hyperparameter_optimization:
+  enabled: true
+  optimization_method: "optuna"
+  n_trials: 30
+  cv_folds: 3
+  objective: "r2"
+  direction: "maximize"
+
+  sampler:
+    type: "tpe"
+    seed: 42
+
+  pruner:
+    type: "median"
+    n_startup_trials: 5
+    n_warmup_steps: 3
+    interval_steps: 1
+
+  search_space:
+    preset: "fama_macbeth_default"
+
+    custom_space:
+      regularization:
+        type: "categorical"
+        choices: ["none", "ridge", "lasso"]
+      alpha:
+        type: "float"
+        low: 0.01
+        high: 10.0
+        log_scale: true
+      min_cross_section_size:
+        type: "int"
+        low: 3
+        high: 10
+
+  # Feature analysis
+  feature_analysis:
+    enabled: true
+    analyze_coefficient_significance: true
+    calculate_feature_correlations: true
+    coefficient_stability_analysis: true
+
+  # Logging
+  logging:
+    log_optimization: true
+    log_all_trials: true
+    create_optimization_plot: true
+    log_coefficients: true
+    log_feature_analysis: true
+
+  # Validation
+  validation:
+    out_of_sample_test: true
+    time_series_split: true
+    stability_check: true
+    statistical_significance: true
+
+# Performance Benchmarks
+# ====================
+benchmarks:
+  primary: "SPY"
+  secondary:
+    - "QQQ"  # Nasdaq 100 (Growth bias)
+    - "IWM"  # Russell 2000 (Small cap bias)
+    - "AGG"  # Bonds (Risk-free proxy)
+
+  # Factor model benchmarks
+  factor_benchmarks:
+    - "MTUM"  # Momentum
+    - "QUAL"  # Quality
+    - "VLUE"  # Value
+    - "SIZE"  # Size
+    - "USMV"  # Minimum volatility
+
 # Example Usage Notes
 # ============================================================================
-# To run this strategy:
+# To run this strategy for comparison with box-based:
 #
 # 1. Train the model:
 #    python run_experiment.py --config configs/fama_macbeth_strategy_config.yaml
@@ -267,18 +496,21 @@ advanced:
 # 2. The pipeline will:
 #    - Calculate cross-sectional features for each date
 #    - Convert to panel format (date, symbol)
-#    - Run Fama-MacBeth regression
-#    - Generate predictions using average gammas
-#    - Execute trades based on predicted returns
+#    - Run Fama-MacBeth regression to estimate risk premia
+#    - Generate expected returns using average coefficients
+#    - Apply traditional quantitative portfolio construction
 #
-# 3. Interpretation:
-#    - Positive gamma: Feature has positive risk premium
-#    - Negative gamma: Feature has negative risk premium
-#    - t-stat > 2: Statistically significant at 5% level
+# 3. Comparison with Box-Based:
+#    - Both use same Fama-MacBeth model and training data
+#    - Same stock universe and time periods
+#    - Different portfolio construction methods:
+#      * This config: Traditional quantitative optimization
+#      * Box-Based: Systematic diversification across style boxes
 #
 # 4. Expected Results:
 #    - Book-to-Market: Positive gamma (value premium)
 #    - Size: Negative gamma (small cap premium)
 #    - Momentum: Positive gamma (momentum premium)
+#    - Compare concentration risk and diversification benefits
 # ============================================================================
 

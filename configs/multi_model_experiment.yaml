@@ -1,0 +1,166 @@
+# Multi-Model Experiment Configuration
+# ====================================
+# Complete configuration for training multiple base models with HPO,
+# then training a metamodel to combine them optimally.
+
+experiment:
+  name: "multi_model_optimal_system"
+  output_dir: "./results/multi_model_experiment"
+
+# Data configuration (shared across all models)
+data_provider:
+  type: YFinanceProvider
+  parameters:
+    max_retries: 3
+    retry_delay: 1.0
+    request_timeout: 30
+    cache_enabled: true
+
+factor_data_provider:
+  type: FF5DataProvider
+  parameters:
+    data_frequency: "daily"
+    cache_enabled: true
+
+universe:
+  # Technology (Large Growth)
+  - AAPL
+  - MSFT
+  - GOOGL
+  - META
+  - NVDA
+  # Technology (Mid/Large Value)
+  - CSCO
+  - IBM
+  - INTC
+  # Healthcare
+  - JNJ
+  - UNH
+  - PFE
+  - ABT
+  # Financials
+  - JPM
+  - BAC
+  - GS
+  - WFC
+  # Consumer
+  - AMZN
+  - TSLA
+  - HD
+  - WMT
+  - PG
+  - KO
+  # Industrial
+  - CAT
+  - GE
+  - HON
+  # Energy
+  - XOM
+  - CVX
+  # Communication
+  - VZ
+  - DIS
+  - NFLX
+
+# Training/test periods
+periods:
+  train:
+    start: "2022-01-01"
+    end: "2022-12-31"
+  test:
+    start: "2023-01-01"
+    end: "2023-12-31"
+
+# Base models to train with HPO
+base_models:
+  - model_type: "xgboost"
+    hpo_trials: 50
+    hpo_metric: "sharpe_ratio"
+    
+  - model_type: "ff5_regression"
+    hpo_trials: 30
+    hpo_metric: "sharpe_ratio"
+
+# MetaModel configuration with HPO
+metamodel:
+  hpo_trials: 50
+  hpo_metric: "sharpe_ratio"
+  methods_to_try: ["ridge", "lasso", "equal"]
+
+# Strategy/Backtest configuration (shared)
+backtest:
+  initial_capital: 1000000
+  commission: 0.001
+  slippage: 0.0005
+
+strategy:
+  type: "MLStrategy"
+  parameters:
+    signal_threshold: 0.1
+    max_positions: 10
+
+# Portfolio construction for final system
+portfolio_construction:
+  method: "box_based"
+  rebalance_frequency: "weekly"
+  max_positions: 12
+  min_position_weight: 0.05
+  max_position_weight: 0.15
+
+# System requirements for validation
+system_requirements:
+  min_sharpe_ratio: 0.5
+  max_drawdown_threshold: -0.3
+  min_win_rate: 0.4
+
+# Logging configuration
+logging:
+  level: "INFO"
+  log_to_file: true
+  log_file: "./results/multi_model_experiment/experiment.log"
+  log_to_console: true
+
+# Advanced configuration
+advanced:
+  # Parallel processing
+  parallel_processing: false  # Set to true if you want parallel model training
+  max_workers: 2
+  
+  # Error handling
+  error_handling:
+    continue_on_model_failure: true
+    continue_on_metamodel_failure: false
+    max_retry_attempts: 3
+    retry_delay_seconds: 5
+  
+  # Validation
+  validation:
+    validate_data_quality: true
+    validate_model_performance: true
+    validate_metamodel_weights: true
+    validate_system_requirements: true
+
+# Quick test configuration (overrides main config when --quick-test is used)
+quick_test:
+  enabled: false
+  
+  # Reduced parameters for faster testing
+  reduced_trials:
+    model_n_trials: 5
+    metamodel_n_trials: 5
+  
+  # Reduced data for faster testing
+  reduced_data:
+    universe: ["AAPL", "MSFT", "GOOGL"]
+    train_period:
+      start: "2023-01-01"
+      end: "2023-06-30"
+    test_period:
+      start: "2023-07-01"
+      end: "2023-09-30"
+  
+  # Relaxed requirements for testing
+  relaxed_requirements:
+    min_sharpe_ratio: 0.3
+    max_drawdown_threshold: -0.4
+    min_win_rate: 0.35

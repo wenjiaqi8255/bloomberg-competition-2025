@@ -40,7 +40,7 @@ training_setup:
     min_ic_threshold: 0.02
     min_significance: 0.1
     feature_lag: 1
-    include_technical: false      # Disable complex technical indicators
+    include_technical: true       # Enable basic technical indicators for LSTM
 
   # Parameters for the training pipeline execution
   parameters:
@@ -60,10 +60,10 @@ training_setup:
 
   # Hyperparameter optimization configuration
   hyperparameter_optimization:
-    enabled: true
+    enabled: false  # DISABLED: Prevents segfault during cross-validation
     optimization_method: "optuna"
-    n_trials: 50
-    cv_folds: 3
+    n_trials: 10  # Reduced
+    cv_folds: 2   # Reduced to minimum
     objective: "sharpe_ratio"
 
     # Search space using LSTM model defaults
@@ -75,7 +75,7 @@ training_setup:
 
     # Training optimization
     enable_early_stopping: true
-    early_stopping_patience: 10
+    early_stopping_patience: 5  # Reduced
 
     # Logging
     log_to_wandb: true
@@ -94,21 +94,21 @@ strategy:
 # Model hyperparameter optimization settings
 hyperparameter_optimization:
   # Enable/disable hyperparameter optimization
-  enabled: true
+  enabled: false  # DISABLED: Prevents segfault during cross-validation
 
   # Optimization method (optuna, grid_search, random_search)
   optimization_method: "optuna"
 
   # Number of optimization trials
-  n_trials: 50
+  n_trials: 10  # Reduced
 
   # Optimization timeout (in seconds) - alternative to n_trials
   timeout: null  # e.g., 3600 for 1 hour
 
-  # Cross-validation settings
-  cv_folds: 3
-  purge_days: 10  # Days to purge after train period
-  embargo_days: 5  # Days to embargo before test period
+  # Cross-validation settings - REDUCED TO PREVENT SEGFAULT
+  cv_folds: 2  # Minimum to prevent segfault
+  purge_days: 5  # Reduced
+  embargo_days: 2  # Reduced
 
   # Optimization objective (sharpe_ratio, sortino_ratio, max_drawdown, total_return, r2, mse)
   objective: "sharpe_ratio"
@@ -122,8 +122,8 @@ hyperparameter_optimization:
   # Pruner settings (for early stopping of bad trials)
   pruner:
     type: "median"  # median, hyperband, successional_halving
-    n_startup_trials: 5  # Number of trials before pruning starts
-    n_warmup_steps: 10  # Number of steps before pruning starts
+    n_startup_trials: 3  # Reduced
+    n_warmup_steps: 5  # Reduced
     interval_steps: 1  # Interval between pruning checks
 
   # Search space configuration (uses model defaults if not specified)
@@ -135,32 +135,32 @@ hyperparameter_optimization:
     custom_space:
       hidden_size:
         type: "categorical"
-        choices: [32, 64, 128, 256]
+        choices: [32, 64]  # Reduced choices
       num_layers:
         type: "int"
         low: 1
-        high: 4
+        high: 2  # Reduced
       dropout:
         type: "float"
         low: 0.1
-        high: 0.5
+        high: 0.3  # Reduced
         step: 0.05
       learning_rate:
         type: "float"
         low: 0.001
-        high: 0.1
+        high: 0.01  # Reduced range
         log_scale: true
       sequence_length:
         type: "categorical"
-        choices: [10, 20, 30, 60]
+        choices: [10, 20]  # Reduced choices
       batch_size:
         type: "categorical"
-        choices: [16, 32, 64, 128]
+        choices: [16, 32]  # Reduced choices
 
   # Early stopping settings
   early_stopping:
     enabled: true
-    patience: 10  # Number of epochs without improvement
+    patience: 5  # Reduced patience
     min_delta: 0.001  # Minimum change to qualify as improvement
     monitor: "val_loss"  # Metric to monitor for early stopping
 

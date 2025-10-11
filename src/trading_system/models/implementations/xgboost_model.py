@@ -411,69 +411,21 @@ class XGBoostModel(BaseModel):
 
     def get_hyperparameter_search_space(self) -> Dict[str, Any]:
         """
-        Get hyperparameter search space for XGBoost model optimization.
+        Get hyperparameter search space for XGBoost model optimization (MVP - simple dict).
 
         Returns:
-            Dictionary defining the search space for Optuna optimization
+            Simple dictionary defining parameter ranges for optimization
         """
-        from ..finetune.hyperparameter_optimizer import SearchSpace
-
         return {
-            'n_estimators': SearchSpace(
-                param_type='int',
-                low=50,
-                high=500,
-                step=10
-            ),
-            'max_depth': SearchSpace(
-                param_type='int',
-                low=3,
-                high=12,
-                step=1
-            ),
-            'learning_rate': SearchSpace(
-                param_type='float',
-                low=0.01,
-                high=0.3,
-                step=0.01,
-                log_scale=True
-            ),
-            'subsample': SearchSpace(
-                param_type='float',
-                low=0.6,
-                high=1.0,
-                step=0.05
-            ),
-            'colsample_bytree': SearchSpace(
-                param_type='float',
-                low=0.6,
-                high=1.0,
-                step=0.05
-            ),
-            'min_child_weight': SearchSpace(
-                param_type='int',
-                low=1,
-                high=10,
-                step=1
-            ),
-            'gamma': SearchSpace(
-                param_type='float',
-                low=0.0,
-                high=1.0,
-                step=0.05
-            ),
-            'reg_alpha': SearchSpace(
-                param_type='float',
-                low=0.0,
-                high=1.0,
-                step=0.05
-            ),
-            'reg_lambda': SearchSpace(
-                param_type='float',
-                low=0.5,
-                high=2.0,
-                step=0.1
-            )
+            'n_estimators': (50, 500),
+            'max_depth': (3, 12),
+            'learning_rate': (0.01, 0.3),
+            'subsample': (0.6, 1.0),
+            'colsample_bytree': (0.6, 1.0),
+            'min_child_weight': (1, 10),
+            'gamma': (0.0, 1.0),
+            'reg_alpha': (0.0, 1.0),
+            'reg_lambda': (0.5, 2.0)
         }
 
     def get_tunable_hyperparameters(self) -> List[str]:

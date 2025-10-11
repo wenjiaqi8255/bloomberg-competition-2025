@@ -221,10 +221,10 @@ def clean_price_data(price_data: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFr
             cleaned = data.copy()
 
             # Forward fill missing values
-            cleaned = cleaned.fillna(method='ffill')
+            cleaned = cleaned.ffill()
 
             # Backward fill any remaining NaN at the beginning
-            cleaned = cleaned.fillna(method='bfill')
+            cleaned = cleaned.bfill()
 
             # Remove any remaining NaN rows
             cleaned = cleaned.dropna()

@@ -30,7 +30,28 @@ training_setup:
     min_significance: 0.1
     feature_lag: 1
     include_technical: true
+    include_cross_sectional: true
 
+    cross_sectional_features: [
+      'market_cap', 'book_to_market', 'size', 'value', 'momentum', 'volatility',
+      'country_risk_premium', 'equity_risk_premium', 'default_spread', 'corporate_tax_rate'
+    ]
+
+    cross_sectional_lookback:
+      momentum: 252
+      volatility: 60
+      ma_long: 200
+      ma_short: 50
+    winsorize_percentile: 0.01
+
+    box_features:
+      enabled: true
+      size_categories: true
+      style_categories: true
+      region_categories: true
+      sector_categories: true
+      encoding_method: "one_hot"
+      handle_unknown: "ignore"
   # Parameters for the training pipeline execution
   parameters:
     start_date: "2018-01-01"
@@ -80,6 +101,10 @@ strategy:
   model_id: placeholder_model_id  # Will be overwritten by orchestrator
   min_signal_strength: 0.00001       # Minimum signal strength threshold
 
+  # Normalization settings
+  enable_normalization: true
+  normalization_method: minmax  # Ensure [0,1] range for TradingSignal compatibility
+
   # Short selling control
   enable_short_selling: false  # Enable short selling for long-short strategy
 
@@ -98,7 +123,7 @@ xgboost_hyperparameter_optimization:
   timeout: null  # e.g., 7200 for 2 hours
 
   # Cross-validation settings
-  cv_folds: 5
+  cv_folds: 3
   purge_days: 10  # Days to purge after train period
   embargo_days: 5  # Days to embargo before test period
 
@@ -175,7 +200,7 @@ xgboost_hyperparameter_optimization:
   # Early stopping settings
   early_stopping:
     enabled: true
-    early_stopping_rounds: 50  # Number of rounds without improvement
+    early_stopping_rounds: 20  # Number of rounds without improvement
     eval_metric: "rmse"  # Evaluation metric for early stopping
 
   # Trial logging and visualization
@@ -205,7 +230,7 @@ xgboost_hyperparameter_optimization:
 portfolio_optimization:
   # Optimization method selection
   # Options: 'mean_variance', 'equal_weight', 'top_n'
-  method: "equal_weight"  # Simple 1/N equal weighting (robust, KISS principle)
+  method: "mean_variance"  # Simple 1/N equal weighting (robust, KISS principle)
 
   # Mean-variance specific parameters (used when method='mean_variance')
   risk_aversion: 2.0      # Higher = more risk-averse (typical range: 1-5)

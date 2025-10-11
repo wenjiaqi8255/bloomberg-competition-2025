@@ -259,105 +259,199 @@ class LSTMModel(BaseModel):
             return X
     
     def fit(self,
-            X: pd.DataFrame,
-            y: pd.Series,
-            X_val: Optional[pd.DataFrame] = None,
-            y_val: Optional[pd.Series] = None) -> 'LSTMModel':
+            X: Union[pd.DataFrame, np.ndarray],
+            y: Union[pd.Series, np.ndarray],
+            X_val: Optional[Union[pd.DataFrame, np.ndarray]] = None,
+            y_val: Optional[Union[pd.Series, np.ndarray]] = None) -> 'LSTMModel':
         """
         Train the LSTM model.
-        
+
         Args:
-            X: Training features
-            y: Training targets
+            X: Training features (DataFrame or 3D numpy array for sequences)
+            y: Training targets (Series or 1D numpy array)
             X_val: Optional validation features
             y_val: Optional validation targets
-        
+
         Returns:
             Self for method chaining
         """
         try:
             # Validate input data
             self.validate_data(X, y)
-            
-            # Clean data - first drop rows where target is NaN
-            combined_data = pd.concat([y, X], axis=1)
-            combined_data = combined_data.dropna(subset=[combined_data.columns[0]])  # Only drop rows where target is NaN
 
-            if len(combined_data) == 0:
-                raise ValueError("No valid data points after target alignment")
+            # Check if we're receiving sequences already (from LSTM data strategy) or raw data
+            if isinstance(X, np.ndarray) and len(X.shape) == 3:
+                # Already sequences from LSTM data strategy
+                logger.info("Received pre-processed sequences from LSTM data strategy")
+                logger.info(f"DEBUG: PyTorch version: {torch.__version__}")
+                logger.info(f"DEBUG: Device: {self.device}")
+                logger.info(f"DEBUG: Input shape: {X.shape}, dtype: {X.dtype}")
+                logger.info(f"DEBUG: Target shape: {y.shape}, dtype: {y.dtype}")
+                logger.info(f"DEBUG: Input memory usage: {X.nbytes / (1024*1024):.2f} MB")
 
-            # For remaining rows, handle feature NaNs by filling with median or 0
-            y_clean = combined_data.iloc[:, 0]
-            X_clean = combined_data.iloc[:, 1:]
+                X_seq = X
+                y_seq = y
 
-            # Fill NaN values in features - use 0 for technical indicators (similar to XGBoost approach)
-            X_clean = X_clean.fillna(0)
-            
-            # Store feature names
-            self._feature_names = list(X_clean.columns)
-            self._input_size = len(self._feature_names)
-            
-            # Create sequences
-            X_seq, y_seq = self._create_sequences(X_clean, y_clean)
-            
-            if len(X_seq) == 0:
-                raise ValueError(f"Not enough data for sequence length {self.sequence_length}")
-            
-            # Normalize
-            X_seq = self._normalize_data(X_seq, fit=True)
-            
-            # Create dataset and dataloader
-            train_dataset = TimeSeriesDataset(X_seq, y_seq)
-            train_loader = DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True)
-            
-            # Prepare validation data if available
-            val_loader = None
-            if X_val is not None and y_val is not None:
-                val_aligned = pd.concat([y_val, X_val[self._feature_names]], axis=1).dropna()
-                if len(val_aligned) > 0:
-                    y_val_clean = val_aligned.iloc[:, 0]
-                    X_val_clean = val_aligned.iloc[:, 1:]
-                    
-                    X_val_seq, y_val_seq = self._create_sequences(X_val_clean, y_val_clean)
-                    if len(X_val_seq) > 0:
-                        X_val_seq = self._normalize_data(X_val_seq, fit=False)
+                # Set input size from the sequences
+                self._input_size = X_seq.shape[2]
+                self._feature_names = [f"feature_{i}" for i in range(self._input_size)]
+                logger.info(f"DEBUG: Input size set to: {self._input_size}")
+
+                # Handle any NaN values in sequences
+                logger.info("DEBUG: Handling NaN values...")
+                X_seq = np.nan_to_num(X_seq, nan=0.0)
+                y_seq = np.nan_to_num(y_seq, nan=0.0)
+                logger.info("DEBUG: NaN handling complete")
+
+                # Prepare validation data if available
+                val_loader = None
+                if X_val is not None and y_val is not None:
+                    if isinstance(X_val, np.ndarray) and len(X_val.shape) == 3:
+                        X_val_seq = np.nan_to_num(X_val, nan=0.0)
+                        y_val_seq = np.nan_to_num(y_val, nan=0.0)
                         val_dataset = TimeSeriesDataset(X_val_seq, y_val_seq)
                         val_loader = DataLoader(val_dataset, batch_size=self.batch_size)
-            
+
+            else:
+                # Raw data - need to create sequences
+                logger.info("Processing raw data and creating sequences")
+
+                # Handle pandas data
+                if isinstance(X, pd.DataFrame):
+                    # Clean data - first drop rows where target is NaN
+                    combined_data = pd.concat([y, X], axis=1)
+                    combined_data = combined_data.dropna(subset=[combined_data.columns[0]])  # Only drop rows where target is NaN
+
+                    if len(combined_data) == 0:
+                        raise ValueError("No valid data points after target alignment")
+
+                    # For remaining rows, handle feature NaNs by filling with median or 0
+                    y_clean = combined_data.iloc[:, 0]
+                    X_clean = combined_data.iloc[:, 1:]
+
+                    # Fill NaN values in features - use 0 for technical indicators (similar to XGBoost approach)
+                    X_clean = X_clean.fillna(0)
+
+                    # Store feature names
+                    self._feature_names = list(X_clean.columns)
+                    self._input_size = len(self._feature_names)
+
+                else:
+                    # Handle numpy arrays
+                    if len(X.shape) != 2:
+                        raise ValueError(f"Expected 2D array for raw data, got shape {X.shape}")
+
+                    # Remove rows where target is NaN
+                    valid_idx = ~np.isnan(y)
+                    X_clean = X[valid_idx]
+                    y_clean = y[valid_idx]
+
+                    # Fill NaN values in features
+                    X_clean = np.nan_to_num(X_clean, nan=0.0)
+
+                    self._input_size = X_clean.shape[1]
+                    self._feature_names = [f"feature_{i}" for i in range(self._input_size)]
+
+                # Create sequences
+                X_seq, y_seq = self._create_sequences(X_clean, y_clean)
+
+                if len(X_seq) == 0:
+                    raise ValueError(f"Not enough data for sequence length {self.sequence_length}")
+
+                # Prepare validation data if available
+                val_loader = None
+                if X_val is not None and y_val is not None:
+                    if isinstance(X_val, pd.DataFrame):
+                        val_aligned = pd.concat([y_val, X_val[self._feature_names]], axis=1).dropna()
+                        if len(val_aligned) > 0:
+                            y_val_clean = val_aligned.iloc[:, 0]
+                            X_val_clean = val_aligned.iloc[:, 1:]
+
+                            X_val_seq, y_val_seq = self._create_sequences(X_val_clean, y_val_clean)
+                            if len(X_val_seq) > 0:
+                                X_val_seq = np.nan_to_num(X_val_seq, nan=0.0)
+                                val_dataset = TimeSeriesDataset(X_val_seq, y_val_seq)
+                                val_loader = DataLoader(val_dataset, batch_size=self.batch_size)
+                    else:
+                        # Handle numpy validation data
+                        X_val_seq, y_val_seq = self._create_sequences(X_val, y_val)
+                        if len(X_val_seq) > 0:
+                            X_val_seq = np.nan_to_num(X_val_seq, nan=0.0)
+                            val_dataset = TimeSeriesDataset(X_val_seq, y_val_seq)
+                            val_loader = DataLoader(val_dataset, batch_size=self.batch_size)
+  
+            # Normalize (only for raw data, sequences from data strategy are already preprocessed)
+            if not (isinstance(X, np.ndarray) and len(X.shape) == 3):
+                X_seq = self._normalize_data(X_seq, fit=True)
+                # Also normalize validation sequences if they were created from raw data
+                if val_loader is not None and 'X_val_seq' in locals():
+                    X_val_seq = self._normalize_data(X_val_seq, fit=False)
+                    val_dataset = TimeSeriesDataset(X_val_seq, y_val_seq)
+                    val_loader = DataLoader(val_dataset, batch_size=self.batch_size)
+
+            # Create dataset and dataloader
+            logger.info("DEBUG: Creating PyTorch dataset...")
+            train_dataset = TimeSeriesDataset(X_seq, y_seq)
+            logger.info(f"DEBUG: Dataset created with {len(train_dataset)} samples")
+
+            train_loader = DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True)
+            logger.info(f"DEBUG: DataLoader created with batch_size={self.batch_size}")
+
             # Initialize model
-            self._model = LSTMNetwork(
-                input_size=self._input_size,
-                hidden_size=self.hidden_size,
-                num_layers=self.num_layers,
-                dropout=self.dropout,
-                bidirectional=self.bidirectional
-            ).to(self.device)
+            logger.info("DEBUG: Initializing LSTM network...")
+            logger.info(f"DEBUG: Model params - input_size={self._input_size}, hidden_size={self.hidden_size}, num_layers={self.num_layers}")
+
+            try:
+                self._model = LSTMNetwork(
+                    input_size=self._input_size,
+                    hidden_size=self.hidden_size,
+                    num_layers=self.num_layers,
+                    dropout=self.dropout,
+                    bidirectional=self.bidirectional
+                ).to(self.device)
+                logger.info("DEBUG: LSTM network created successfully")
+            except Exception as e:
+                logger.error(f"DEBUG: Failed to create LSTM network: {e}")
+                raise
             
             # Loss and optimizer
             criterion = nn.MSELoss()
             optimizer = optim.Adam(self._model.parameters(), lr=self.learning_rate)
             
             # Training loop
+            logger.info("DEBUG: Starting training loop...")
             best_val_loss = float('inf')
             patience_counter = 0
             best_model_state = None
-            
+
             for epoch in range(self.epochs):
+                logger.info(f"DEBUG: Starting epoch {epoch + 1}/{self.epochs}")
                 # Training
                 self._model.train()
                 train_loss = 0.0
-                
-                for batch_X, batch_y in train_loader:
-                    batch_X = batch_X.to(self.device)
-                    batch_y = batch_y.to(self.device)
-                    
-                    optimizer.zero_grad()
-                    outputs = self._model(batch_X)
-                    loss = criterion(outputs, batch_y)
-                    loss.backward()
-                    optimizer.step()
-                    
-                    train_loss += loss.item()
+
+                for batch_idx, (batch_X, batch_y) in enumerate(train_loader):
+                    if batch_idx == 0:
+                        logger.info(f"DEBUG: First batch - X shape: {batch_X.shape}, y shape: {batch_y.shape}")
+                        logger.info(f"DEBUG: First batch - X dtype: {batch_X.dtype}, y dtype: {batch_y.dtype}")
+
+                    try:
+                        batch_X = batch_X.to(self.device)
+                        batch_y = batch_y.to(self.device)
+
+                        optimizer.zero_grad()
+                        outputs = self._model(batch_X)
+                        loss = criterion(outputs, batch_y)
+                        loss.backward()
+                        optimizer.step()
+
+                        train_loss += loss.item()
+
+                        if batch_idx == 0:
+                            logger.info(f"DEBUG: First batch processed successfully - loss: {loss.item():.6f}")
+                    except Exception as e:
+                        logger.error(f"DEBUG: Error in batch {batch_idx}: {e}")
+                        raise
                 
                 train_loss /= len(train_loader)
                 
@@ -424,59 +518,97 @@ class LSTMModel(BaseModel):
             logger.error(f"Failed to train LSTMModel: {e}")
             raise
     
-    def predict(self, X: pd.DataFrame) -> np.ndarray:
+    def predict(self, X: Union[pd.DataFrame, np.ndarray]) -> np.ndarray:
         """
         Make predictions using the trained model.
-        
+
         Args:
-            X: Feature DataFrame (must have at least sequence_length rows)
-        
+            X: Feature DataFrame or 3D numpy array sequences
+
         Returns:
             Array of predictions
         """
         if self.status != ModelStatus.TRAINED:
             raise ValueError("Model must be trained before making predictions")
-        
+
         try:
             # Validate input data
             self.validate_data(X)
-            
-            # Ensure correct features
-            if self._feature_names:
-                missing_features = set(self._feature_names) - set(X.columns)
-                if missing_features:
-                    raise ValueError(f"Missing features: {missing_features}")
-                X_pred = X[self._feature_names]
+
+            # Check if we're receiving sequences or raw data
+            if isinstance(X, np.ndarray) and len(X.shape) == 3:
+                # Already sequences from LSTM data strategy
+                logger.debug("Received pre-processed sequences for prediction")
+                X_seq = X
+                # Handle any NaN values
+                X_seq = np.nan_to_num(X_seq, nan=0.0)
+
+                # Convert to tensor
+                X_tensor = torch.FloatTensor(X_seq).to(self.device)
+
+                # Make predictions
+                self._model.eval()
+                with torch.no_grad():
+                    predictions = self._model(X_tensor)
+
+                result = predictions.cpu().numpy()
+
             else:
-                X_pred = X
-            
-            # For prediction, we take the last sequence_length rows
-            if len(X_pred) < self.sequence_length:
-                raise ValueError(
-                    f"Need at least {self.sequence_length} rows for prediction, "
-                    f"got {len(X_pred)}"
-                )
-            
-            # Create sequence
-            X_values = X_pred.values[-self.sequence_length:]
-            X_seq = X_values.reshape(1, self.sequence_length, -1)
-            
-            # Normalize
-            X_seq = self._normalize_data(X_seq, fit=False)
-            
-            # Convert to tensor
-            X_tensor = torch.FloatTensor(X_seq).to(self.device)
-            
-            # Make prediction
-            self._model.eval()
-            with torch.no_grad():
-                prediction = self._model(X_tensor)
-            
-            result = prediction.cpu().numpy()
-            
+                # Raw data - need to create sequence
+                logger.debug("Processing raw data for prediction")
+
+                # Handle pandas DataFrame
+                if isinstance(X, pd.DataFrame):
+                    # Ensure correct features
+                    if self._feature_names:
+                        missing_features = set(self._feature_names) - set(X.columns)
+                        if missing_features:
+                            raise ValueError(f"Missing features: {missing_features}")
+                        X_pred = X[self._feature_names]
+                    else:
+                        X_pred = X
+
+                    # For prediction, we take the last sequence_length rows
+                    if len(X_pred) < self.sequence_length:
+                        raise ValueError(
+                            f"Need at least {self.sequence_length} rows for prediction, "
+                            f"got {len(X_pred)}"
+                        )
+
+                    # Create sequence
+                    X_values = X_pred.values[-self.sequence_length:]
+                    X_seq = X_values.reshape(1, self.sequence_length, -1)
+
+                else:
+                    # Handle numpy array
+                    if len(X.shape) != 2:
+                        raise ValueError(f"Expected 2D array for raw data, got shape {X.shape}")
+
+                    if X.shape[0] < self.sequence_length:
+                        raise ValueError(
+                            f"Need at least {self.sequence_length} rows for prediction, "
+                            f"got {X.shape[0]}"
+                        )
+
+                    # Create sequence
+                    X_seq = X[-self.sequence_length:].reshape(1, self.sequence_length, -1)
+
+                # Normalize
+                X_seq = self._normalize_data(X_seq, fit=False)
+
+                # Convert to tensor
+                X_tensor = torch.FloatTensor(X_seq).to(self.device)
+
+                # Make prediction
+                self._model.eval()
+                with torch.no_grad():
+                    prediction = self._model(X_tensor)
+
+                result = prediction.cpu().numpy()
+
             logger.debug("Made LSTM prediction")
             return result
-        
+
         except Exception as e:
             logger.error(f"Failed to make predictions: {e}")
             raise
@@ -589,49 +721,19 @@ class LSTMModel(BaseModel):
 
     def get_hyperparameter_search_space(self) -> Dict[str, Any]:
         """
-        Get hyperparameter search space for LSTM model optimization.
+        Get hyperparameter search space for LSTM model optimization (MVP - simple dict).
 
         Returns:
-            Dictionary defining the search space for Optuna optimization
+            Simple dictionary defining parameter ranges for optimization
         """
-        from ..finetune.hyperparameter_optimizer import SearchSpace
-
         return {
-            'hidden_size': SearchSpace(
-                param_type='categorical',
-                choices=[32, 64, 128, 256]
-            ),
-            'num_layers': SearchSpace(
-                param_type='int',
-                low=1,
-                high=4,
-                step=1
-            ),
-            'dropout': SearchSpace(
-                param_type='float',
-                low=0.1,
-                high=0.5,
-                step=0.05
-            ),
-            'learning_rate': SearchSpace(
-                param_type='float',
-                low=0.0001,
-                high=0.01,
-                step=0.0001,
-                log_scale=True
-            ),
-            'batch_size': SearchSpace(
-                param_type='categorical',
-                choices=[16, 32, 64, 128]
-            ),
-            'sequence_length': SearchSpace(
-                param_type='categorical',
-                choices=[10, 20, 30, 60]
-            ),
-            'bidirectional': SearchSpace(
-                param_type='categorical',
-                choices=[True, False]
-            )
+            'hidden_size': [32, 64, 128, 256],
+            'num_layers': (1, 4),
+            'dropout': (0.1, 0.5),
+            'learning_rate': (0.0001, 0.01),
+            'batch_size': [16, 32, 64, 128],
+            'sequence_length': [10, 20, 30, 60],
+            'bidirectional': [True, False]
         }
 
     def get_tunable_hyperparameters(self) -> List[str]:
@@ -658,9 +760,15 @@ class LSTMModel(BaseModel):
         Returns:
             Dictionary with model metadata and current configuration
         """
+        # Handle both enum and string status
+        if hasattr(self.status, 'value'):
+            status = self.status.value
+        else:
+            status = self.status
+
         return {
             'model_type': self.model_type,
-            'status': self.status.value,
+            'status': status,
             'hyperparameters': self.get_model_params(),
             'feature_names': self._feature_names,
             'input_size': self._input_size,

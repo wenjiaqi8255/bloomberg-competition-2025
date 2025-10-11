@@ -142,8 +142,8 @@ class FF5DataProvider(FactorDataProvider):
             if start_date or end_date:
                 clean_data = self.filter_by_date(clean_data, start_date, end_date)
 
-            # Add data source metadata
-            clean_data = self.add_data_source_metadata(clean_data)
+            # Note: Factor data is pure numeric data, no need for metadata columns
+            # Metadata columns would just need to be filtered out later anyway
 
             # Store in cache
             self._store_in_cache(cache_key, clean_data)

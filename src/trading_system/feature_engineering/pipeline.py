@@ -12,9 +12,8 @@ Key Principles:
 """
 
 import logging
-from typing import List, Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 from pathlib import Path
-from datetime import datetime
 import yaml
 import pandas as pd
 import numpy as np
@@ -22,11 +21,12 @@ from sklearn.preprocessing import StandardScaler
 import joblib
 
 from .models.data_types import FeatureConfig
-from .utils.technical_features import TechnicalIndicatorCalculator
-from .utils.cross_sectional_features import CrossSectionalFeatureCalculator
+from src.trading_system.feature_engineering.components.technical_features import TechnicalIndicatorCalculator
+from src.trading_system.feature_engineering.components.cross_sectional_features import CrossSectionalFeatureCalculator
 from .utils.panel_data_transformer import PanelDataTransformer
-from .cache_provider import FeatureCacheProvider
-from .local_cache_provider import LocalCacheProvider
+from src.trading_system.feature_engineering.utils.cache_provider import FeatureCacheProvider
+from src.trading_system.feature_engineering.utils.local_cache_provider import LocalCacheProvider
+from .box_feature_provider import BoxFeatureProvider, BoxFeatureConfig
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +76,18 @@ class FeatureEngineeringPipeline:
         else:
             self.cross_sectional_calculator = None
 
+        # Initialize box feature provider if configured
+        self.box_feature_provider = None
+        if hasattr(config, 'box_features') and config.box_features:
+            box_config = BoxFeatureConfig(**config.box_features)
+            if box_config.enabled:
+                self.box_feature_provider = BoxFeatureProvider(box_config)
+                logger.info("Initialized BoxFeatureProvider")
+            else:
+                logger.info("Box features are disabled in configuration")
+        else:
+            logger.info("No box features configuration found")
+
         # Auto cleanup cache if requested
         if auto_cleanup_cache and hasattr(self.feature_cache, 'clear_invalid_cache'):
             try:
@@ -87,6 +99,7 @@ class FeatureEngineeringPipeline:
 
         logger.info(f"Initialized pipeline with existing components, "
                    f"cross_sectional={'enabled' if self.cross_sectional_calculator else 'disabled'}, "
+                   f"box_features={'enabled' if self.box_feature_provider else 'disabled'}"
                    )
 
     def _get_index_format_for_model(self) -> Tuple[str, str]:
@@ -122,17 +135,64 @@ class FeatureEngineeringPipeline:
 
     def fit(self, data: Dict[str, pd.DataFrame]):
         """
-        Learn scaling parameters from training data using existing components.
+        Learn parameters from training data using existing components.
+
+        This method fits all sub-components and learns statistics needed for
+        preventing data leakage during backtesting.
 
         Args:
             data: Dictionary of DataFrames with 'price_data' key
         """
         logger.info("Fitting FeatureEngineeringPipeline...")
 
-        # Compute features using existing components
+        # Step 1: Fit cross-sectional calculator if available
+        if self.cross_sectional_calculator is not None:
+            logger.info("Fitting CrossSectionalFeatureCalculator...")
+            # Extract training dates from price data
+            all_dates = set()
+            for symbol, symbol_data in data['price_data'].items():
+                all_dates.update(symbol_data.index.tolist())
+            train_dates = sorted(list(all_dates))
+            
+            # Extract country risk provider from data if available
+            country_risk_provider = None
+            if 'country_risk_provider' in data:
+                country_risk_provider = data['country_risk_provider']
+            
+            # Fit cross-sectional calculator
+            self.cross_sectional_calculator.fit(
+                data['price_data'], 
+                train_dates,
+                country_risk_data=country_risk_provider.get_symbol_country_risk_data() if country_risk_provider else None
+            )
+            logger.info("CrossSectionalFeatureCalculator fitted successfully")
+
+        # Step 2: Fit box feature provider if available
+        if self.box_feature_provider is not None:
+            logger.info("Fitting BoxFeatureProvider...")
+            # Use the latest date as training end date
+            all_dates = set()
+            for symbol, symbol_data in data['price_data'].items():
+                all_dates.update(symbol_data.index.tolist())
+            train_end_date = max(all_dates)
+            
+            # Fit box feature provider
+            self.box_feature_provider.fit(data['price_data'], train_end_date)
+            logger.info("BoxFeatureProvider fitted successfully")
+
+        # Step 3: Compute features to learn NaN fill statistics
+        logger.info("Computing features to learn NaN fill statistics...")
         features = self.transform(data, is_fitting=True)
 
-        # Fit scalers for numeric features if normalization is enabled
+        # Step 4: Learn NaN fill statistics
+        if not features.empty:
+            self.nan_fill_values = features.median()
+            logger.info(f"Learned NaN fill statistics for {len(self.nan_fill_values)} features")
+        else:
+            logger.warning("No features computed during fitting, cannot learn NaN fill statistics")
+            self.nan_fill_values = {}
+
+        # Step 5: Fit scalers for numeric features if normalization is enabled
         if self.config.normalize_features and not features.empty:
             numeric_features = features.select_dtypes(include=['number']).columns
             for col in numeric_features:
@@ -167,26 +227,59 @@ class FeatureEngineeringPipeline:
         # Step 2: Compute cross-sectional features using existing CrossSectionalFeatureCalculator
         cross_sectional_features = pd.DataFrame()
         if self.cross_sectional_calculator is not None:
-            cross_sectional_features = self._compute_cross_sectional_features_with_cache(price_data)
+            # Extract country risk provider from data if available
+            country_risk_provider = None
+            if 'country_risk_provider' in data:
+                country_risk_provider = data['country_risk_provider']
+            cross_sectional_features = self._compute_cross_sectional_features_with_cache(
+                price_data, country_risk_provider, use_transform=not is_fitting
+            )
 
-        # Step 3: Merge features using existing PanelDataTransformer
-        features = self._merge_features_using_transformer(
-            technical_features, cross_sectional_features
-        )
+        # Step 3: Compute box features if configured
+        box_features = pd.DataFrame()
+        if self.box_feature_provider is not None:
+            box_features = self._compute_box_features_with_cache(price_data, use_transform=not is_fitting)
+            logger.info(f"Box features computed: {box_features.shape}")
 
-        # Step 4: Add factor data if available
-        if 'factor_data' in data and data['factor_data'] is not None:
-            features = self._merge_factor_data(features, data['factor_data'])
+        # Step 4: Create factor features if available
+        factor_features = pd.DataFrame()
+        if 'factor_data' in data and isinstance(data['factor_data'], pd.DataFrame) and not data['factor_data'].empty:
+            logger.info("Factor data available, creating factor features")
+            factor_features = self._create_factor_features(price_data, data['factor_data'])
+        else:
+            logger.info("No factor data available, skipping factor features")
 
-        # Step 5: Handle NaN values using simplified approach
+        # Step 5: Collect all feature types and merge once
+        all_feature_dfs = []
+        if not technical_features.empty:
+            all_feature_dfs.append(technical_features)
+        if not cross_sectional_features.empty:
+            all_feature_dfs.append(cross_sectional_features)
+        if not box_features.empty:
+            all_feature_dfs.append(box_features)
+        if not factor_features.empty:
+            all_feature_dfs.append(factor_features)
+
+        # Merge all features using existing transformer
+        if all_feature_dfs:
+            if len(all_feature_dfs) == 1:
+                features = all_feature_dfs[0]
+            else:
+                features = self._merge_features_using_transformer(all_feature_dfs[0], all_feature_dfs[1])
+                for i in range(2, len(all_feature_dfs)):
+                    features = self._merge_features_using_transformer(features, all_feature_dfs[i])
+        else:
+            features = pd.DataFrame()
+
+        # Step 7: Handle NaN values using learned statistics
         if not features.empty:
-            features = self._handle_nan_values(features)
+            features = self._handle_nan_values(features, use_learned_stats=not is_fitting)
 
-        # Step 6: Apply scaling if fitted and not in fitting mode
+        # Step 8: Apply scaling if fitted and not in fitting mode
         if self._is_fitted and not is_fitting:
             features = self._apply_scaling(features)
 
-        # Step 7: Return processed features
+        # Step 9: Return processed features
         logger.info(f"Feature transformation complete: {features.shape}")
         return features
 
@@ -281,7 +374,12 @@ class FeatureEngineeringPipeline:
             logger.warning("No technical features computed from any symbols")
             return pd.DataFrame()
 
-    def _compute_cross_sectional_features_with_cache(self, price_data: Dict[str, pd.DataFrame]) -> pd.DataFrame:
+    def _compute_cross_sectional_features_with_cache(
+        self,
+        price_data: Dict[str, pd.DataFrame],
+        country_risk_provider=None,
+        use_transform: bool = False
+    ) -> pd.DataFrame:
         """
         Compute cross-sectional features using existing CrossSectionalFeatureCalculator.
 
@@ -294,6 +392,16 @@ class FeatureEngineeringPipeline:
         logger.info("Computing cross-sectional features using CrossSectionalFeatureCalculator...")
 
         try:
+            # Get country risk data if provider is available
+            country_risk_data = None
+            if country_risk_provider:
+                try:
+                    country_risk_data = country_risk_provider.get_symbol_country_risk_data()
+                    logger.info(f"Loaded country risk data for {len(country_risk_data)} symbols")
+                except Exception as e:
+                    logger.warning(f"Failed to load country risk data: {e}")
+                    country_risk_data = None
+
             # Get all unique dates across all symbols
             all_dates = set()
             for symbol, data in price_data.items():
@@ -309,7 +417,9 @@ class FeatureEngineeringPipeline:
             panel_features = self.cross_sectional_calculator.calculate_panel_features(
                 price_data=price_data,
                 dates=all_dates,
-                feature_names=feature_names
+                feature_names=feature_names,
+                country_risk_data=country_risk_data,
+                use_transform=use_transform
             )
 
             # Use existing PanelDataTransformer to ensure consistent format
@@ -338,6 +448,101 @@ class FeatureEngineeringPipeline:
         except Exception as e:
             logger.error(f"Failed to compute cross-sectional features: {e}")
             return pd.DataFrame()
+
+    def _compute_box_features_with_cache(self, price_data: Dict[str, pd.DataFrame], 
+                                        use_transform: bool = False) -> pd.DataFrame:
+        """
+        Compute box features using BoxFeatureProvider.
+
+        Args:
+            price_data: Dictionary of price data for all symbols
+
+        Returns:
+            DataFrame with box classification features
+        """
+        if self.box_feature_provider is None:
+            return pd.DataFrame()
+
+        logger.info("Computing box features using BoxFeatureProvider...")
+
+        try:
+            # Get symbols from price data
+            symbols = list(price_data.keys())
+            if not symbols:
+                logger.warning("No symbols found in price data")
+                return pd.DataFrame()
+
+            # Generate box features
+            box_features = self.box_feature_provider.generate_box_features(
+                price_data=price_data,
+                symbols=symbols,
+                use_transform=use_transform
+            )
+
+            if not box_features.empty:
+                logger.info(f"Box features computed successfully: {box_features.shape}")
+                return box_features
+            else:
+                logger.warning("Box features computation returned empty result")
+                return pd.DataFrame()
+
+        except Exception as e:
+            logger.error(f"Failed to compute box features: {e}")
+            return pd.DataFrame()
+
+    def _merge_features_with_box_features(self,
+                                         features: pd.DataFrame,
+                                         box_features: pd.DataFrame) -> pd.DataFrame:
+        """
+        Merge existing features with box features.
+
+        Args:
+            features: Existing feature DataFrame
+            box_features: Box feature DataFrame to merge
+
+        Returns:
+            Merged feature DataFrame
+        """
+        if box_features.empty:
+            return features
+
+        if features.empty:
+            return box_features
+
+        try:
+            logger.info(f"Merging features {features.shape} with box features {box_features.shape}")
+
+            # Ensure both have the same index structure
+            if isinstance(features.index, pd.MultiIndex) and isinstance(box_features.index, pd.MultiIndex):
+                # Both have MultiIndex, use outer join
+                merged_features = pd.concat([features, box_features], axis=1, join='outer')
+            else:
+                # Handle different index formats
+                if isinstance(features.index, pd.MultiIndex):
+                    # Reset box_features index to match features format
+                    if not box_features.empty:
+                        box_features_reset = box_features.reset_index()
+                        box_features_reset.set_index(['date', 'symbol'], inplace=True)
+                        merged_features = pd.concat([features, box_features_reset], axis=1, join='outer')
+                    else:
+                        merged_features = features
+                else:
+                    # Convert both to simple format and merge
+                    features_reset = features.reset_index()
+                    box_features_reset = box_features.reset_index()
+                    merged_features = pd.concat([features_reset, box_features_reset], axis=1, join='outer')
+
+            # Remove duplicate columns if any
+            if merged_features.columns.duplicated().any():
+                merged_features = merged_features.loc[:, ~merged_features.columns.duplicated()]
+
+            logger.debug(f"Features merged with box features successfully: {merged_features.shape}")
+            return merged_features
+
+        except Exception as e:
+            logger.error(f"Failed to merge features with box features: {e}")
+            # Fallback: return original features
+            return features
 
     def _merge_features_using_transformer(self,
                                         technical_features: pd.DataFrame,
@@ -435,80 +640,156 @@ class FeatureEngineeringPipeline:
         logger.debug(f"Single feature type returned: {features.shape}")
         return features
 
-    def _merge_factor_data(self, features: pd.DataFrame, factor_data: pd.DataFrame) -> pd.DataFrame:
+    def _merge_country_risk_features(
+        self,
+        panel_features: pd.DataFrame,
+        country_risk_data: Dict[str, Dict[str, float]],
+        dates: List
+    ) -> pd.DataFrame:
         """
-        Merge factor data with features (simplified implementation).
+        Merge country risk features into panel features.
 
-        This is a simplified version that focuses on the essential merging logic.
+        Args:
+            panel_features: Existing panel features DataFrame
+            country_risk_data: Country risk data mapped to symbols
+            dates: List of dates in the panel
+
+        Returns:
+            Panel features DataFrame with country risk features added
         """
-        if factor_data is None or not isinstance(factor_data, pd.DataFrame):
-            logger.info("No factor data available or invalid format, skipping merge")
-            return features
-
-        if factor_data.empty:
-            logger.info("Factor data is empty, skipping merge")
-            return features
-
         try:
-            # Simplified factor data merging
-            # This is a basic implementation - could be enhanced with more sophisticated alignment
-            logger.info(f"Merging factor data with shape {factor_data.shape}")
+            logger.info(f"Merging country risk features into panel data with shape {panel_features.shape}")
 
-            # Filter out non-numeric columns (metadata like DataSource, Provider, etc.)
-            # Only keep numeric factor data for feature engineering
+            # Create country risk panel data
+            country_risk_records = []
+
+            for date in dates:
+                for symbol, risk_data in country_risk_data.items():
+                    record = {
+                        'date': date,
+                        'symbol': symbol,
+                        'country_risk_premium': risk_data.get('country_risk_premium', 0.0),
+                        'equity_risk_premium': risk_data.get('equity_risk_premium', 0.0),
+                        'default_spread': risk_data.get('default_spread', 0.0),
+                        'corporate_tax_rate': risk_data.get('corporate_tax_rate', 0.0)
+                    }
+                    country_risk_records.append(record)
+
+            # Create country risk panel DataFrame
+            if country_risk_records:
+                country_risk_panel = pd.DataFrame(country_risk_records)
+                country_risk_panel = country_risk_panel.set_index(['date', 'symbol'])
+
+                # Merge with existing panel features
+                merged_panel = pd.concat([panel_features, country_risk_panel], axis=1, join='outer')
+
+                logger.info(f"Successfully merged country risk features: {merged_panel.shape}")
+                return merged_panel
+            else:
+                logger.warning("No country risk records to merge")
+                return panel_features
+
+        except Exception as e:
+            logger.error(f"Failed to merge country risk features: {e}")
+            return panel_features
+
+    def _create_factor_features(self, price_data: Dict[str, pd.DataFrame], factor_data: pd.DataFrame) -> pd.DataFrame:
+        """
+        Create factor features independently from price_data structure.
+        
+        This method creates factor features without depending on existing features,
+        following KISS principle - each feature type is processed independently.
+        
+        Args:
+            price_data: Dictionary of price DataFrames by symbol
+            factor_data: Factor data DataFrame with numeric columns
+            
+        Returns:
+            DataFrame with factor features in proper MultiIndex format
+        """
+        if factor_data is None or not isinstance(factor_data, pd.DataFrame) or factor_data.empty:
+            logger.info("No factor data available, returning empty DataFrame")
+            return pd.DataFrame()
+        
+        try:
+            logger.info(f"Creating factor features from factor data with shape {factor_data.shape}")
+            
+            # Filter out non-numeric columns (metadata)
             numeric_factor_data = factor_data.select_dtypes(include=[np.number])
             non_numeric_cols = set(factor_data.columns) - set(numeric_factor_data.columns)
             if non_numeric_cols:
                 logger.info(f"Filtering out non-numeric factor columns: {non_numeric_cols}")
-                logger.debug(f"Keeping numeric columns: {list(numeric_factor_data.columns)}")
+            
             factor_data = numeric_factor_data
-
+            
             # Ensure factor data index is datetime
             factor_data.index = pd.to_datetime(factor_data.index)
-
-            # Get date range from features
-            if isinstance(features.index, pd.MultiIndex):
-                feature_dates = features.index.get_level_values('date').unique()
-            else:
-                feature_dates = features.index.unique()
-
-            # Resample factor data to match feature dates
-            factor_data_resampled = factor_data.reindex(feature_dates, method='ffill')
-
-            # For each symbol, add factor data
-            if isinstance(features.index, pd.MultiIndex):
-                symbols = features.index.get_level_values('symbol').unique()
-                all_features = []
-
-                for symbol in symbols:
-                    symbol_features = features.xs(symbol, level='symbol')
-
-                    # Add factor columns
-                    for factor_col in factor_data_resampled.columns:
-                        symbol_features[factor_col] = factor_data_resampled[factor_col].values
-
-                    # Recreate MultiIndex
-                    symbol_multiindex = pd.MultiIndex.from_product(
-                        [[symbol], symbol_features.index], names=['symbol', 'date']
-                    )
-                    symbol_features.index = symbol_multiindex
-                    all_features.append(symbol_features)
-
-                merged_features = pd.concat(all_features, axis=0)
-            else:
-                # Simple concatenation for non-MultiIndex data
-                merged_features = features.copy()
+            
+            # Get all unique dates from price data
+            all_dates = set()
+            all_symbols = set()
+            for symbol, data in price_data.items():
+                if not data.empty:
+                    all_dates.update(data.index.tolist())
+                    all_symbols.add(symbol)
+            
+            all_dates = sorted(list(all_dates))
+            all_symbols = sorted(list(all_symbols))
+            
+            if not all_dates or not all_symbols:
+                logger.warning("No valid dates or symbols found in price data")
+                return pd.DataFrame()
+            
+            # Resample factor data to match all dates
+            factor_data_resampled = factor_data.reindex(all_dates, method='ffill')
+            
+            # Create factor features for each symbol
+            all_factor_features = []
+            index_format = self._get_index_format_for_model()
+            level_0_name, level_1_name = index_format
+            
+            for symbol in all_symbols:
+                # Create DataFrame with factor columns for this symbol
+                symbol_factor_features = pd.DataFrame(index=all_dates)
+                
+                # Add each factor column
                 for factor_col in factor_data_resampled.columns:
-                    merged_features[factor_col] = factor_data_resampled[factor_col].values
-
-            logger.info(f"Factor data merge complete: {merged_features.shape}")
-            return merged_features
-
+                    symbol_factor_features[factor_col] = factor_data_resampled[factor_col].values
+                
+                # Create MultiIndex
+                if index_format == ('symbol', 'date'):
+                    # Time series format: (symbol, date)
+                    symbol_multiindex = pd.MultiIndex.from_arrays([
+                        [symbol] * len(all_dates), 
+                        pd.to_datetime(all_dates)
+                    ], names=[level_0_name, level_1_name])
+                else:
+                    # Panel data format: (date, symbol)
+                    symbol_multiindex = pd.MultiIndex.from_arrays([
+                        pd.to_datetime(all_dates),
+                        [symbol] * len(all_dates)
+                    ], names=[level_0_name, level_1_name])
+                
+                symbol_factor_features.index = symbol_multiindex
+                all_factor_features.append(symbol_factor_features)
+            
+            # Combine all factor features
+            if all_factor_features:
+                combined_factor_features = pd.concat(all_factor_features, axis=0)
+                combined_factor_features.sort_index(inplace=True)
+                logger.info(f"Factor features created: {combined_factor_features.shape}")
+                logger.info(f"Factor columns: {list(combined_factor_features.columns)}")
+                return combined_factor_features
+            else:
+                logger.warning("No factor features created")
+                return pd.DataFrame()
+                
         except Exception as e:
-            logger.error(f"Failed to merge factor data: {e}")
-            return features
+            logger.error(f"Failed to create factor features: {e}")
+            return pd.DataFrame()
+    
 
-    def _handle_nan_values(self, features: pd.DataFrame) -> pd.DataFrame:
+    def _handle_nan_values(self, features: pd.DataFrame, use_learned_stats: bool = False) -> pd.DataFrame:
         """
         Simplified NaN handling using existing validation patterns.
 
@@ -532,8 +813,15 @@ class FeatureEngineeringPipeline:
         features_clean = features.ffill().bfill().interpolate(method='linear')
 
         # Final median fill for any remaining NaNs
-        median_values = features_clean.median()
-        features_clean = features_clean.fillna(median_values)
+        if use_learned_stats and hasattr(self, 'nan_fill_values') and not self.nan_fill_values.empty:
+            # Use learned statistics for backtesting
+            logger.debug("Using learned NaN fill statistics")
+            features_clean = features_clean.fillna(self.nan_fill_values)
+        else:
+            # Use current data statistics for training
+            logger.debug("Using current data NaN fill statistics")
+            median_values = features_clean.median()
+            features_clean = features_clean.fillna(median_values)
 
         # Handle infinite values
         features_clean = features_clean.replace([float('inf'), float('-inf')], [1e10, -1e10])

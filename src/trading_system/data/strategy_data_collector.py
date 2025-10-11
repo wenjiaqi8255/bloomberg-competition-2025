@@ -112,6 +112,101 @@ class StrategyDataCollector:
 
         return strategy_returns_df, target_returns
 
+    def collect_from_portfolio_files(self,
+                                   strategy_patterns: List[str],
+                                   start_date: datetime,
+                                   end_date: datetime,
+                                   target_benchmark: Optional[str] = None) -> Tuple[pd.DataFrame, pd.Series]:
+        """
+        Collect strategy returns from portfolio files using pattern matching.
+
+        This method extracts returns from portfolio CSV files using file patterns.
+        It uses the PortfolioReturnsExtractor utility for pure data processing.
+
+        Args:
+            strategy_patterns: List of file patterns (e.g., ['ml_strategy_*', 'ff5_*'])
+            start_date: Start date for data collection
+            end_date: End date for data collection
+            target_benchmark: Optional benchmark symbol for target returns
+
+        Returns:
+            Tuple of (strategy_returns_df, target_returns_series)
+        """
+        from src.trading_system.data.extractor.portfolio_returns_extractor import PortfolioReturnsExtractor
+
+        logger.info(f"Collecting strategy returns from portfolio files using {len(strategy_patterns)} patterns "
+                   f"from {start_date.date()} to {end_date.date()}")
+
+        strategy_returns = {}
+
+        # Find all matching portfolio files
+        portfolio_files = []
+        for pattern in strategy_patterns:
+            matching_files = list(self.data_dir.glob(f"{pattern}_portfolio.csv"))
+            portfolio_files.extend(matching_files)
+
+        logger.info(f"Found {len(portfolio_files)} matching portfolio files")
+
+        # Extract returns from each portfolio file
+        for portfolio_file in portfolio_files:
+            try:
+                # Extract strategy name from filename
+                strategy_name = portfolio_file.stem.replace('_portfolio', '')
+
+                # Extract returns using the pure function utility
+                returns_series = PortfolioReturnsExtractor.extract_returns_from_portfolio(portfolio_file)
+
+                if not returns_series.empty:
+                    # Filter by date range
+                    mask = (returns_series.index >= start_date) & (returns_series.index <= end_date)
+                    filtered_returns = returns_series.loc[mask]
+
+                    if not filtered_returns.empty:
+                        strategy_returns[strategy_name] = filtered_returns
+                        logger.info(f"Extracted {len(filtered_returns)} returns for {strategy_name}")
+                    else:
+                        logger.warning(f"No data found for {strategy_name} in specified date range")
+                else:
+                    logger.warning(f"No returns extracted from {portfolio_file}")
+
+            except Exception as e:
+                logger.error(f"Failed to extract returns from {portfolio_file}: {e}")
+                continue
+
+        if not strategy_returns:
+            raise ValueError("No strategy returns data could be collected from portfolio files")
+
+        # Align returns series using the pure function utility
+        returns_list = [(name, series) for name, series in strategy_returns.items()]
+        aligned_returns_df = PortfolioReturnsExtractor.align_returns_series(returns_list, method='inner')
+
+        logger.info(f"Aligned strategy returns DataFrame shape: {aligned_returns_df.shape}")
+
+        # Validate data quality
+        is_valid, issues = PortfolioReturnsExtractor.validate_returns_data(aligned_returns_df)
+        if not is_valid:
+            logger.warning(f"Data quality issues found: {issues}")
+
+        # Generate target returns
+        if target_benchmark and target_benchmark.lower() != 'equal_weighted':
+            target_returns = self._get_benchmark_returns(target_benchmark, aligned_returns_df.index)
+        else:
+            # Use equal-weighted portfolio (financial industry standard)
+            target_returns = PortfolioReturnsExtractor.create_equal_weighted_target(aligned_returns_df)
+            logger.info("Using equal-weighted strategy portfolio as target returns")
+
+        # Calculate and log strategy statistics
+        stats = PortfolioReturnsExtractor.calculate_strategy_statistics(aligned_returns_df)
+        logger.info("Strategy statistics:")
+        for strategy, stat in stats.items():
+            logger.info(f"  {strategy}: Return={stat['annual_return']:.2%}, "
+                       f"Vol={stat['annual_volatility']:.2%}, "
+                       f"Sharpe={stat['sharpe_ratio']:.2f}")
+
+        logger.info(f"Target returns series shape: {target_returns.shape}")
+
+        return aligned_returns_df, target_returns
+
     def collect_from_live_results(self,
                                  strategy_results: Dict[str, pd.DataFrame],
                                  target_benchmark: Optional[str] = None) -> Tuple[pd.DataFrame, pd.Series]:

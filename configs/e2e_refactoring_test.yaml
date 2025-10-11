@@ -1,0 +1,153 @@
+# End-to-End Refactoring Test Configuration
+# =========================================
+# Tests the refactored orchestration system with XGBoost + FF5 strategies
+# using box-based portfolio construction over a short 1-month period
+
+system:
+  initial_capital: 100000
+  enable_short_selling: false
+
+# Data providers
+data_provider:
+  type: YFinanceProvider
+  parameters:
+    max_retries: 3
+    retry_delay: 1.0
+    request_timeout: 30
+
+factor_data_provider:
+  type: FF5DataProvider
+  parameters:
+    data_frequency: daily
+    cache_dir: ./cache/factors
+
+# Test universe - 5 stocks for quick validation
+universe:
+  - AAPL
+  - MSFT
+  - GOOGL
+  - AMZN
+  - TSLA
+
+# Strategies configuration
+strategies:
+  - name: XGBoostMLStrategy
+    type: ml_strategy
+    parameters:
+      model_type: xgboost
+      model_config:
+        max_depth: 6
+        learning_rate: 0.1
+        n_estimators: 100
+        subsample: 0.8
+        colsample_bytree: 0.8
+      features:
+        - momentum_20
+        - rsi_14
+        - volatility_20
+        - volume_ratio
+        - price_to_ma_20
+      min_signal_strength: 0.1
+      enable_normalization: true
+      normalization_method: minmax  # Ensure [0,1] range for TradingSignal compatibility
+      universe: [AAPL, MSFT, GOOGL, AMZN, TSLA]
+      
+  - name: FF5FactorStrategy
+    type: fama_french_5
+    parameters:
+      lookback_days: 252
+      risk_free_rate: 0.02
+      universe: [AAPL, MSFT, GOOGL, AMZN, TSLA]
+
+# MetaModel configuration for signal combination
+metamodel:
+  method: equal  # Simple equal weighting for validation
+  # Alternative: ridge with alpha=0.1
+  # method: ridge
+  # alpha: 0.1
+
+# Portfolio construction - Box-based method
+portfolio_construction:
+  method: box_based
+  stocks_per_box: 2
+  min_stocks_per_box: 1
+  allocation_method: equal
+  box_weights:
+    method: equal
+    dimensions:
+      size: [large, mid, small]
+      style: [growth, value]
+  classifier:
+    method: four_factor
+    cache_enabled: true
+
+# Component configurations
+coordinator:
+  max_signals_per_day: 20
+  signal_conflict_resolution: merge
+  min_signal_strength: 0.05
+  max_position_size: 0.25
+
+allocator:
+  strategy_allocations:
+    - strategy_name: XGBoostMLStrategy
+      target_weight: 0.5
+      min_weight: 0.3
+      max_weight: 0.7
+      priority: 1
+    - strategy_name: FF5FactorStrategy
+      target_weight: 0.5
+      min_weight: 0.3
+      max_weight: 0.7
+      priority: 1
+  rebalance_threshold: 0.05
+  max_single_position_weight: 0.25
+  cash_buffer_weight: 0.05
+
+compliance:
+  max_single_position_weight: 0.25
+  max_sector_allocation: 0.40
+  max_concentration_top5: 0.60
+  max_concentration_top10: 0.80
+  box_exposure_limits:
+    size: 0.35
+    style: 0.35
+    region: 0.50
+
+executor:
+  max_order_size_percent: 0.10
+  min_order_size_usd: 1000
+  max_positions_per_day: 10
+  commission_rate: 0.001
+  cooling_period_hours: 1
+  default_order_type: market
+  expected_slippage_bps: 5
+
+reporter:
+  daily_reports: true
+  weekly_reports: false
+  monthly_reports: false
+  benchmark_symbol: SPY
+  file_format: csv
+  output_directory: ./test_results/e2e_refactoring
+
+# Test run configuration
+run:
+  start_date: "2024-01-01"
+  end_date: "2024-01-31"
+
+# Output settings
+output:
+  save_trades: true
+  save_portfolio_history: true
+  save_performance_metrics: true
+  save_component_stats: true
+  save_compliance_reports: true
+  output_directory: "./test_results/e2e_refactoring"
+  format: ["csv", "json"]
+
+# Logging configuration
+logging:
+  level: INFO
+  log_to_file: true
+  log_file: "./test_results/e2e_refactoring/test.log"

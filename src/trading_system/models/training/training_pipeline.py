@@ -16,7 +16,6 @@ Key Features:
 import logging
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Tuple
-from pathlib import Path
 
 import pandas as pd
 import numpy as np
@@ -25,8 +24,10 @@ from .trainer import ModelTrainer, TrainingResult, TrainingConfig
 from ..base.model_factory import ModelFactory
 from ..model_persistence import ModelRegistry
 from ...feature_engineering.pipeline import FeatureEngineeringPipeline
-from ...config.feature import FeatureConfig
-from .data_strategies import DataProcessingStrategy, DataStrategyFactory
+from ...experiment_tracking.interface import ExperimentTrackerInterface
+from ...experiment_tracking.config import create_training_config
+
+# DataStrategies已删除 - 简化版本不需要复杂的数据策略
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +50,9 @@ class TrainingPipeline:
                  feature_pipeline: FeatureEngineeringPipeline,
                  config: Optional[TrainingConfig] = None,
                  registry_path: Optional[str] = None,
-                 data_strategy: Optional[DataProcessingStrategy] = None,
-                 model_config: Optional[Dict[str, Any]] = None):
+                 data_strategy: Optional[Any] = None,  # 简化版本，不再依赖DataProcessingStrategy
+                 model_config: Optional[Dict[str, Any]] = None,
+                 experiment_tracker: Optional[ExperimentTrackerInterface] = None):
         """
         Initialize the training pipeline.
 
@@ -69,25 +71,15 @@ class TrainingPipeline:
         self.registry = ModelRegistry(registry_path or "./models/")
         self.trainer = ModelTrainer(self.config)
 
-        # Select appropriate data processing strategy based on model type
-        if data_strategy is None:
-            # Extract model-specific parameters for strategy initialization
-            strategy_kwargs = {}
-            if model_type.lower() in ['lstm', 'gru']:
-                strategy_kwargs['sequence_length'] = self.model_config.get('sequence_length', 10)
-
-            self.data_strategy = DataStrategyFactory.create_strategy(
-                model_type,
-                **strategy_kwargs
-            )
-            logger.info(f"Auto-selected {self.data_strategy.__class__.__name__} for model type: {model_type}")
-        else:
-            self.data_strategy = data_strategy
-            logger.info(f"Using provided {self.data_strategy.__class__.__name__} for model type: {model_type}")
+        # 简化版本 - 不再使用复杂的数据策略
+        self.data_strategy = None
+        logger.info(f"Using simplified data handling for model type: {model_type}")
 
         # Data providers are configured separately
         self.data_provider = None
         self.factor_data_provider = None
+        # Experiment tracker (optional)
+        self.experiment_tracker = experiment_tracker
 
     def configure_data(self, data_provider, factor_data_provider=None) -> 'TrainingPipeline':
         """
@@ -129,6 +121,28 @@ class TrainingPipeline:
         """
         logger.info(f"Starting training pipeline for {self.model_type}")
 
+        # Initialize experiment tracking run if available
+        run_id = None
+        if self.experiment_tracker is not None:
+            try:
+                exp_cfg = create_training_config(
+                    project_name="bloomberg-competition",
+                    model_type=self.model_type,
+                    hyperparameters={
+                        "model_config": kwargs.get("model_config", {}),
+                        "symbols": symbols,
+                        "start_date": str(start_date),
+                        "end_date": str(end_date)
+                    },
+                    tags=["training"],
+                    notes="Unified training run from TrainingPipeline"
+                )
+                run_id = self.experiment_tracker.init_run(exp_cfg)
+                self.experiment_tracker.update_run_status("training")
+                self.experiment_tracker.log_params(exp_cfg.hyperparameters)
+            except Exception as e:
+                logger.warning(f"Experiment tracker init failed: {e}")
+
         if not self.data_provider:
             raise ValueError("Data provider must be configured")
 
@@ -157,78 +171,45 @@ class TrainingPipeline:
             )
             
             # Encapsulate data for the feature pipeline
-            feature_input_data = {'price_data': price_data, 'factor_data': factor_data}
+            feature_input_data = {'price_data': price_data, 'factor_data': factor_data }
 
-            # Step 2: Fit the feature pipeline and then transform the data
-            logger.info("Step 2: Fitting and transforming features...")
-            self.feature_pipeline.fit(feature_input_data)
-            features = self.feature_pipeline.transform(feature_input_data)
-
-            # Step 3: Prepare training data
-            logger.info("Step 3: Preparing training data...")
-            logger.info(f"DEBUG: Features shape: {features.shape}, Features date range: {features.index.min()} to {features.index.max()}")
-            logger.info(f"DEBUG: Target data shape: {[len(v) for v in target_data.values()] if isinstance(target_data, dict) else 'N/A'}")
-            if isinstance(target_data, dict) and target_data:
-                first_symbol = list(target_data.keys())[0]
-                logger.info(f"DEBUG: Sample target data for {first_symbol}: shape {target_data[first_symbol].shape}, range {target_data[first_symbol].index.min()} to {target_data[first_symbol].index.max()}")
-                logger.info(f"DEBUG: Target {first_symbol} stats: mean={target_data[first_symbol].mean():.6f}, std={target_data[first_symbol].std():.6f}, min={target_data[first_symbol].min():.6f}, max={target_data[first_symbol].max():.6f}")
-
-            X, y = self._prepare_training_data(features, target_data, start_date, end_date)
-
-            logger.info(f"DEBUG: After _prepare_training_data:")
-            logger.info(f"DEBUG: X shape: {X.shape}, y shape: {y.shape}")
-
-            # Handle different data types in debug logging
-            if isinstance(X, pd.DataFrame):
-                logger.info(f"DEBUG: X date range: {X.index.min()} to {X.index.max()}")
-                logger.info(f"DEBUG: y date range: {y.index.min()} to {y.index.max()}")
-                logger.info(f"DEBUG: y stats: mean={y.mean():.6f}, std={y.std():.6f}, min={y.min():.6f}, max={y.max():.6f}")
-                logger.info(f"DEBUG: X has NaN values: {X.isnull().any().any()}, Total NaN count: {X.isnull().sum().sum()}")
-                logger.info(f"DEBUG: y has NaN values: {y.isnull().any()}, NaN count: {y.isnull().sum()}")
-                logger.info(f"DEBUG: X feature types sample: {dict(list(X.dtypes.head(10).items()))}")
-
-                # DEBUG: Check for any DataFrame columns (shouldn't exist but let's verify)
-                problematic_cols = []
-                for col in X.columns:
-                    if isinstance(X[col], pd.DataFrame):
-                        problematic_cols.append(col)
-                        logger.error(f"DEBUG: Column '{col}' is a DataFrame with shape {X[col].shape}")
-                        logger.error(f"DEBUG: Column '{col}' columns: {list(X[col].columns)}")
-                        logger.error(f"DEBUG: Column '{col}' index: {X[col].index}")
-
-                if problematic_cols:
-                    logger.error(f"DEBUG: Found {len(problematic_cols)} DataFrame columns that should be Series: {problematic_cols}")
-                    # Try to fix the issue by taking the first column if it's a single-column DataFrame
-                    for col in problematic_cols:
-                        if isinstance(X[col], pd.DataFrame) and len(X[col].columns) == 1:
-                            logger.info(f"DEBUG: Attempting to fix column '{col}' by extracting first column")
-                            X[col] = X[col].iloc[:, 0]
-                else:
-                    logger.info("DEBUG: All columns are properly formatted as Series")
-            elif isinstance(X, np.ndarray):
-                logger.info(f"DEBUG: LSTM array data - shape: {X.shape}, dtype: {X.dtype}")
-                if X.ndim == 3:
-                    logger.info(f"DEBUG: LSTM sequences: {X.shape[0]} samples, {X.shape[1]} timesteps, {X.shape[2]} features")
-                logger.info(f"DEBUG: y shape: {y.shape}, dtype: {y.dtype}")
-                logger.info(f"DEBUG: y stats: mean={y.mean():.6f}, std={y.std():.6f}, min={y.min():.6f}, max={y.max():.6f}")
-                logger.info(f"DEBUG: X has NaN values: {np.isnan(X).any()}, Total NaN count: {np.isnan(X).sum()}")
-                logger.info(f"DEBUG: y has NaN values: {np.isnan(y).any()}, NaN count: {np.isnan(y).sum()}")
-            else:
-                logger.info(f"DEBUG: Unknown data type: {type(X)}")
-
-            # Step 4: Create and train model
-            logger.info("Step 4: Training model...")
+            # Step 2: Create model and delegate training to trainer with CV
+            logger.info("Step 2: Creating model and training with cross-validation...")
             model = ModelFactory.create(self.model_type, config=kwargs.get('model_config'))
             logger.info(f"DEBUG: Created model type: {self.model_type}")
             logger.info(f"DEBUG: Model config: {kwargs.get('model_config', 'None')}")
 
-            training_result = self.trainer.train(model, X, y)
+            # ** KEY CHANGE: Don't fit pipeline here! Pass raw data and unfitted pipeline to trainer
+            # The trainer will handle CV and fit the pipeline for each fold independently
+            logger.info("Delegating training to ModelTrainer with CV and independent pipeline fitting...")
+            training_result = self.trainer.train_with_cv(
+                model=model,
+                data={
+                    'price_data': price_data,
+                    'factor_data': factor_data,
+                    'target_data': target_data
+                },
+                feature_pipeline=self.feature_pipeline,  # Pass unfitted pipeline
+                date_range=(start_date, end_date)  # Actual training date range
+            )
 
             logger.info(f"DEBUG: Training completed. Training result keys: {training_result.__dict__.keys() if hasattr(training_result, '__dict__') else 'No __dict__'}")
             if hasattr(training_result, 'validation_metrics') and training_result.validation_metrics:
                 logger.info(f"DEBUG: Training validation metrics: {training_result.validation_metrics}")
             else:
                 logger.warning("DEBUG: No validation metrics found in training result")
+
+            # Log metrics to experiment tracker if available
+            if self.experiment_tracker is not None and getattr(training_result, 'validation_metrics', None):
+                try:
+                    flat_metrics = {}
+                    for k, v in training_result.validation_metrics.items():
+                        if isinstance(v, (int, float)):
+                            flat_metrics[k] = v
+                    if flat_metrics:
+                        self.experiment_tracker.log_metrics(flat_metrics)
+                except Exception as e:
+                    logger.warning(f"Experiment tracker log_metrics failed: {e}")
 
             # Step 5: Register model and artifacts
             logger.info("Step 5: Registering model and artifacts...")
@@ -248,35 +229,78 @@ class TrainingPipeline:
                         cv_results=training_result.cv_results
                     )
 
-                # Re-apply the fix: Use `save_model_with_artifacts` to bundle the pipeline
+                # ** KEY CHANGE: Use the fitted pipeline from training result
+                # This ensures the saved pipeline has been properly fitted during CV
+                fitted_pipeline = getattr(training_result, 'feature_pipeline', self.feature_pipeline)
                 model_id = self.registry.save_model_with_artifacts(
                     model=training_result.model,
                     model_name=model_name,
                     artifacts={
-                        'feature_pipeline': self.feature_pipeline,
+                        'feature_pipeline': fitted_pipeline,  # Use fitted pipeline from CV
                         'training_result': training_result  # Also save the complete training result
                     },
                     tags={
-                        'pipeline_version': '3.0.0', # Mark new saving format
+                        'pipeline_version': '4.0.0', # Mark new CV-aware saving format
                         'training_date': datetime.now().isoformat(),
                         'data_period': f"{start_date.date()}_{end_date.date()}",
-                        'symbols': ','.join(symbols)
+                        'symbols': ','.join(symbols),
+                        'cv_method': self.config.cv_method if hasattr(self.config, 'cv_method') else 'unknown'
                     }
                 )
+
+                # Log basic training artifacts/metadata
+                if self.experiment_tracker is not None:
+                    try:
+                        meta = {
+                            "model_id": model_id,
+                            "model_type": self.model_type,
+                            "feature_count": int(features.shape[1]) if isinstance(features, pd.DataFrame) else None,
+                            "training_samples": int(getattr(training_result.model.metadata, "training_samples", 0))
+                        }
+                        self.experiment_tracker.log_artifact_from_dict(meta, artifact_name=f"{model_id}_training_metadata")
+                    except Exception as e:
+                        logger.warning(f"Experiment tracker log_artifact_from_dict failed: {e}")
             else:
                 logger.warning("Model was not successfully trained, skipping registration.")
 
             # Step 6: Generate report
             logger.info("Step 6: Generating pipeline report...")
+            # Get features from the fitted pipeline for reporting
+            fitted_pipeline = getattr(training_result, 'feature_pipeline', self.feature_pipeline)
+            if fitted_pipeline and hasattr(fitted_pipeline, 'transform'):
+                try:
+                    # Transform data to get features for reporting
+                    report_features = fitted_pipeline.transform(feature_input_data)
+                except Exception as e:
+                    logger.warning(f"Could not generate features for report: {e}")
+                    report_features = None
+            else:
+                report_features = None
+            
             pipeline_result = self._generate_pipeline_report(
-                model_id, training_result, price_data, features
+                model_id, training_result, price_data, report_features
             )
 
             logger.info(f"Training pipeline completed successfully. Model ID: {model_id}")
+
+            # Mark run completed
+            if self.experiment_tracker is not None:
+                try:
+                    self.experiment_tracker.update_run_status("completed")
+                    self.experiment_tracker.finish_run(exit_code=0)
+                except Exception as e:
+                    logger.warning(f"Experiment tracker finish_run failed: {e}")
             return pipeline_result
 
         except Exception as e:
             logger.error(f"Training pipeline failed: {e}")
+            if self.experiment_tracker is not None:
+                try:
+                    self.experiment_tracker.update_run_status("failed")
+                    self.experiment_tracker.log_alert("training_failed", str(e), level="error")
+                    self.experiment_tracker.finish_run(exit_code=1)
+                except Exception:
+                    pass
             raise RuntimeError(f"Pipeline failed: {e}")
 
     def _load_data(self,
@@ -328,40 +352,24 @@ class TrainingPipeline:
                               start_date: datetime,
                               end_date: datetime) -> Tuple[pd.DataFrame, pd.Series]:
         """
-        Prepare training data using the configured data processing strategy.
+        Prepare training data using simple MVP approach (no complex data strategy).
 
-        This method delegates to the appropriate strategy based on model type,
-        following the Strategy pattern for clean separation of concerns.
+        Handles alignment between features and targets, supporting both cross-sectional
+        and time series data formats based on model type.
         """
-        logger.info(f"Preparing training data using {self.data_strategy.__class__.__name__}")
-        logger.info(f"Strategy expects index order: {self.data_strategy.get_expected_index_order()}")
+        logger.info(f"Preparing training data using simple MVP approach for {self.model_type}")
 
-        # Delegate data alignment and slicing to the strategy
-        X, y = self.data_strategy.align_and_slice_data(
-            features=features,
-            targets=target_data,
-            start_date=start_date,
-            end_date=end_date
-        )
-
-        # Handle both DataFrame and numpy array formats
-        if isinstance(X, pd.DataFrame):
-            logger.info(f"Strategy completed: {len(X)} samples, {len(X.columns)} features prepared")
-        elif isinstance(X, np.ndarray):
-            if X.ndim == 3:  # LSTM format: (samples, timesteps, features)
-                logger.info(f"Strategy completed: {X.shape[0]} sequences, {X.shape[1]} timesteps, {X.shape[2]} features prepared")
-            else:  # 2D array format
-                logger.info(f"Strategy completed: {X.shape[0]} samples, {X.shape[1]} features prepared")
+        # Simple MVP data preparation - no complex strategy pattern
+        if self.model_type in ['lstm_model']:
+            return self._prepare_lstm_data(features, target_data, start_date, end_date)
         else:
-            logger.info(f"Strategy completed: prepared data with shape {getattr(X, 'shape', 'unknown')}")
-
-        return X, y
+            return self._prepare_tabular_data(features, target_data, start_date, end_date)
 
     def _generate_pipeline_report(self,
                                  model_id: Optional[str],
                                  training_result: TrainingResult,
                                  price_data: Dict[str, pd.DataFrame],
-                                 features: pd.DataFrame) -> Dict[str, Any]:
+                                 features: Optional[pd.DataFrame]) -> Dict[str, Any]:
         """
         Generate a comprehensive pipeline execution report.
 
@@ -384,7 +392,7 @@ class TrainingPipeline:
             'data_info': {
                 'symbols': list(price_data.keys()),
                 'price_data_points': sum(len(df) for df in price_data.values()),
-                'feature_count': len(features.columns),
+                'feature_count': len(features.columns) if features is not None else 0,
                 'training_samples': training_result.model.metadata.training_samples
             },
             'training_results': training_result.get_summary(),
@@ -430,3 +438,175 @@ class TrainingPipeline:
                 logger.info(f"Attached feature_pipeline artifact to model '{model_id}'")
             return model
         return None
+
+    def _prepare_tabular_data(self,
+                             features: pd.DataFrame,
+                             target_data: Dict[str, pd.Series],
+                             start_date: datetime,
+                             end_date: datetime) -> Tuple[pd.DataFrame, pd.Series]:
+        """
+        Prepare tabular data for cross-sectional models (XGBoost, FF5, etc.).
+        """
+        logger.info("Preparing tabular (cross-sectional) data")
+
+        # Handle MultiIndex features using PanelDataFormatter
+        if isinstance(features.index, pd.MultiIndex):
+            try:
+                from ...feature_engineering.utils.panel_formatter import PanelDataFormatter
+
+                # Standardize to panel format (date, symbol) using PanelDataFormatter
+                features_standardized = PanelDataFormatter.ensure_panel_format(
+                    features,
+                    index_order=('date', 'symbol'),
+                    validate=True,
+                    auto_fix=True
+                )
+
+                # Filter by date range on standardized format
+                date_mask = (features_standardized.index.get_level_values('date') >= start_date) & \
+                           (features_standardized.index.get_level_values('date') <= end_date)
+                features_filtered = features_standardized[date_mask]
+
+                logger.debug(f"Standardized features to panel format: {features_filtered.shape}")
+
+            except ImportError:
+                logger.warning("PanelDataFormatter not available, using fallback logic")
+                # Fallback to simple date filtering
+                features_filtered = features.loc[start_date:end_date]
+        else:
+            # Filter regular index by date range
+            features_filtered = features.loc[start_date:end_date]
+
+        # Prepare target data using standardized panel format
+        all_targets = []
+        all_features = []
+
+        # Use PanelDataFormatter to standardize target data as well
+        try:
+            from ...feature_engineering.utils.panel_formatter import PanelDataFormatter
+
+            # Convert target data to panel format for easier merging
+            target_records = []
+            for symbol, target_series in target_data.items():
+                for date, value in target_series.items():
+                    target_records.append({
+                        'date': pd.to_datetime(date),
+                        'symbol': symbol,
+                        'target': value
+                    })
+
+            if target_records:
+                target_panel = pd.DataFrame(target_records)
+                target_panel = target_panel.set_index(['date', 'symbol'])
+                target_panel = target_panel['target']  # Convert to Series
+
+                # Filter target panel by date range
+                target_mask = (target_panel.index.get_level_values('date') >= start_date) & \
+                             (target_panel.index.get_level_values('date') <= end_date)
+                target_filtered = target_panel[target_mask]
+
+                # Merge features and targets using the panel structure
+                merged_data = pd.concat([features_filtered, target_filtered], axis=1, join='inner')
+
+                if not merged_data.empty:
+                    X = merged_data.drop(columns=['target'])
+                    y = merged_data['target']
+
+                    # Remove any remaining NaN values
+                    valid_mask = ~(X.isnull().any(axis=1) | y.isnull())
+                    X = X[valid_mask]
+                    y = y[valid_mask]
+
+                    logger.info(f"Panel data prepared: {len(X)} samples, {len(X.columns)} features")
+                    return X, y
+                else:
+                    logger.warning("No overlapping data between features and targets")
+                    raise ValueError("No valid training data available after alignment")
+
+        except ImportError:
+            logger.warning("PanelDataFormatter not available for target data, using fallback logic")
+
+            # Fallback to original logic for backward compatibility
+            for symbol, target_series in target_data.items():
+                if isinstance(features.index, pd.MultiIndex):
+                    # For panel format, extract symbol data
+                    try:
+                        symbol_features = features_filtered.loc[symbol] if symbol in features_filtered.index.get_level_values('symbol') else pd.DataFrame()
+                    except:
+                        symbol_features = pd.DataFrame()
+                else:
+                    # For regular index, assume features are already symbol-specific
+                    symbol_features = features_filtered
+
+                if len(symbol_features) == 0:
+                    continue
+
+                # Align target with feature dates
+                if isinstance(symbol_features.index, pd.MultiIndex):
+                    feature_dates = symbol_features.index.get_level_values('date')
+                else:
+                    feature_dates = symbol_features.index
+
+                target_aligned = target_series.reindex(feature_dates, method='ffill').dropna()
+                symbol_features = symbol_features.reindex(target_aligned.index)
+
+                if len(target_aligned) > 0:
+                    all_targets.append(target_aligned)
+                    all_features.append(symbol_features)
+
+            if all_targets:
+                y = pd.concat(all_targets).sort_index()
+                X = pd.concat(all_features).sort_index()
+
+                # Remove any remaining NaN values
+                valid_mask = ~(X.isnull().any(axis=1) | y.isnull())
+                X = X[valid_mask]
+                y = y[valid_mask]
+
+                logger.info(f"Tabular data prepared: {len(X)} samples, {len(X.columns)} features")
+                return X, y
+            else:
+                raise ValueError("No valid training data available after alignment")
+
+    def _prepare_lstm_data(self,
+                          features: pd.DataFrame,
+                          target_data: Dict[str, pd.Series],
+                          start_date: datetime,
+                          end_date: datetime) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Prepare sequence data for LSTM models.
+        """
+        logger.info("Preparing LSTM (time series) data")
+
+        # Filter features by date range
+        features_filtered = features.loc[start_date:end_date]
+
+        # For LSTM, we need sequences per symbol
+        sequence_length = 30  # Default sequence length
+        all_sequences = []
+        all_targets = []
+
+        for symbol, target_series in target_data.items():
+            # Get symbol-specific features (assuming multi-index)
+            if symbol in features_filtered.columns.get_level_values(0):
+                symbol_features = features_filtered[symbol]
+                target_aligned = target_series.reindex(features_filtered.index).dropna()
+
+                if len(target_aligned) > sequence_length:
+                    # Create sequences
+                    for i in range(sequence_length, len(target_aligned)):
+                        seq_features = symbol_features.iloc[i-sequence_length:i]
+                        seq_target = target_aligned.iloc[i]
+
+                        if not seq_features.isnull().any().any() and not np.isnan(seq_target):
+                            all_sequences.append(seq_features.values)
+                            all_targets.append(seq_target)
+
+        if all_sequences:
+            X = np.array(all_sequences)
+            y = np.array(all_targets)
+
+            logger.info(f"LSTM data prepared: {X.shape[0]} sequences, {X.shape[1]} timesteps, {X.shape[2]} features")
+            return X, y
+        else:
+            raise ValueError("No valid sequence data available after alignment")

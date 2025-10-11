@@ -90,7 +90,7 @@ class BaseStrategy(ABC):
 
         # Normalization configuration (dual-layer architecture)
         self.enable_normalization = kwargs.get('enable_normalization', True)
-        self.normalization_method = kwargs.get('normalization_method', 'zscore')  # 'zscore' or 'minmax'
+        self.normalization_method = kwargs.get('normalization_method', 'minmax')  # 'zscore' or 'minmax'
 
         # Signal tracking and diagnostics
         self._last_signals = None
@@ -229,15 +229,6 @@ class BaseStrategy(ABC):
             logger.info(f"[{self.name}] Price data keys: {list(price_data.keys())}")
             logger.info(f"[{self.name}] Date range: {start_date} to {end_date}")
             logger.info(f"[{self.name}] Model predictor type: {type(self.model_predictor)}")
-
-            # Log model info if available
-            if hasattr(self.model_predictor, 'model') and self.model_predictor.model:
-                logger.info(f"[{self.name}] Model type: {type(self.model_predictor.model)}")
-                logger.info(f"[{self.name}] Model status: {getattr(self.model_predictor.model, 'status', 'Unknown')}")
-                if hasattr(self.model_predictor.model, 'is_trained'):
-                    logger.info(f"[{self.name}] Model trained: {self.model_predictor.model.is_trained}")
-            else:
-                logger.warning(f"[{self.name}] ⚠️ No model available in predictor")
 
             # Create date range for predictions
             dates = pd.date_range(start=start_date, end=end_date, freq='D')

@@ -1,0 +1,130 @@
+# ML Strategy with Dual-Layer Normalization Configuration
+# ======================================================
+# This configuration demonstrates the dual-layer normalization architecture
+# with strategy-level and MetaModel-level normalization controls.
+
+# Part 1: Data Provider Configuration
+# ---------------------------------
+data_provider:
+  type: "YFinanceProvider"
+  parameters:
+    max_retries: 3
+    retry_delay: 1.0
+
+# Part 2: Training Pipeline Configuration
+# ------------------------------------
+training_setup:
+  model:
+    model_type: "lstm"
+    config:
+      # LSTM architecture parameters
+      sequence_length: 10
+      hidden_size: 32
+      num_layers: 1
+      dropout: 0.1
+      bidirectional: false
+      learning_rate: 0.01
+      batch_size: 16
+      epochs: 20
+      early_stopping_patience: 5
+      device: "cpu"
+
+  feature_engineering:
+    enabled_features: ['momentum', 'volatility']
+    momentum_periods: [21]
+    volatility_windows: [20]
+    lookback_periods: [20]
+    min_ic_threshold: 0.02
+    min_significance: 0.1
+    feature_lag: 1
+    include_technical: true
+
+  parameters:
+    start_date: "2018-01-01"
+    end_date: "2019-12-31"
+    symbols:
+      - AAPL
+      - MSFT
+      - GOOGL
+      - AMZN
+      - META
+      - NVDA
+
+# Part 3: Strategy Configuration with Normalization
+# ---------------------------------------------
+strategy:
+  type: ml
+  name: MLStrategy_Normalized_v1
+
+  # Model configuration
+  model_id: placeholder_model_id
+  min_signal_strength: 0.1
+
+  # NEW: Normalization configuration (Layer 1)
+  normalization:
+    enabled: true              # Enable strategy-level normalization
+    method: "zscore"            # Options: "zscore" or "minmax"
+
+  # Strategy parameters (these are passed to strategy constructor)
+  parameters:
+    enable_short_selling: false
+    enable_normalization: true    # Strategy-level normalization enabled
+    normalization_method: "zscore"  # Normalization method
+
+# Part 4: Meta-Model Configuration with Normalization
+# ----------------------------------------------
+meta_model:
+  type: equal  # Options: equal, lasso, ridge, dynamic
+
+  # NEW: MetaModel normalization configuration (Layer 2)
+  normalization:
+    enabled: true              # Enable MetaModel-level normalization
+    method: "zscore"            # Currently only zscore is supported
+
+  # MetaModel parameters
+  parameters:
+    enable_normalization: true    # MetaModel-level normalization enabled
+
+# Part 5: Backtest Configuration
+# -------------------------------
+backtest:
+  start_date: "2020-01-01"
+  end_date: "2021-12-31"
+  initial_capital: 100000
+  benchmark_symbol: "SPY"
+  commission_rate: 0.001
+  slippage_rate: 0.0005
+  rebalance_frequency: "monthly"
+
+# Part 6: Experiment Settings
+# ----------------------------
+experiment:
+  name: "ml_strategy_dual_normalization_demo"
+  description: "ML strategy with dual-layer normalization architecture"
+  log_to_wandb: true
+  wandb_project: "normalization_demo"
+
+# Notes on Dual-Layer Normalization:
+# ==================================
+#
+# Layer 1 (Strategy-level):
+# - Each strategy normalizes its own predictions
+# - Ensures consistent scale within each strategy
+# - Applied in MLStrategy._get_predictions()
+# - Configurable per strategy
+#
+# Layer 2 (MetaModel-level):
+# - MetaModel normalizes combined signals from multiple strategies
+# - Ensures fair combination across different strategies
+# - Applied in MetaModel.combine()
+# - Handles cases where weighted combination distorts distribution
+#
+# Benefits:
+# - Single strategies can work independently (Layer 1 only)
+# - Multi-strategy combinations are fair and balanced (Layer 1 + Layer 2)
+# - Follows SOLID, KISS, DRY, YAGNI principles
+#
+# Usage Examples:
+# 1. Single strategy backtest: Enable Layer 1, disable Layer 2
+# 2. Multi-strategy ensemble: Enable both Layer 1 and Layer 2
+# 3. Custom normalization: Choose zscore or minmax per strategy

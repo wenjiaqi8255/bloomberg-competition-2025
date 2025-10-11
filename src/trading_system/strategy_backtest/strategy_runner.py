@@ -53,7 +53,7 @@ Distinction from SystemOrchestrator:
 import logging
 import os
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Any
 
 import pandas as pd
 
@@ -61,11 +61,9 @@ from ..config.factory import ConfigFactory
 from ..data.yfinance_provider import YFinanceProvider
 # New backtesting architecture
 from ..backtesting import BacktestEngine
-from ..config.backtest import BacktestConfig
 from ..strategies.factory import StrategyFactory
-from ..utils.experiment_tracking import (
+from src.trading_system.experiment_tracking import (
     ExperimentTrackerInterface,
-    ExperimentConfig,
     NullExperimentTracker,
     WandBExperimentTracker,
     create_backtest_config
@@ -227,14 +225,20 @@ class StrategyRunner:
                     logger.warning(f"No price data available for {symbol}, using default price 1.0")
                     signal_price = 1.0
 
+                # Calculate signal strength and ensure it's within [0,1] range
+                signal_strength = abs(float(signal_value))
+                # Clamp to [0,1] range to satisfy TradingSignal validation
+                signal_strength = max(0.0, min(1.0, signal_strength))
+                confidence = max(0.0, min(1.0, abs(float(signal_value))))  # Also clamp confidence
+
                 # Create TradingSignal object
                 trading_signal = TradingSignal(
                     symbol=symbol,
                     signal_type=signal_type,
-                    strength=abs(float(signal_value)),
+                    strength=signal_strength,
                     timestamp=date,
                     price=signal_price,
-                    confidence=abs(float(signal_value))  # Use strength as confidence
+                    confidence=confidence
                 )
 
                 signals_for_date.append(trading_signal)

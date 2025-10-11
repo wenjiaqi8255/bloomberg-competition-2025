@@ -1,0 +1,189 @@
+# FF5 + Box-Based Demo Configuration
+# ==================================
+# Simplified configuration for quick testing of FF5 model with Box-First portfolio construction
+
+# Training Configuration
+# =====================
+data_provider:
+  type: "YFinanceProvider"
+  parameters:
+    max_retries: 2
+    retry_delay: 1.0
+
+factor_data_provider:
+  type: "FF5DataProvider"
+  parameters:
+    data_frequency: "daily"
+
+training_setup:
+  model:
+    model_type: "ff5_regression"
+    config:
+      regularization: 'ridge'
+      alpha: 1.0
+      standardize: true
+
+  parameters:
+    start_date: "2019-01-01"
+    end_date: "2020-12-31"
+    symbols:
+      # Diverse set for box coverage - 20 stocks across sectors
+      - AAPL  # Technology - Large Growth
+      - MSFT  # Technology - Large Growth
+      - GOOGL # Technology - Large Growth
+      - JPM   # Financials - Large Value
+      - BAC   # Financials - Large Value
+      - JNJ   # Healthcare - Large Value
+      - UNH   # Healthcare - Large Growth
+      - PFE   # Healthcare - Large Value
+      - AMZN  # Consumer - Large Growth
+      - WMT   # Consumer - Large Value
+      - PG    # Consumer - Large Value
+      - HD    # Consumer - Growth
+      - CAT   # Industrial - Value
+      - GE    # Industrial - Value
+      - XOM   # Energy - Value
+      - CVX   # Energy - Value
+      - NVDA  # Technology - Growth
+      - META  # Technology - Growth
+      - DIS   # Communication - Growth
+      - VZ    # Communication - Value
+      - TSLA  # Consumer Discretionary - Growth
+
+  # Minimal hyperparameter optimization for speed
+  hyperparameter_optimization:
+    enabled: true
+    optimization_method: "optuna"
+    n_trials: 10  # Very small for demo
+    cv_folds: 3
+    objective: "r2"
+    search_space_preset: "ff5_default"
+    sampler_type: "tpe"
+    log_to_wandb: true
+
+# Backtest Configuration
+# ====================
+backtest:
+  name: "FF5_BoxBased_Demo"
+  start_date: "2021-01-01"
+  end_date: "2022-12-31"  # Shorter period for demo
+  initial_capital: 100000
+  benchmark_symbol: "SPY"
+  commission_rate: 0.001
+  slippage_rate: 0.0005
+  rebalance_frequency: "monthly"  # Monthly for demo
+  position_limit: 0.15
+  rebalance_threshold: 0.01
+
+# Strategy Configuration with Box-Based Construction
+# ==============================================
+strategy:
+  name: "FF5_BoxBased_Demo"
+  type: "fama_french_5"
+
+  parameters:
+    model_id: "placeholder_model_id"
+    lookback_days: 126  # 6 months
+    risk_free_rate: 0.02
+
+    # Box-Based portfolio construction
+    portfolio_construction:
+      method: "box_based"
+      stocks_per_box: 2
+      min_stocks_per_box: 1
+      allocation_method: "signal_proportional"
+
+      box_weights:
+        method: "equal"
+        dimensions:
+          size: ["large", "mid"]
+          style: ["growth", "value"]
+          region: ["developed"]
+          sector: [
+            "Technology",
+            "Financials",
+            "Healthcare",
+            "Consumer Discretionary",
+            "Consumer Staples",
+            "Industrials",
+            "Energy",
+            "Communication Services"
+          ]
+
+      classifier:
+        method: "four_factor"
+        cache_enabled: true
+
+      box_selector:
+        type: "signal_based"
+
+    enable_short_selling: false
+    max_position_weight: 0.15
+
+# Experiment Settings
+# =================
+experiment:
+  name: "FF5_BoxBased_Demo"
+  description: "Quick demo of FF5 model with Box-First portfolio construction"
+  log_to_wandb: true
+  wandb_project: "ff5_box_demo"
+  tags:
+    - "ff5"
+    - "box_based"
+    - "demo"
+
+# System Integration
+# =================
+system_integration:
+  enabled: true
+  modern_orchestrator:
+    enabled: true
+    portfolio_construction_method: "box_based"
+
+# Reporting
+# =========
+reporting:
+  generate_report: true
+  output_directory: "./results/ff5_box_demo"
+  box_analysis:
+    enabled: true
+    track_box_coverage: true
+  attribution_analysis:
+    enabled: true
+
+# Simplified FF5 Optimization
+# ==========================
+ff5_hyperparameter_optimization:
+  enabled: true
+  optimization_method: "optuna"
+  n_trials: 15
+  cv_folds: 3
+  objective: "r2"
+  direction: "maximize"
+
+  sampler:
+    type: "tpe"
+    seed: 42
+
+  pruner:
+    type: "median"
+    n_startup_trials: 3
+
+  search_space:
+    preset: "ff5_default"
+    custom_space:
+      regularization:
+        type: "categorical"
+        choices: ["none", "ridge"]
+      alpha:
+        type: "float"
+        low: 0.1
+        high: 5.0
+        log_scale: true
+      standardize:
+        type: "categorical"
+        choices: [true, false]
+
+  logging:
+    log_optimization: true
+    log_all_trials: true

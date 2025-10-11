@@ -15,20 +15,18 @@ Key Features:
 
 import logging
 import time
+import copy
+from typing import Dict, Any, Optional, Tuple, List
 from datetime import datetime
-from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, List, Tuple, Union
 
 import pandas as pd
 import numpy as np
-from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 
-from ..base.base_model import BaseModel, ModelStatus
+from ..base.base_model import BaseModel
 from ...validation.time_series_cv import TimeSeriesCV
-from ..utils.performance_evaluator import PerformanceEvaluator
-from ...utils.experiment_tracking import ExperimentTrackerInterface
+from ..utils.performance_evaluator import PerformanceEvaluator as PerformanceEvaluator
 from .types import TrainingConfig, TrainingResult
-from .experiment_logger import ExperimentLogger
+# ExperimentLogger已删除 - 简化版本不需要
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +46,7 @@ class ModelTrainer:
     def __init__(self,
                  config: Optional[TrainingConfig] = None,
                  cv: Optional[TimeSeriesCV] = None,
-                 logger: Optional[ExperimentLogger] = None,
+                 experiment_logger: Optional[Any] = None,  # 简化版本，不再依赖ExperimentLogger
                  performance_evaluator: Optional[PerformanceEvaluator] = None):
         """
         Initialize the trainer.
@@ -60,9 +58,20 @@ class ModelTrainer:
             performance_evaluator: Evaluator for model performance (created if None)
         """
         self.config = config or TrainingConfig()
-        self.cv = cv or TimeSeriesCV()
+        self.cv = cv or TimeSeriesCV(
+            method=self.config.cv_method,
+            n_splits=self.config.cv_folds,
+            purge_period=self.config.purge_period,
+            embargo_period=self.config.embargo_period
+        )
         self.evaluator = performance_evaluator or PerformanceEvaluator()
-        self.logger = logger or ExperimentLogger()
+        # 简化版本 - 不再使用ExperimentLogger
+        self.experiment_logger = None
+        
+        # Log CV configuration
+        logger.info(f"Cross-validation configured: method={self.config.cv_method}, "
+                   f"folds={self.config.cv_folds}, purge_period={self.config.purge_period}, "
+                   f"embargo_period={self.config.embargo_period}")
 
     def train(self,
               model: BaseModel,
@@ -94,15 +103,8 @@ class ModelTrainer:
         training_time = time.time() - start_time
         result.training_time = training_time
 
-        if self.config.log_experiment:
-            self.logger.init_run(model, X, self.config)
-            if result.cv_results:
-                self.logger.log_cv_summary(result.cv_results)
-            if result.validation_metrics:
-                self.logger.log_metrics(result.validation_metrics, split_name="training")
-            if result.test_metrics:
-                self.logger.log_metrics(result.test_metrics, split_name="test")
-            self.logger.finish_run(training_time)
+        # 简化版本 - 不再使用ExperimentLogger
+        # 实验跟踪功能已移除，专注于核心训练逻辑
 
         logger.info(f"Training completed in {result.training_time:.2f} seconds")
         return result
@@ -389,7 +391,7 @@ class ModelTrainer:
             # Note: evaluate_model returns more metrics than before.
             # We can filter them here if needed, or just return all of them.
             # For now, returning all seems fine.
-            metrics = self.evaluator.evaluate_model(model, X, y)
+            metrics = self.evaluator.evaluate(model, X, y)
 
             # Filter to only include metrics relevant to the old implementation if necessary
             # For example: metrics = {k: v for k, v in metrics.items() if k in ['r2', 'mse', 'mae', 'rmse', 'ic']}
@@ -418,3 +420,457 @@ class ModelTrainer:
             model.model_type,
             config=model.config.copy()
         )
+
+    def train_with_cv(self,
+                     model: BaseModel,
+                     data: Dict[str, Any],
+                     feature_pipeline: Any,
+                     date_range: Tuple[datetime, datetime]) -> TrainingResult:
+        """
+        Train model with cross-validation, fitting pipeline independently for each fold.
+
+        This method implements the key architectural principle: "Who evaluates, who splits."
+        The trainer is responsible for CV splitting and ensuring data independence.
+
+        Args:
+            model: Model to train
+            data: Raw data dictionary containing price_data, factor_data, target_data
+            feature_pipeline: Unfitted feature engineering pipeline
+            date_range: Tuple of (start_date, end_date) for actual training period
+
+        Returns:
+            TrainingResult with fitted model and pipeline
+        """
+        logger.info("Starting CV training with independent pipeline fitting per fold")
+        start_time = time.time()
+        
+        start_date, end_date = date_range
+        
+        # 1. Extract all available dates from data
+        all_available_dates = self._extract_all_dates(data)
+        
+        # 2. Filter to training period
+        train_period_dates = [d for d in all_available_dates 
+                             if start_date <= d <= end_date]
+        
+        if len(train_period_dates) < self.config.cv_folds * 20:
+            raise ValueError(
+                f"Insufficient dates: {len(train_period_dates)} dates "
+                f"for {self.config.cv_folds}-fold CV (need at least {self.config.cv_folds * 20})"
+            )
+        
+        logger.info(f"CV on {len(train_period_dates)} dates from {train_period_dates[0]} to {train_period_dates[-1]}")
+        
+        # 3. Generate CV splits using the new date-range method
+        try:
+            cv_splits = list(self.cv.split_by_date_range(
+                train_period_dates[0], 
+                train_period_dates[-1]
+            ))
+        except Exception as e:
+            logger.error(f"CV split generation failed: {e}")
+            raise
+        
+        if not cv_splits:
+            raise ValueError("No valid CV splits generated")
+        
+        logger.info(f"Generated {len(cv_splits)} CV splits")
+        
+        # 4. Process each fold with error handling
+        cv_results = []
+        successful_folds = 0
+        
+        for fold_idx, (train_dates_fold, val_dates_fold) in enumerate(cv_splits):
+            try:
+                logger.info(f"Fold {fold_idx}:")
+                logger.info(f"  Train dates: {len(train_dates_fold)} ({train_dates_fold[0]} to {train_dates_fold[-1]})")
+                logger.info(f"  Val dates: {len(val_dates_fold)} ({val_dates_fold[0]} to {val_dates_fold[-1]})")
+                
+                # ** CRITICAL: Create independent pipeline copy for this fold
+                fold_pipeline = self._clone_pipeline(feature_pipeline)
+                
+                # Filter data for this fold
+                train_data = self._filter_data_by_dates(data, train_dates_fold)
+                val_data = self._filter_data_by_dates(data, val_dates_fold)
+                
+                logger.info(f"  Train data shapes: price={len(train_data['price_data'])}, target={len(train_data['target_data'])}")
+                
+                # ** CRITICAL: Fit pipeline on full data to enable proper feature calculation
+                logger.info(f"Fitting pipeline for fold {fold_idx} with full price history")
+                fold_pipeline.fit({
+                    'price_data': train_data['price_data'],  # Full history for feature calculation
+                    'factor_data': train_data.get('factor_data', {})
+                })
+                
+                # ** CRITICAL: Transform with full data, then filter by target dates
+                logger.info(f"Computing features with full price history")
+                X_train_full = fold_pipeline.transform({
+                    'price_data': train_data['price_data'],  # Full history
+                    'factor_data': train_data.get('factor_data', {})
+                })
+                X_val_full = fold_pipeline.transform({
+                    'price_data': val_data['price_data'],  # Full history
+                    'factor_data': val_data.get('factor_data', {})
+                })
+                
+                logger.info(f"  Full features computed: train={X_train_full.shape}, val={X_val_full.shape}")
+                
+                # Prepare targets for this fold (only the fold's date range)
+                y_train = self._prepare_targets(train_data['target_data'], train_dates_fold)
+                y_val = self._prepare_targets(val_data['target_data'], val_dates_fold)
+                
+                logger.info(f"  Targets prepared: train={y_train.shape}, val={y_val.shape}")
+                
+                # ** CRITICAL: Standardize data formats before alignment
+                logger.info(f"  Before format standardization: X_train_full={X_train_full.shape}, y_train={y_train.shape}")
+                logger.info(f"  X_train_full index: {X_train_full.index.names}")
+                logger.info(f"  y_train index: {y_train.index.names}")
+                
+                # Apply format standardization to ensure consistent index order
+                try:
+                    from ...feature_engineering.utils.panel_data_transformer import PanelDataTransformer
+                    
+                    # Standardize training data format
+                    X_train_standardized, y_train_standardized = PanelDataTransformer.to_panel_format(
+                        X_train_full, y_train
+                    )
+                    logger.info(f"  Training data standardized: X={X_train_standardized.shape}, y={y_train_standardized.shape}")
+                    logger.info(f"  Standardized X index: {X_train_standardized.index.names}")
+                    logger.info(f"  Standardized y index: {y_train_standardized.index.names}")
+                    
+                    # Standardize validation data format
+                    X_val_standardized, y_val_standardized = PanelDataTransformer.to_panel_format(
+                        X_val_full, y_val
+                    )
+                    logger.info(f"  Validation data standardized: X={X_val_standardized.shape}, y={y_val_standardized.shape}")
+                    
+                except Exception as e:
+                    logger.warning(f"Format standardization failed: {e}, using original data")
+                    X_train_standardized, y_train_standardized = X_train_full, y_train
+                    X_val_standardized, y_val_standardized = X_val_full, y_val
+                
+                # ** CRITICAL: Filter features to match target dates using intersection
+                logger.info(f"  Before alignment: X_train_standardized={X_train_standardized.shape}, y_train_standardized={y_train_standardized.shape}")
+                
+                # Find common index between standardized features and targets
+                common_train_index = X_train_standardized.index.intersection(y_train_standardized.index)
+                common_val_index = X_val_standardized.index.intersection(y_val_standardized.index)
+                
+                if len(common_train_index) == 0:
+                    logger.error(f"No common index between standardized X_train and y_train!")
+                    logger.error(f"X_train_standardized index sample: {X_train_standardized.index[:5]}")
+                    logger.error(f"y_train_standardized index sample: {y_train_standardized.index[:5]}")
+                    raise ValueError("No common index between features and targets in training set")
+                
+                if len(common_val_index) == 0:
+                    logger.error(f"No common index between standardized X_val and y_val!")
+                    logger.error(f"X_val_standardized index sample: {X_val_standardized.index[:5]}")
+                    logger.error(f"y_val_standardized index sample: {y_val_standardized.index[:5]}")
+                    raise ValueError("No common index between features and targets in validation set")
+                
+                # Filter features to match target dates using standardized data
+                X_train = X_train_standardized.loc[common_train_index]
+                y_train = y_train_standardized.loc[common_train_index]
+                X_val = X_val_standardized.loc[common_val_index]
+                y_val = y_val_standardized.loc[common_val_index]
+                
+                logger.info(f"  After alignment: X_train={X_train.shape}, y_train={y_train.shape}")
+                logger.info(f"  Validation alignment: X_val={X_val.shape}, y_val={y_val.shape}")
+                
+                # Final validation
+                assert len(X_train) == len(y_train), f"Training data mismatch: X={len(X_train)}, y={len(y_train)}"
+                assert len(X_val) == len(y_val), f"Validation data mismatch: X={len(X_val)}, y={len(y_val)}"
+                
+                # Create and train model for this fold
+                fold_model = self._create_model_copy(model)
+                fold_model.fit(X_train, y_train)
+                
+                # Evaluate on validation set
+                val_metrics = self._calculate_metrics(fold_model, X_val, y_val, split_name=f"fold_{fold_idx}")
+                cv_results.append(val_metrics)
+                successful_folds += 1
+                
+                logger.info(f"✅ Fold {fold_idx} completed successfully: {val_metrics}")
+                
+            except Exception as e:
+                logger.error(f"❌ Fold {fold_idx} FAILED: {e}")
+                logger.error(f"Fold {fold_idx} traceback:", exc_info=True)
+                
+                # Add empty result for failed fold
+                cv_results.append({})
+                logger.warning(f"Continuing with remaining folds...")
+                continue
+        
+        # ** CRITICAL: Train final model on full training data
+        logger.info("Training final model on full training period")
+        
+        # Use the original date_range for final training (not from CV splits)
+        final_train_dates = [d for d in all_available_dates 
+                            if start_date <= d <= end_date]
+        
+        # Ensure dates are sorted and unique
+        final_train_dates = sorted(list(set(final_train_dates)))
+        
+        logger.info(f"Final model training on {len(final_train_dates)} dates: "
+                   f"{final_train_dates[0]} to {final_train_dates[-1]}")
+        
+        # Filter data for full training period
+        full_train_data = self._filter_data_by_dates(data, final_train_dates)
+        
+        # Fit final pipeline on full training data
+        final_pipeline = self._clone_pipeline(feature_pipeline)
+        final_pipeline.fit({
+            'price_data': full_train_data['price_data'],
+            'factor_data': full_train_data.get('factor_data', {})
+        })
+        
+        # Transform full training data
+        X_full = final_pipeline.transform({
+            'price_data': full_train_data['price_data'],
+            'factor_data': full_train_data.get('factor_data', {})
+        })
+        y_full = self._prepare_targets(full_train_data['target_data'], final_train_dates)
+        
+        # ** CRITICAL: Standardize formats for final model training
+        logger.info(f"Final model data before format standardization: X_full={X_full.shape}, y_full={y_full.shape}")
+        logger.info(f"X_full index: {X_full.index.names}")
+        logger.info(f"y_full index: {y_full.index.names}")
+        
+        # Apply format standardization for final model training
+        try:
+            from ...feature_engineering.utils.panel_data_transformer import PanelDataTransformer
+            
+            X_full_standardized, y_full_standardized = PanelDataTransformer.to_panel_format(
+                X_full, y_full
+            )
+            logger.info(f"Final model data standardized: X={X_full_standardized.shape}, y={y_full_standardized.shape}")
+            logger.info(f"Standardized X index: {X_full_standardized.index.names}")
+            logger.info(f"Standardized y index: {y_full_standardized.index.names}")
+            
+        except Exception as e:
+            logger.warning(f"Final model format standardization failed: {e}, using original data")
+            X_full_standardized, y_full_standardized = X_full, y_full
+        
+        # ** CRITICAL: Force alignment for final model training
+        logger.info(f"Final model data before alignment: X_full_standardized={X_full_standardized.shape}, y_full_standardized={y_full_standardized.shape}")
+        
+        common_full_index = X_full_standardized.index.intersection(y_full_standardized.index)
+        if len(common_full_index) == 0:
+            logger.error(f"No common index between standardized X_full and y_full!")
+            logger.error(f"X_full_standardized index sample: {X_full_standardized.index[:5]}")
+            logger.error(f"y_full_standardized index sample: {y_full_standardized.index[:5]}")
+            raise ValueError("No common index between features and targets in final training set")
+        
+        X_full = X_full_standardized.loc[common_full_index]
+        y_full = y_full_standardized.loc[common_full_index]
+        
+        logger.info(f"Final model data after alignment: X_full={X_full.shape}, y_full={y_full.shape}")
+        
+        # Final validation
+        assert len(X_full) == len(y_full), f"Final training data mismatch: X={len(X_full)}, y={len(y_full)}"
+        
+        # Train final model
+        model.fit(X_full, y_full)
+        
+        # Calculate final validation metrics
+        final_metrics = self._calculate_metrics(model, X_full, y_full, split_name="final_training")
+        
+        training_time = time.time() - start_time
+        
+        # Aggregate CV results
+        successful_cv_results = [r for r in cv_results if r]  # Filter out empty results
+        failed_folds = len(cv_results) - successful_folds
+        
+        if successful_cv_results:
+            cv_summary = {
+                'mean_r2': np.mean([r.get('r2', 0.0) for r in successful_cv_results]),
+                'std_r2': np.std([r.get('r2', 0.0) for r in successful_cv_results]),
+                'fold_results': cv_results,
+                'cv_scores': [r.get('r2', 0.0) for r in cv_results],
+                'successful_folds': successful_folds,
+                'failed_folds': failed_folds,
+                'total_folds': len(cv_splits)
+            }
+        else:
+            cv_summary = {
+                'mean_r2': 0.0,
+                'std_r2': 0.0,
+                'fold_results': cv_results,
+                'cv_scores': [0.0] * len(cv_results),
+                'successful_folds': 0,
+                'failed_folds': failed_folds,
+                'total_folds': len(cv_splits)
+            }
+        
+        logger.info(f"CV training completed in {training_time:.2f} seconds")
+        logger.info(f"Successful folds: {successful_folds}/{len(cv_splits)}")
+        if successful_cv_results:
+            logger.info(f"CV R²: {cv_summary['mean_r2']:.4f} ± {cv_summary['std_r2']:.4f}")
+        else:
+            logger.warning("No successful CV folds - all folds failed!")
+        
+        return TrainingResult(
+            model=model,
+            training_time=training_time,
+            cv_results=cv_summary,
+            validation_metrics=final_metrics,
+            feature_pipeline=final_pipeline  # ** CRITICAL: Return fitted pipeline
+        )
+
+    def _clone_pipeline(self, pipeline: Any) -> Any:
+        """
+        Create an independent copy of the feature pipeline for CV.
+
+        Args:
+            pipeline: Original pipeline
+
+        Returns:
+            Independent pipeline copy
+        """
+        # Method 1: Deep copy (preferred if pipeline supports it)
+        try:
+            return copy.deepcopy(pipeline)
+        except Exception as e:
+            logger.warning(f"Deep copy failed: {e}, trying shallow copy")
+        
+        # Method 2: Create new instance from config
+        try:
+            # This assumes the pipeline has a from_config method
+            if hasattr(pipeline, 'config') and hasattr(pipeline.__class__, 'from_config'):
+                return pipeline.__class__.from_config(pipeline.config, model_type=pipeline.model_type)
+        except Exception as e:
+            logger.warning(f"Config-based copy failed: {e}")
+        
+        # Method 3: Manual copy of essential attributes
+        try:
+            new_pipeline = pipeline.__class__()
+            for attr in ['config', 'model_type', 'feature_engineering_steps']:
+                if hasattr(pipeline, attr):
+                    setattr(new_pipeline, attr, getattr(pipeline, attr))
+            return new_pipeline
+        except Exception as e:
+            logger.error(f"All pipeline cloning methods failed: {e}")
+            raise RuntimeError(f"Cannot clone pipeline: {e}")
+
+    def _filter_data_by_dates(self, data: Dict[str, Any], target_dates: List[datetime]) -> Dict[str, Any]:
+        """
+        Filter data dictionary, keeping price and factor data intact for feature calculation.
+        Only filters target data to prevent leakage.
+
+        Args:
+            data: Original data dictionary
+            target_dates: List of target dates (used only for filtering targets)
+
+        Returns:
+            Filtered data dictionary with intact price/factor data, filtered target data
+        """
+        filtered_data = {}
+        
+        # ** CRITICAL: Keep price_data intact - needed for feature lookback
+        # Price data must include lookback period for computing cross-sectional features
+        filtered_data['price_data'] = data['price_data']
+        logger.debug(f"Kept {len(data['price_data'])} symbols with full price history")
+        
+        # ** CRITICAL: Keep factor_data intact if present
+        # Factor data also needs full history for feature calculation
+        if 'factor_data' in data:
+            filtered_data['factor_data'] = data['factor_data']
+            logger.debug(f"Kept factor data intact")
+        
+        # ** ONLY filter target_data to match the fold's date range
+        # This prevents data leakage while preserving feature calculation capability
+        target_dates_set = set(pd.to_datetime(d).date() for d in target_dates)
+        logger.debug(f"Filtering targets for {len(target_dates_set)} target dates")
+        
+        if 'target_data' in data:
+            filtered_target_data = {}
+            for symbol, series in data['target_data'].items():
+                if hasattr(series, 'index'):
+                    series_dates = pd.to_datetime(series.index).date
+                    mask = np.array([d in target_dates_set for d in series_dates])
+                    filtered_target_data[symbol] = series[mask]
+                    logger.debug(f"Filtered {symbol} targets: {len(series)} -> {len(series[mask])} dates")
+                else:
+                    filtered_target_data[symbol] = series
+            filtered_data['target_data'] = filtered_target_data
+            logger.debug(f"Filtered targets to {len(target_dates_set)} target dates")
+        
+        return filtered_data
+
+    def _prepare_targets(self, target_data: Dict[str, pd.Series], target_dates: List[datetime]) -> pd.Series:
+        """
+        Prepare target data for training with proper MultiIndex alignment.
+
+        This method constructs a MultiIndex Series (symbol, date) that matches
+        the feature structure, ensuring we don't lose data due to duplicate dates.
+
+        Args:
+            target_data: Dictionary of target series by symbol
+            target_dates: List of target dates
+
+        Returns:
+            MultiIndex Series with (symbol, date) index
+        """
+        # Convert target_dates to date-only for robust matching
+        target_dates_set = set(pd.to_datetime(d).date() for d in target_dates)
+        all_target_records = []
+        
+        for symbol, series in target_data.items():
+            if not hasattr(series, 'index'):
+                continue
+                
+            # Filter by dates using date-only comparison
+            series_dates = pd.to_datetime(series.index).date
+            mask = np.array([d in target_dates_set for d in series_dates])
+            filtered_series = series[mask]
+            
+            if len(filtered_series) > 0:
+                # ** CRITICAL: Create (symbol, date) records to avoid data loss
+                for date, value in filtered_series.items():
+                    all_target_records.append({
+                        'symbol': symbol,
+                        'date': pd.to_datetime(date),
+                        'target': value
+                    })
+                logger.debug(f"Prepared {len(filtered_series)} targets for {symbol}")
+        
+        if not all_target_records:
+            raise ValueError(f"No target data available for dates: {target_dates[0]} to {target_dates[-1]}")
+        
+        # ** CRITICAL: Build MultiIndex DataFrame to preserve all (symbol, date) combinations
+        target_df = pd.DataFrame(all_target_records)
+        target_df = target_df.set_index(['symbol', 'date'])
+        target_series = target_df['target'].sort_index()
+        
+        # Remove NaN values
+        target_series = target_series.dropna()
+        
+        logger.info(f"Prepared {len(target_series)} targets from {len(target_data)} symbols")
+        logger.info(f"Target index structure: {target_series.index.names}")
+        logger.info(f"Target date range: {target_series.index.get_level_values('date').min()} to {target_series.index.get_level_values('date').max()}")
+        
+        return target_series
+
+    def _extract_all_dates(self, data: Dict[str, Any]) -> List[datetime]:
+        """
+        Extract all unique dates from data.
+
+        Args:
+            data: Data dictionary containing price_data
+
+        Returns:
+            List of unique dates sorted chronologically
+        """
+        all_dates = set()
+        
+        for symbol_data in data['price_data'].values():
+            if hasattr(symbol_data, 'index'):
+                # Convert to date-only to avoid timezone/time precision issues
+                dates = pd.to_datetime(symbol_data.index).date
+                all_dates.update(dates)
+        
+        # Convert back to datetime and sort
+        sorted_dates = sorted([pd.to_datetime(d) for d in all_dates])
+        
+        logger.debug(f"Extracted {len(sorted_dates)} unique dates from data")
+        return sorted_dates

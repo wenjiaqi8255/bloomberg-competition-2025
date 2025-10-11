@@ -20,6 +20,7 @@ import numpy as np
 
 from ..types.enums import DataSource
 from .validation import DataValidator, DataValidationError
+from .filters.liquidity_filter import LiquidityFilter
 
 logger = logging.getLogger(__name__)
 
@@ -181,24 +182,26 @@ class BaseDataProvider(ABC):
         self._cache[cache_key] = (data, time.time())
         logger.debug(f"Stored data in cache with key: {cache_key}")
     
-    def validate_data(self, data: pd.DataFrame, data_type: str = "general") -> pd.DataFrame:
+    def validate_data(self, data: pd.DataFrame, data_type: str = "general",
+                     liquidity_config: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
         """
         Validate and clean data using the DataValidator.
-        
+
         Args:
             data: DataFrame to validate
             data_type: Type of data for validation rules
-            
+            liquidity_config: Optional liquidity filtering configuration
+
         Returns:
             Validated and cleaned DataFrame
-            
+
         Raises:
             DataValidationError: If data validation fails
         """
         try:
             if data is None or data.empty:
                 raise DataValidationError("Data is None or empty")
-            
+
             # Basic validation
             if data_type == "price":
                 DataValidator.validate_price_data(data, "validation")
@@ -208,33 +211,116 @@ class BaseDataProvider(ABC):
                 # General validation
                 if len(data) == 0:
                     raise DataValidationError("Data has no rows")
-                
+
                 # Check for all NaN columns
                 all_nan_cols = data.columns[data.isnull().all()].tolist()
                 if all_nan_cols:
                     logger.warning(f"Found all-NaN columns: {all_nan_cols}")
                     data = data.drop(columns=all_nan_cols)
-            
+
             # Remove rows with all NaN values
             initial_len = len(data)
             data = data.dropna(how='all')
             if len(data) < initial_len:
                 logger.warning(f"Removed {initial_len - len(data)} empty rows")
-            
+
             # Ensure datetime index if applicable
             if not isinstance(data.index, pd.DatetimeIndex) and 'Date' in data.columns:
                 data = data.set_index('Date')
                 data.index = pd.to_datetime(data.index)
-            
+
             # Sort by index
             data = data.sort_index()
-            
+
+            # Apply liquidity filtering if configured
+            if liquidity_config and liquidity_config.get('enabled', False):
+                data = self.apply_liquidity_filter(data, liquidity_config)
+
             return data
-            
+
         except Exception as e:
             logger.error(f"Data validation failed: {e}")
             raise DataValidationError(f"Data validation failed: {e}")
-    
+
+    def apply_liquidity_filter(self, data: pd.DataFrame,
+                              liquidity_config: Dict[str, Any]) -> pd.DataFrame:
+        """
+        Apply liquidity filtering to data using the LiquidityFilter utility.
+
+        This method acts as a delegate to the LiquidityFilter utility class,
+        providing a clean interface for data providers to apply liquidity
+        filtering without duplicating logic.
+
+        Args:
+            data: DataFrame to filter (expects 'Symbol' column or multiple symbols)
+            liquidity_config: Liquidity filter configuration
+
+        Returns:
+            Filtered DataFrame with only liquid symbols
+        """
+        try:
+            # Extract symbols from data
+            if 'Symbol' in data.columns:
+                # Single symbol DataFrame with Symbol column
+                symbols = data['Symbol'].unique().tolist()
+                price_data = {}
+
+                for symbol in symbols:
+                    symbol_data = data[data['Symbol'] == symbol].copy()
+                    if 'Symbol' in symbol_data.columns:
+                        symbol_data = symbol_data.drop('Symbol', axis=1)
+                    price_data[symbol] = symbol_data
+            else:
+                # Multi-symbol DataFrame (symbols as columns)
+                symbols = [col for col in data.columns if col not in ['Open', 'High', 'Low', 'Close', 'Volume']]
+                price_data = {}
+
+                for symbol in symbols:
+                    if symbol in data.columns:
+                        # Create standard OHLCV DataFrame for this symbol
+                        symbol_data = pd.DataFrame()
+                        for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+                            if col in data.index.names or col in data.columns:
+                                # Handle different data structures
+                                if col in data.columns and not data[col].dropna().empty:
+                                    symbol_data[col] = data[col]
+                                elif hasattr(data, 'xs'):
+                                    try:
+                                        symbol_data[col] = data.xs(symbol, axis=1, level=0 if hasattr(data.columns, 'levels') else 0)[col]
+                                    except (KeyError, AttributeError):
+                                        continue
+
+                        if not symbol_data.empty:
+                            price_data[symbol] = symbol_data
+
+            if not price_data:
+                logger.warning("No valid price data found for liquidity filtering")
+                return data
+
+            # Apply liquidity filters using the utility class
+            filtered_symbols = LiquidityFilter.apply_liquidity_filters(
+                symbols, price_data, liquidity_config
+            )
+
+            # Filter the original DataFrame to keep only filtered symbols
+            if 'Symbol' in data.columns:
+                # Single symbol format
+                filtered_data = data[data['Symbol'].isin(filtered_symbols)]
+            else:
+                # Multi-symbol format - keep only filtered symbol columns
+                symbol_columns = [col for col in data.columns if col in filtered_symbols]
+                non_symbol_columns = [col for col in data.columns if col not in symbols]
+                filtered_data = data[non_symbol_columns + symbol_columns]
+
+            logger.info(f"Liquidity filtering: {len(filtered_symbols)}/{len(symbols)} symbols retained")
+            return filtered_data
+
+        except Exception as e:
+            logger.error(f"Liquidity filtering failed: {e}")
+            # If filtering fails, return original data
+            logger.warning("Returning original data due to filtering error")
+            return data
+
     def filter_by_date(self, data: pd.DataFrame,
                        start_date: Union[str, datetime] = None,
                        end_date: Union[str, datetime] = None) -> pd.DataFrame:

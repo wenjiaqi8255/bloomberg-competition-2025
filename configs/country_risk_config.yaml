@@ -1,0 +1,75 @@
+# Country Risk Premium Integration Configuration
+# This config adds country risk premium data as factor features
+
+data_provider:
+  type: "YFinanceProvider"
+  parameters:
+    max_retries: 3
+    cache_enabled: true
+
+# Country Risk Premium Data Provider
+factor_data_provider:
+  type: "CountryRiskProvider"
+  parameters:
+    excel_path: "data/country_risk_premium.xlsx"
+    symbol_country_map:
+      # US Stocks
+      AAPL: "United States"
+      GOOGL: "United States"
+      MSFT: "United States"
+      AMZN: "United States"
+      TSLA: "United States"
+      META: "United States"
+      NVDA: "United States"
+      JPM: "United States"
+      JNJ: "United States"
+      V: "United States"
+      PG: "United States"
+      UNH: "United States"
+      HD: "United States"
+      MA: "United States"
+      BAC: "United States"
+      
+      # Chinese Stocks
+      BABA: "China"
+      BIDU: "China"
+      JD: "China"
+      NIO: "China"
+      PDD: "China"
+      TME: "China"
+      
+      # Other Developed Markets
+      ASML: "Netherlands"
+      TSMC: "Taiwan"
+      SAMSUNG: "South Korea"
+      TOYOTA: "Japan"
+      NESTLE: "Switzerland"
+      
+      # Emerging Markets
+      VALE: "Brazil"
+      PETROBRAS: "Brazil"
+      INFY: "India"
+      WIT: "India"
+      TATAMOTORS: "India"
+      
+    cache_enabled: true
+
+training_setup:
+  model:
+    model_type: "ff5_regression"
+    
+  feature_engineering:
+    include_technical: true
+    include_cross_sectional: true
+    normalize_features: true
+    
+  parameters:
+    cv_folds: 5
+    use_cross_validation: true
+
+backtest_setup:
+  start_date: "2020-01-01"
+  end_date: "2023-12-31"
+  initial_capital: 1000000
+  symbols: ["AAPL", "GOOGL", "MSFT", "BABA", "TSLA"]
+

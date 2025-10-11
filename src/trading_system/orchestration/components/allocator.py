@@ -15,6 +15,8 @@ from enum import Enum
 from ...types.data_types import TradingSignal
 from ...types.portfolio import Portfolio, Position
 from ...types.enums import AssetClass
+from ..utils.performance_tracker import ComponentPerformanceTrackerMixin
+from ..utils.config_validator import ComponentConfigValidator
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +150,7 @@ class AllocationConfig:
         )
 
 
-class CapitalAllocator:
+class CapitalAllocator(ComponentPerformanceTrackerMixin):
     """
     Manages capital allocation between strategies.
 
@@ -167,6 +169,7 @@ class CapitalAllocator:
         Args:
             config: Allocation configuration
         """
+        super().__init__()
         self.config = config
 
         # Current allocation state
@@ -177,13 +180,7 @@ class CapitalAllocator:
         self.last_rebalance_date: Optional[datetime] = None
         self.rebalance_history: List[Dict[str, Any]] = []
 
-        # Performance tracking
-        self.allocation_stats = {
-            'total_rebalances': 0,
-            'allocation_changes': 0,
-            'constraint_violations': 0,
-            'drift_events': 0
-        }
+        # Performance tracking is now handled by ComponentPerformanceTrackerMixin
 
         logger.info("Initialized CapitalAllocator")
         logger.info(f"Managing {len(config.strategy_allocations)} strategies:")
@@ -207,6 +204,8 @@ class CapitalAllocator:
         Returns:
             Weighted signals per strategy
         """
+        operation_id = self.track_operation("allocate_capital", {"strategy_count": len(strategy_signals)})
+        
         try:
             logger.info(f"Allocating capital for {len(strategy_signals)} strategies")
 
@@ -224,15 +223,19 @@ class CapitalAllocator:
 
             # Step 5: Check for rebalancing needs
             rebalance_needed = self._check_rebalancing_needs(constrained_targets)
+            if rebalance_needed:
+                self.track_counter("rebalance_needed", 1)
 
             # Step 6: Record allocation decision
             self._record_allocation_decision(strategy_signals, constrained_targets, weighted_signals)
 
             logger.info(f"Allocation completed: {sum(len(s) for s in weighted_signals.values())} weighted signals")
+            self.end_operation(operation_id, success=True, metadata={"weighted_signals": sum(len(s) for s in weighted_signals.values())})
             return weighted_signals
 
         except Exception as e:
             logger.error(f"Capital allocation failed: {e}")
+            self.end_operation(operation_id, success=False, metadata={"error": str(e)})
             return {}
 
     def _update_current_allocation(self, portfolio: Portfolio, total_capital: float) -> None:
@@ -437,7 +440,7 @@ class CapitalAllocator:
                 'needs_rebalance': self._check_rebalancing_needs(self.current_allocations),
                 'days_since_rebalance': (datetime.now() - self.last_rebalance_date).days if self.last_rebalance_date else None
             },
-            'stats': self.allocation_stats.copy(),
+            'stats': self.get_performance_stats(),
             'config': {
                 'strategies': {
                     alloc.strategy_name: {
@@ -459,7 +462,7 @@ class CapitalAllocator:
         # This would typically generate trades to rebalance
         # For now, just update the rebalance timestamp
         self.last_rebalance_date = datetime.now()
-        self.allocation_stats['total_rebalances'] += 1
+        self.track_counter("total_rebalances", 1)
 
         actions.append(f"Rebalanced portfolio on {self.last_rebalance_date}")
 
@@ -474,41 +477,20 @@ class CapitalAllocator:
 
     def validate_configuration(self) -> Tuple[bool, List[str]]:
         """Validate allocator configuration."""
-        issues = []
-
-        # Check if we have strategies
-        if not self.config.strategy_allocations:
-            issues.append("No strategy allocations configured")
-            return False, issues
-
-        # Check allocation weights sum
-        total_target = sum(alloc.target_weight for alloc in self.config.strategy_allocations)
-        if total_target > 1.0 - self.config.cash_buffer_weight:
-            issues.append(
-                f"Target allocations sum to {total_target:.1%}, "
-                f"should be ≤ {(1.0 - self.config.cash_buffer_weight):.1%} "
-                f"(allowing for {self.config.cash_buffer_weight:.1%} cash buffer)"
-            )
-
-        # Check each strategy allocation
-        for alloc in self.config.strategy_allocations:
-            # Bounds should already be validated in StrategyAllocation.__post_init__
-            # but double-check here for completeness
-            if not (alloc.min_weight <= alloc.target_weight <= alloc.max_weight):
-                issues.append(
-                    f"Strategy '{alloc.strategy_name}' has inconsistent bounds: "
-                    f"min={alloc.min_weight:.1%}, target={alloc.target_weight:.1%}, "
-                    f"max={alloc.max_weight:.1%}"
-                )
-
-        # Check thresholds
-        if self.config.rebalance_threshold <= 0 or self.config.rebalance_threshold > 0.5:
-            issues.append("rebalance_threshold must be between 0 and 50%")
-
-        if self.config.max_single_position_weight <= 0 or self.config.max_single_position_weight > 1:
-            issues.append("max_single_position_weight must be between 0 and 100%")
+        config_dict = {
+            'strategy_allocations': [
+                {
+                    'strategy_name': alloc.strategy_name,
+                    'target_weight': alloc.target_weight,
+                    'min_weight': alloc.min_weight,
+                    'max_weight': alloc.max_weight,
+                    'priority': alloc.priority
+                }
+                for alloc in self.config.strategy_allocations
+            ],
+            'rebalance_threshold': self.config.rebalance_threshold,
+            'max_single_position_weight': self.config.max_single_position_weight,
+            'cash_buffer_weight': self.config.cash_buffer_weight
+        }
         
-        if self.config.cash_buffer_weight < 0 or self.config.cash_buffer_weight > 0.2:
-            issues.append("cash_buffer_weight should be between 0 and 20%")
-
-        return len(issues) == 0, issues
+        return ComponentConfigValidator.validate_allocator_config(config_dict)

@@ -267,6 +267,39 @@ class TimeSeriesCV:
             if len(train_indices) >= 10 and len(test_indices) > 0:
                 yield train_indices, test_indices
 
+    def split_by_date_range(self, start_date: datetime, end_date: datetime) -> Generator[Tuple[List[datetime], List[datetime]], None, None]:
+        """
+        Split data by date ranges instead of indices.
+        
+        This method provides a more intuitive interface for time series CV
+        when working with actual dates rather than DataFrame indices.
+        
+        Args:
+            start_date: Start date for the training period
+            end_date: End date for the training period
+            
+        Yields:
+            train_dates: List of training dates for this fold
+            val_dates: List of validation dates for this fold
+        """
+        # Create a date range
+        date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+        
+        # Filter to business days only (optional, but recommended for financial data)
+        business_dates = date_range[date_range.weekday < 5]  # Monday=0, Friday=4
+        
+        if len(business_dates) < self.n_splits * 2:
+            raise ValueError(f"Not enough business dates ({len(business_dates)}) for {self.n_splits}-fold CV")
+        
+        # Create a dummy DataFrame for CV splitting
+        cv_df = pd.DataFrame(index=business_dates)
+        
+        # Use the existing CV logic but return dates instead of indices
+        for train_idx, val_idx in self.split(cv_df):
+            train_dates = cv_df.index[train_idx].tolist()
+            val_dates = cv_df.index[val_idx].tolist()
+            yield train_dates, val_dates
+
     @staticmethod
     def walk_forward_split(X, train_size=252, test_size=21, step_size=21, purge_period=5) -> Generator[Tuple[datetime, datetime, datetime, datetime, np.ndarray, np.ndarray], None, None]:
         """

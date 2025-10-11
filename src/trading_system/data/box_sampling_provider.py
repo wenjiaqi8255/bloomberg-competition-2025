@@ -13,6 +13,7 @@ from datetime import datetime
 import pandas as pd
 
 from .base_data_provider import ClassificationProvider
+from .filters.liquidity_filter import LiquidityFilter
 from src.trading_system.portfolio_construction.models.types import BoxKey
 from src.trading_system.portfolio_construction.utils.adapters import ClassificationAdapter
 
@@ -110,8 +111,8 @@ class BoxSamplingProvider(ClassificationProvider):
 
         logger.info(f"Sampling universe from {len(full_universe)} stocks using {self.sampling_method}")
 
-        # Step 1: Apply basic liquidity/data quality filters
-        liquid_stocks = self._filter_liquid_stocks(full_universe, price_data, as_of_date)
+        # Step 1: Apply basic liquidity/data quality filters using LiquidityFilter utility
+        liquid_stocks = self._apply_liquidity_filtering(full_universe, price_data, as_of_date)
         logger.info(f"After liquidity filter: {len(liquid_stocks)}/{len(full_universe)} stocks")
 
         # Step 2: Apply sampling method
@@ -123,12 +124,15 @@ class BoxSamplingProvider(ClassificationProvider):
             logger.warning(f"Unknown sampling method: {self.sampling_method}, using full universe")
             return liquid_stocks
 
-    def _filter_liquid_stocks(self,
-                             universe: List[str],
-                             price_data: Dict[str, pd.DataFrame],
-                             as_of_date: datetime) -> List[str]:
+    def _apply_liquidity_filtering(self,
+                                    universe: List[str],
+                                    price_data: Dict[str, pd.DataFrame],
+                                    as_of_date: datetime) -> List[str]:
         """
-        Filter stocks based on liquidity and data availability.
+        Apply liquidity filtering using the centralized LiquidityFilter utility.
+
+        This method delegates to the LiquidityFilter utility class, eliminating
+        code duplication and ensuring consistent filtering logic across the system.
 
         Args:
             universe: List of stocks to filter
@@ -138,34 +142,39 @@ class BoxSamplingProvider(ClassificationProvider):
         Returns:
             Filtered list of liquid stocks
         """
-        liquid_stocks = []
+        # Create liquidity filter configuration based on instance settings
+        liquidity_config = {
+            'enabled': True,
+            'min_history_days': self.min_history_days,
+            'min_avg_daily_volume': self.min_avg_volume,
+            'volume_lookback_days': 21  # Default to 21 days for volume calculation
+        }
 
-        for symbol in universe:
-            if symbol not in price_data:
-                logger.debug(f"No price data available for {symbol}")
-                continue
+        # Only include filters that have non-zero thresholds
+        if not self.min_avg_volume:
+            liquidity_config['min_avg_daily_volume'] = 0
+        if not self.min_history_days:
+            liquidity_config['min_history_days'] = 0
 
-            stock_data = price_data[symbol]
-            if stock_data is None or stock_data.empty:
-                logger.debug(f"Empty price data for {symbol}")
-                continue
+        # Apply filtering using the utility class
+        filtered_symbols = LiquidityFilter.apply_liquidity_filters(
+            universe, price_data, liquidity_config
+        )
 
-            # Filter by data history
-            data_up_to_date = stock_data[stock_data.index <= as_of_date]
-            if len(data_up_to_date) < self.min_history_days:
-                logger.debug(f"Insufficient data history for {symbol}: {len(data_up_to_date)} days")
-                continue
+        return filtered_symbols
 
-            # Optional volume filter
-            if self.min_avg_volume and 'Volume' in stock_data.columns:
-                recent_volume = data_up_to_date['Volume'].tail(21).mean()  # Last 21 days
-                if recent_volume < self.min_avg_volume:
-                    logger.debug(f"Insufficient volume for {symbol}: {recent_volume:.0f}")
-                    continue
+    def get_classification_categories(self) -> Dict[str, List[str]]:
+        """
+        Get available classification categories (required by ClassificationProvider interface).
 
-            liquid_stocks.append(symbol)
-
-        return liquid_stocks
+        Returns:
+            Dictionary mapping category types to available values
+        """
+        return {
+            'sampling_method': ['full_universe', 'box_based'],
+            'box_types': ['size', 'value', 'growth', 'quality'],
+            'filter_types': ['liquidity', 'market_cap', 'volume', 'price']
+        }
 
     def _sample_from_boxes(self,
                           universe: List[str],

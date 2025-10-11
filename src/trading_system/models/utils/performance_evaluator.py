@@ -1,527 +1,153 @@
 """
-Performance Evaluator for ML Models
+Simple Performance Evaluator - MVP Version
 
-Utility class for evaluating model performance with ML-specific metrics.
-This works alongside the general performance utilities to provide
-model-specific evaluation capabilities.
+极简的性能评估器，专注核心功能：
+1. 回归指标计算
+2. 分类指标计算
+3. 基本数据验证
+
+No over-engineering, just essential functionality.
 """
 
 import logging
 import numpy as np
 import pandas as pd
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional
 from sklearn.metrics import (
     r2_score, mean_squared_error, mean_absolute_error,
-    mean_absolute_percentage_error, accuracy_score,
-    precision_score, recall_score, f1_score, roc_auc_score
+    accuracy_score, precision_score, recall_score, f1_score
 )
-from scipy import stats
-import warnings
 
 from ..base.base_model import BaseModel
-from ...utils.performance import PerformanceMetrics
 
 logger = logging.getLogger(__name__)
 
 
 class PerformanceEvaluator:
     """
-    Comprehensive performance evaluator for ML models.
+    极简性能评估器。
 
-    Provides model-specific metrics including:
-    - Regression metrics (R², MSE, MAE, etc.)
-    - Classification metrics (accuracy, precision, etc.)
-    - Financial metrics (IC, Rank IC, etc.)
-    - Model comparison capabilities
+    设计原则：
+    - 单一职责：只做性能评估
+    - 极简配置：最少参数
+    - 一行代码：能用一行解决的绝不用三行
+    - 无过度设计：删除所有非必需功能
     """
 
     @staticmethod
-    def evaluate_model(model: BaseModel, X: pd.DataFrame, y: pd.Series,
-                      task_type: str = 'auto', sample_weight: Optional[np.ndarray] = None) -> Dict[str, float]:
+    def evaluate(model: BaseModel, X: pd.DataFrame, y: pd.Series, task_type: str = 'auto') -> Dict[str, float]:
         """
-        Comprehensive model evaluation.
+        一行评估模型性能。
 
         Args:
-            model: Trained model to evaluate
-            X: Feature DataFrame
-            y: Target Series
-            task_type: 'regression', 'classification', or 'auto'
-            sample_weight: Optional sample weights
+            model: 训练好的模型
+            X: 特征数据
+            y: 目标数据
+            task_type: 任务类型 ('regression', 'classification', 'auto')
 
         Returns:
-            Dictionary of performance metrics
+            性能指标字典
         """
         if model.status != "trained":
             raise ValueError("Model must be trained before evaluation")
 
-        try:
-            # Make predictions
-            predictions = model.predict(X)
-            logger.info(f"DEBUG: PerformanceEvaluator - predictions shape: {predictions.shape}, y shape: {y.shape}")
-            logger.info(f"DEBUG: PerformanceEvaluator - y stats: mean={y.mean():.6f}, std={y.std():.6f}, min={y.min():.6f}, max={y.max():.6f}")
-            logger.info(f"DEBUG: PerformanceEvaluator - prediction stats: mean={np.mean(predictions):.6f}, std={np.std(predictions):.6f}, min={np.min(predictions):.6f}, max={np.max(predictions):.6f}")
+        # 预测
+        predictions = model.predict(X)
 
-            # Check for data quality issues
-            if np.isnan(predictions).any():
-                logger.warning(f"DEBUG: PerformanceEvaluator - Predictions contain {np.isnan(predictions).sum()} NaN values")
-            if np.isinf(predictions).any():
-                logger.warning(f"DEBUG: PerformanceEvaluator - Predictions contain {np.isinf(predictions).sum()} infinite values")
-            if y.isnull().any():
-                logger.warning(f"DEBUG: PerformanceEvaluator - y contains {y.isnull().sum()} NaN values")
+        # 数据质量检查
+        if len(predictions) != len(y):
+            raise ValueError(f"Prediction length ({len(predictions)}) != target length ({len(y)})")
 
-            # Determine task type if auto
-            if task_type == 'auto':
-                task_type = PerformanceEvaluator._determine_task_type(y)
+        # 确定任务类型
+        if task_type == 'auto':
+            task_type = 'regression' if y.dtype in [np.float64, np.float32] else 'classification'
 
-            logger.info(f"DEBUG: PerformanceEvaluator - determined task type: {task_type}")
-
-            # Calculate metrics based on task type
-            if task_type == 'regression':
-                metrics = PerformanceEvaluator._regression_metrics(y, predictions, sample_weight)
-                logger.info(f"DEBUG: PerformanceEvaluator - calculated regression metrics, r2: {metrics.get('r2', 'N/A')}")
-            elif task_type == 'classification':
-                # For classification, we need class predictions
-                if hasattr(model, 'predict_proba'):
-                    proba = model.predict_proba(X)
-                    if len(proba.shape) == 2 and proba.shape[1] == 2:
-                        proba = proba[:, 1]  # Binary classification
+        # 计算指标
+        if task_type == 'regression':
+            metrics = PerformanceEvaluator._regression_metrics(y, predictions)
+        else:
+            # 分类：需要类别预测
+            if hasattr(model, 'predict_proba'):
+                proba = model.predict_proba(X)
+                if len(proba.shape) == 2 and proba.shape[1] == 2:
+                    proba = proba[:, 1]
                     class_pred = (proba > 0.5).astype(int)
                 else:
                     class_pred = predictions
-
-                metrics = PerformanceEvaluator._classification_metrics(y, class_pred, proba if 'proba' in locals() else None)
             else:
-                raise ValueError(f"Unsupported task type: {task_type}")
+                class_pred = predictions
 
-            # Add model-specific information
-            metrics.update({
-                'model_type': model.model_type,
-                'training_samples': model.metadata.training_samples,
-                'feature_count': len(model.metadata.features) if model.metadata.features else 0,
-                'evaluation_samples': len(y)
-            })
+            metrics = PerformanceEvaluator._classification_metrics(y, class_pred)
 
-            # Add feature importance if available
-            feature_importance = model.get_feature_importance()
-            if feature_importance:
-                metrics['top_feature_importance'] = max(feature_importance.values()) if feature_importance else 0.0
-
-            logger.info(f"Evaluated {model.model_type}: {task_type} task, {metrics.get('r2', 'N/A')} R²")
-            return metrics
-
-        except Exception as e:
-            logger.error(f"Model evaluation failed: {e}")
-            return PerformanceEvaluator._empty_evaluation_metrics()
-
-    @staticmethod
-    def evaluate_financial_model(model: BaseModel, X: pd.DataFrame, y: pd.Series,
-                                returns: Optional[pd.Series] = None,
-                                benchmark_returns: Optional[pd.Series] = None) -> Dict[str, float]:
-        """
-        Evaluate financial model with finance-specific metrics.
-
-        Args:
-            model: Trained model
-            X: Feature DataFrame
-            y: Target returns
-            returns: Actual returns (if different from y)
-            benchmark_returns: Benchmark returns for relative metrics
-
-        Returns:
-            Dictionary of financial performance metrics
-        """
-        try:
-            predictions = model.predict(X)
-
-            # Use provided returns or target as returns
-            actual_returns = returns if returns is not None else y
-
-            # Basic ML metrics
-            ml_metrics = PerformanceEvaluator._regression_metrics(actual_returns, predictions)
-
-            # Financial-specific metrics
-            financial_metrics = {}
-
-            # Information Coefficient (IC)
-            ic = np.corrcoef(actual_returns, predictions)[0, 1]
-            financial_metrics['information_coefficient'] = ic if not np.isnan(ic) else 0.0
-
-            # Rank IC (correlation of ranks)
-            rank_ic = stats.spearmanr(actual_returns, predictions)[0]
-            financial_metrics['rank_ic'] = rank_ic if not np.isnan(rank_ic) else 0.0
-
-            # Predictive accuracy (percentage of correct directional predictions)
-            if len(actual_returns) > 1:
-                direction_actual = (actual_returns > 0).astype(int)
-                direction_pred = (predictions > 0).astype(int)
-                directional_accuracy = (direction_actual == direction_pred).mean()
-                financial_metrics['directional_accuracy'] = directional_accuracy
-            else:
-                financial_metrics['directional_accuracy'] = 0.0
-
-            # Portfolio metrics (if we can construct portfolio from predictions)
-            if len(predictions) > 10:  # Need sufficient observations
-                # Create long-short portfolio based on predictions
-                top_quintile = predictions >= np.percentile(predictions, 80)
-                bottom_quintile = predictions <= np.percentile(predictions, 20)
-
-                if top_quintile.sum() > 0 and bottom_quintile.sum() > 0:
-                    portfolio_returns = actual_returns[top_quintile].mean() - actual_returns[bottom_quintile].mean()
-                    financial_metrics['long_short_return'] = portfolio_returns
-
-                    # Calculate Sharpe ratio for this portfolio
-                    if len(actual_returns[top_quintile]) > 1:
-                        long_short_series = pd.Series([
-                            actual_returns[top_quintile].iloc[i] - actual_returns[bottom_quintile].iloc[i]
-                            for i in range(min(len(actual_returns[top_quintile]), len(actual_returns[bottom_quintile])))
-                        ])
-                        financial_metrics['long_short_sharpe'] = PerformanceMetrics.sharpe_ratio(long_short_series)
-
-            # Combine all metrics
-            all_metrics = {**ml_metrics, **financial_metrics}
-
-            # Add portfolio-level metrics if returns and benchmark are provided
-            if benchmark_returns is not None and len(actual_returns) == len(benchmark_returns):
-                portfolio_metrics = PerformanceMetrics.calculate_all_metrics(
-                    actual_returns, benchmark_returns
-                )
-                # Add prefix to avoid conflicts
-                for key, value in portfolio_metrics.items():
-                    all_metrics[f'portfolio_{key}'] = value
-
-            logger.info(f"Financial evaluation completed: IC={financial_metrics.get('information_coefficient', 0):.3f}")
-            return all_metrics
-
-        except Exception as e:
-            logger.error(f"Financial model evaluation failed: {e}")
-            return PerformanceEvaluator._empty_financial_metrics()
-
-    @staticmethod
-    def compare_models(models: List[BaseModel], X: pd.DataFrame, y: pd.Series,
-                      task_type: str = 'auto') -> pd.DataFrame:
-        """
-        Compare multiple models on the same dataset.
-
-        Args:
-            models: List of trained models to compare
-            X: Feature DataFrame
-            y: Target Series
-            task_type: Task type for evaluation
-
-        Returns:
-            DataFrame with comparison results
-        """
-        results = []
-
-        for model in models:
-            try:
-                metrics = PerformanceEvaluator.evaluate_model(model, X, y, task_type)
-                metrics['model_name'] = model.__class__.__name__
-                results.append(metrics)
-            except Exception as e:
-                logger.warning(f"Failed to evaluate model {model.__class__.__name__}: {e}")
-                continue
-
-        if not results:
-            logger.warning("No models could be evaluated")
-            return pd.DataFrame()
-
-        # Create comparison DataFrame
-        comparison_df = pd.DataFrame(results)
-
-        # Add rankings
-        numeric_columns = comparison_df.select_dtypes(include=[np.number]).columns
-        for col in numeric_columns:
-            if col not in ['model_name', 'training_samples', 'feature_count', 'evaluation_samples']:
-                try:
-                    ranking = comparison_df[col].rank(ascending=False, method='min')
-                    comparison_df[f'{col}_rank'] = ranking.astype(int)
-                except Exception:
-                    continue
-
-        return comparison_df
-
-    @staticmethod
-    def cross_validate_model(model_class, X: pd.DataFrame, y: pd.Series,
-                           cv_folds: int = 5, model_config: Optional[Dict] = None,
-                           task_type: str = 'auto') -> Dict[str, Any]:
-        """
-        Perform cross-validation on a model class.
-
-        Args:
-            model_class: Model class to evaluate (not instance)
-            X: Feature DataFrame
-            y: Target Series
-            cv_folds: Number of CV folds
-            model_config: Configuration for model initialization
-            task_type: Task type for evaluation
-
-        Returns:
-            Dictionary with CV results
-        """
-        try:
-            from sklearn.model_selection import TimeSeriesSplit, KFold
-
-            # Use TimeSeriesSplit for financial data
-            if len(X) > 100:  # Use time series split for larger datasets
-                cv = TimeSeriesSplit(n_splits=cv_folds)
-            else:
-                cv = KFold(n_splits=cv_folds, shuffle=True, random_state=42)
-
-            fold_results = []
-            models = []
-
-            for fold, (train_idx, val_idx) in enumerate(cv.split(X)):
-                try:
-                    X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
-                    y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
-
-                    # Initialize and train model
-                    model = model_class(config=model_config or {})
-                    model.fit(X_train, y_train)
-
-                    # Evaluate on validation set
-                    metrics = PerformanceEvaluator.evaluate_model(model, X_val, y_val, task_type)
-                    metrics['fold'] = fold + 1
-                    fold_results.append(metrics)
-                    models.append(model)
-
-                except Exception as e:
-                    logger.warning(f"CV fold {fold + 1} failed: {e}")
-                    continue
-
-            if not fold_results:
-                return {'error': 'All CV folds failed'}
-
-            # Aggregate results
-            results_df = pd.DataFrame(fold_results)
-            numeric_columns = results_df.select_dtypes(include=[np.number]).columns
-
-            summary = {
-                'cv_folds': len(fold_results),
-                'mean_metrics': results_df[numeric_columns].mean().to_dict(),
-                'std_metrics': results_df[numeric_columns].std().to_dict(),
-                'fold_results': fold_results,
-                'models': models
-            }
-
-            logger.info(f"Cross-validation completed: {len(fold_results)} successful folds")
-            return summary
-
-        except Exception as e:
-            logger.error(f"Cross-validation failed: {e}")
-            return {'error': str(e)}
-
-    @staticmethod
-    def _determine_task_type(y: pd.Series) -> str:
-        """Determine if this is regression or classification task."""
-        # Check if target is binary or multi-class
-        unique_values = y.nunique()
-
-        if unique_values <= 20 and y.dtype in ['int64', 'int32', 'bool']:
-            # Likely classification
-            return 'classification'
-        else:
-            # Likely regression
-            return 'regression'
-
-    @staticmethod
-    def _regression_metrics(y_true: pd.Series, y_pred: np.ndarray,
-                          sample_weight: Optional[np.ndarray] = None) -> Dict[str, float]:
-        """Calculate regression metrics."""
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-
-            logger.info(f"DEBUG: _regression_metrics - input shapes: y_true={y_true.shape}, y_pred={y_pred.shape}")
-            logger.info(f"DEBUG: _regression_metrics - y_true stats: mean={y_true.mean():.6f}, std={y_true.std():.6f}")
-            logger.info(f"DEBUG: _regression_metrics - y_pred stats: mean={np.mean(y_pred):.6f}, std={np.std(y_pred):.6f}")
-            logger.info(f"DEBUG: _regression_metrics - y_true range: [{y_true.min():.6f}, {y_true.max():.6f}]")
-            logger.info(f"DEBUG: _regression_metrics - y_pred range: [{np.min(y_pred):.6f}, {np.max(y_pred):.6f}]")
-
-            # Calculate basic variance stats manually to understand R² calculation
-            y_mean = np.mean(y_true)
-            ss_res = np.sum((y_true - y_pred) ** 2)
-            ss_tot = np.sum((y_true - y_mean) ** 2)
-
-            logger.info(f"DEBUG: _regression_metrics - y_mean: {y_mean:.6f}")
-            logger.info(f"DEBUG: _regression_metrics - ss_res (sum of squared residuals): {ss_res:.6f}")
-            logger.info(f"DEBUG: _regression_metrics - ss_tot (total sum of squares): {ss_tot:.6f}")
-
-            if ss_tot > 0:
-                manual_r2 = 1 - (ss_res / ss_tot)
-                logger.info(f"DEBUG: _regression_metrics - manual R² calculation: {manual_r2:.6f}")
-            else:
-                logger.warning(f"DEBUG: _regression_metrics - ss_tot is zero, cannot calculate manual R²")
-                manual_r2 = 0.0
-
-            metrics = {
-                'r2': r2_score(y_true, y_pred, sample_weight=sample_weight),
-                'mse': mean_squared_error(y_true, y_pred, sample_weight=sample_weight),
-                'rmse': np.sqrt(mean_squared_error(y_true, y_pred, sample_weight=sample_weight)),
-                'mae': mean_absolute_error(y_true, y_pred, sample_weight=sample_weight),
-                'mape': mean_absolute_percentage_error(y_true, y_pred, sample_weight=sample_weight)
-            }
-
-            logger.info(f"DEBUG: _regression_metrics - sklearn r2_score: {metrics['r2']:.6f}")
-            logger.info(f"DEBUG: _regression_metrics - manual vs sklearn R² diff: {abs(manual_r2 - metrics['r2']):.6f}")
-
-            if metrics['r2'] < -10:
-                logger.error(f"DEBUG: _regression_metrics - EXTREMELY NEGATIVE R² DETECTED: {metrics['r2']:.6f}")
-                logger.error(f"DEBUG: _regression_metrics - This suggests severe model or data issues")
-                logger.error(f"DEBUG: _regression_metrics - ss_res/ss_tot ratio: {ss_res/ss_tot if ss_tot > 0 else 'inf'}")
-
-            # Add correlation-based metrics
-            correlation = np.corrcoef(y_true, y_pred)[0, 1]
-            metrics['correlation'] = correlation if not np.isnan(correlation) else 0.0
-
-            # Add custom financial metrics
-            if len(y_true) > 1:
-                # Directional accuracy
-                direction_correct = ((y_true > 0) == (pd.Series(y_pred, index=y_true.index) > 0)).mean()
-                metrics['directional_accuracy'] = direction_correct
-
-            return metrics
-
-    @staticmethod
-    def _classification_metrics(y_true: pd.Series, y_pred: np.ndarray,
-                              y_proba: Optional[np.ndarray] = None) -> Dict[str, float]:
-        """Calculate classification metrics."""
-        metrics = {
-            'accuracy': accuracy_score(y_true, y_pred),
-            'precision_macro': precision_score(y_true, y_pred, average='macro', zero_division=0),
-            'recall_macro': recall_score(y_true, y_pred, average='macro', zero_division=0),
-            'f1_macro': f1_score(y_true, y_pred, average='macro', zero_division=0)
-        }
-
-        # Add AUC if probabilities are available
-        if y_proba is not None and len(np.unique(y_true)) == 2:
-            try:
-                metrics['auc_roc'] = roc_auc_score(y_true, y_proba)
-            except Exception:
-                metrics['auc_roc'] = 0.0
+        # 添加模型信息
+        metrics.update({
+            'model_type': model.model_type,
+            'samples': len(X),
+            'features': len(X.columns)
+        })
 
         return metrics
 
     @staticmethod
-    def _empty_evaluation_metrics() -> Dict[str, float]:
-        """Return empty metrics dictionary."""
+    def _regression_metrics(y_true: pd.Series, y_pred: np.ndarray) -> Dict[str, float]:
+        """计算回归指标。"""
         return {
-            'r2': 0.0, 'mse': float('inf'), 'rmse': float('inf'),
-            'mae': float('inf'), 'mape': float('inf'),
-            'correlation': 0.0, 'directional_accuracy': 0.0,
-            'model_type': '', 'training_samples': 0,
-            'feature_count': 0, 'evaluation_samples': 0
+            'r2': r2_score(y_true, y_pred),
+            'mse': mean_squared_error(y_true, y_pred),
+            'mae': mean_absolute_error(y_true, y_pred),
+            'rmse': np.sqrt(mean_squared_error(y_true, y_pred)),
+            'mape': np.mean(np.abs((y_true - y_pred) / y_true)) if (y_true != 0).all() else float('inf')
         }
 
     @staticmethod
-    def _empty_financial_metrics() -> Dict[str, float]:
-        """Return empty financial metrics dictionary."""
-        base_metrics = PerformanceEvaluator._empty_evaluation_metrics()
-        financial_metrics = {
-            'information_coefficient': 0.0,
-            'rank_ic': 0.0,
-            'directional_accuracy': 0.0,
-            'long_short_return': 0.0,
-            'long_short_sharpe': 0.0
+    def _classification_metrics(y_true: pd.Series, y_pred: np.ndarray) -> Dict[str, float]:
+        """计算分类指标。"""
+        return {
+            'accuracy': accuracy_score(y_true, y_pred),
+            'precision': precision_score(y_true, y_pred, average='weighted', zero_division=0),
+            'recall': recall_score(y_true, y_pred, average='weighted', zero_division=0),
+            'f1': f1_score(y_true, y_pred, average='weighted', zero_division=0)
         }
-        return {**base_metrics, **financial_metrics}
 
     @staticmethod
-    def evaluate_comprehensive(model: BaseModel, X_test: pd.DataFrame, y_test: pd.Series,
-                              benchmark_returns: Optional[pd.Series] = None,
-                              dataset_name: str = "test") -> Dict[str, Any]:
-        """
-        Comprehensive evaluation for Phase 7 pipeline.
-
-        Simple extension of existing evaluate_model with additional Phase 7 features.
-
-        Args:
-            model: Trained model to evaluate
-            X_test: Test features
-            y_test: True target values
-            benchmark_returns: Optional benchmark returns for comparison
-            dataset_name: Name of evaluation dataset
-
-        Returns:
-            Dictionary with comprehensive evaluation results
-        """
-        try:
-            # Use existing evaluate_model for base metrics
-            base_metrics = PerformanceEvaluator.evaluate_model(model, X_test, y_test)
-
-            # Add financial evaluation if requested
-            if benchmark_returns is not None:
-                financial_metrics = PerformanceEvaluator.evaluate_financial_model(
-                    model, X_test, y_test, benchmark_returns
-                )
-                # Merge results with prefix to avoid conflicts
-                for key, value in financial_metrics.items():
-                    if key not in base_metrics:
-                        base_metrics[f'financial_{key}'] = value
-
-            # Add Phase 7 specific metadata
-            evaluation_result = {
-                'model_id': model.model_id,
-                'evaluation_timestamp': pd.Timestamp.now().isoformat(),
-                'dataset_name': dataset_name,
-                'dataset_size': len(y_test),
-                'metrics': base_metrics,
-                'status': 'completed'
-            }
-
-            logger.info(f"Comprehensive evaluation completed for {model.model_id}")
-            return evaluation_result
-
-        except Exception as e:
-            logger.error(f"Comprehensive evaluation failed: {e}")
-            return {
-                'model_id': getattr(model, 'model_id', 'unknown'),
-                'evaluation_timestamp': pd.Timestamp.now().isoformat(),
-                'dataset_name': dataset_name,
-                'dataset_size': 0,
-                'metrics': {},
-                'status': 'failed',
-                'error': str(e)
-            }
+    def quick_regression_eval(y_true: pd.Series, y_pred: np.ndarray) -> Dict[str, float]:
+        """快速回归评估。"""
+        return {
+            'r2': r2_score(y_true, y_pred),
+            'mse': mean_squared_error(y_true, y_pred),
+            'mae': mean_absolute_error(y_true, y_pred)
+        }
 
     @staticmethod
-    def generate_recommendations(metrics: Dict[str, float]) -> List[str]:
-        """
-        Generate simple recommendations based on evaluation metrics.
+    def quick_classification_eval(y_true: pd.Series, y_pred: np.ndarray) -> Dict[str, float]:
+        """快速分类评估。"""
+        return {
+            'accuracy': accuracy_score(y_true, y_pred),
+            'f1': f1_score(y_true, y_pred, average='weighted', zero_division=0)
+        }
 
-        Args:
-            metrics: Dictionary of evaluation metrics
 
-        Returns:
-            List of recommendations
-        """
-        recommendations = []
+# 便捷函数
+def evaluate_model(model: BaseModel, X: pd.DataFrame, y: pd.Series) -> Dict[str, float]:
+    """评估模型性能。"""
+    return PerformanceEvaluator.evaluate(model, X, y)
 
-        try:
-            # Information Coefficient recommendations
-            ic = metrics.get('financial_information_coefficient', metrics.get('information_coefficient', 0))
-            if abs(ic) < 0.05:
-                recommendations.append("Low IC detected. Consider feature engineering.")
-            elif abs(ic) < 0.1:
-                recommendations.append("Moderate IC. Consider hyperparameter tuning.")
 
-            # R-squared recommendations
-            r2 = metrics.get('r2', 0)
-            if r2 < 0.1:
-                recommendations.append("Low R². Model may need improvements.")
-            elif r2 > 0.9:
-                recommendations.append("High R². Check for overfitting.")
+def quick_eval(y_true: pd.Series, y_pred: np.ndarray) -> Dict[str, float]:
+    """快速评估预测结果。"""
+    if y_true.dtype in [np.float64, np.float32]:
+        return PerformanceEvaluator.quick_regression_eval(y_true, y_pred)
+    else:
+        return PerformanceEvaluator.quick_classification_eval(y_true, y_pred)
 
-            # MSE recommendations
-            mse = metrics.get('mse', float('inf'))
-            if mse > 1.0:
-                recommendations.append("High MSE. Consider different model architecture.")
 
-            if not recommendations:
-                recommendations.append("Model performance appears reasonable.")
+# 使用示例
+if __name__ == "__main__":
+    # 模拟数据
+    y_true = pd.Series([1, 2, 3, 4, 5])
+    y_pred = np.array([1.1, 2.1, 2.9, 4.1, 4.9])
 
-        except Exception as e:
-            logger.warning(f"Error generating recommendations: {e}")
-            recommendations.append("Unable to generate recommendations due to evaluation error.")
-
-        return recommendations
+    # 一行评估
+    metrics = quick_eval(y_true, y_pred)
+    print(f"R²: {metrics['r2']:.4f}")
+    print(f"MSE: {metrics['mse']:.4f}")

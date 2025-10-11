@@ -11,9 +11,14 @@ from ..base.base_model import BaseModel
 @dataclass
 class TrainingConfig:
     """Configuration for model training."""
+    # Model info
+    model_type: str = "base_model"
+    model_params: Dict[str, Any] = field(default_factory=dict)
+
     # Training parameters
     use_cross_validation: bool = True
     cv_folds: int = 5
+    cv_method: str = "purged"  # Options: "purged", "expanding", "walk_forward"
     purge_period: int = 21  # trading days
     embargo_period: int = 5  # trading days
 
@@ -29,6 +34,8 @@ class TrainingConfig:
     log_experiment: bool = True
     experiment_name: str = ""
     tags: Dict[str, str] = field(default_factory=dict)
+    enable_wandb: bool = False
+    wandb_project: str = "trading-system"
 
     def __post_init__(self):
         """Validate configuration after initialization."""
@@ -37,6 +44,15 @@ class TrainingConfig:
 
         if self.cv_folds < 2:
             raise ValueError("cv_folds must be at least 2")
+            
+        if self.cv_method not in ["purged", "expanding", "walk_forward"]:
+            raise ValueError("cv_method must be one of: 'purged', 'expanding', 'walk_forward'")
+            
+        if self.purge_period < 0:
+            raise ValueError("purge_period must be non-negative")
+            
+        if self.embargo_period < 0:
+            raise ValueError("embargo_period must be non-negative")
 
 
 @dataclass
@@ -49,6 +65,7 @@ class TrainingResult:
     test_metrics: Optional[Dict[str, float]] = None
     training_history: List[Dict[str, float]] = field(default_factory=list)
     best_params: Optional[Dict[str, Any]] = None
+    feature_pipeline: Optional[Any] = None  # Fitted feature pipeline from CV
 
     def get_summary(self) -> Dict[str, Any]:
         """Get a summary of training results."""

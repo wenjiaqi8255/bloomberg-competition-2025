@@ -14,7 +14,7 @@ or as part of a complete system orchestration.
 """
 
 from .coordinator import StrategyCoordinator, CoordinatorConfig
-from .allocator import CapitalAllocator, AllocationConfig
+from .allocator import CapitalAllocator, AllocationConfig, StrategyAllocation
 from .compliance import ComplianceMonitor, ComplianceRules, ComplianceReport
 from .executor import TradeExecutor, ExecutionConfig
 from .reporter import PerformanceReporter, ReportConfig
@@ -27,6 +27,7 @@ __all__ = [
     # Capital allocation
     'CapitalAllocator',
     'AllocationConfig',
+    'StrategyAllocation',
 
     # Compliance monitoring
     'ComplianceMonitor',

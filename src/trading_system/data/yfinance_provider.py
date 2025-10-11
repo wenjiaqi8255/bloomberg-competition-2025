@@ -32,7 +32,8 @@ class YFinanceProvider(PriceDataProvider):
 
     def __init__(self, max_retries: int = 3, retry_delay: float = 1.0,
                  request_timeout: int = 30, cache_enabled: bool = True,
-                 symbols: Optional[List[str]] = None, start_date: Optional[str] = None):
+                 symbols: Optional[List[str]] = None, start_date: Optional[str] = None,
+                 liquidity_config: Optional[Dict[str, Any]] = None):
         """
         Initialize the YFinance provider.
 
@@ -43,6 +44,7 @@ class YFinanceProvider(PriceDataProvider):
             cache_enabled: Whether to enable caching
             symbols: List of symbols to provide data for (optional)
             start_date: Start date for historical data (optional)
+            liquidity_config: Liquidity filtering configuration
         """
         super().__init__(
             max_retries=max_retries,
@@ -55,6 +57,7 @@ class YFinanceProvider(PriceDataProvider):
         # Store symbols and start_date for later use
         self.symbols = symbols
         self.start_date = start_date
+        self.liquidity_config = liquidity_config or {}
 
     def get_data_source(self) -> DataSource:
         """Get the data source enum for this provider."""
@@ -88,7 +91,8 @@ class YFinanceProvider(PriceDataProvider):
     def get_historical_data(self, symbols: Union[str, List[str]],
                            start_date: Union[str, datetime],
                            end_date: Union[str, datetime] = None,
-                           period: str = None) -> Dict[str, pd.DataFrame]:
+                           period: str = None,
+                           liquidity_config: Optional[Dict[str, Any]] = None) -> Dict[str, pd.DataFrame]:
         """
         Fetch historical OHLCV data for one or more symbols.
 
@@ -97,6 +101,7 @@ class YFinanceProvider(PriceDataProvider):
             start_date: Start date for data fetch
             end_date: End date for data fetch (default: today)
             period: Alternative to start/end dates (e.g., '1y', '6mo', '3d')
+            liquidity_config: Liquidity filtering configuration (overrides instance config)
 
         Returns:
             Dictionary mapping symbols to DataFrames
@@ -139,10 +144,15 @@ class YFinanceProvider(PriceDataProvider):
                     # Data validation and cleaning using base class method
                     data = self._validate_and_clean_data(data, symbol)
                     data = self.add_data_source_metadata(data)
-                    
+
+                    # Apply liquidity filtering if configured
+                    effective_liquidity_config = liquidity_config or self.liquidity_config
+                    if effective_liquidity_config and effective_liquidity_config.get('enabled', False):
+                        data = self.apply_liquidity_filter(data, effective_liquidity_config)
+
                     # Store in cache
                     self._store_in_cache(cache_key, data)
-                    
+
                     results[symbol] = data
                     logger.info(f"Successfully fetched {len(data)} rows for {symbol}")
                 else:
@@ -347,7 +357,8 @@ class YFinanceProvider(PriceDataProvider):
 
     def get_data(self, start_date: Union[str, datetime] = None,
                  end_date: Union[str, datetime] = None,
-                 symbols: Union[str, List[str]] = None) -> Dict[str, pd.DataFrame]:
+                 symbols: Union[str, List[str]] = None,
+                 liquidity_config: Optional[Dict[str, Any]] = None) -> Dict[str, pd.DataFrame]:
         """
         Get historical data for symbols.
 
@@ -355,6 +366,7 @@ class YFinanceProvider(PriceDataProvider):
             start_date: Start date for data (uses stored start_date if None)
             end_date: End date for data (default: today)
             symbols: Symbols to get data for (uses stored symbols if None)
+            liquidity_config: Liquidity filtering configuration (overrides instance config)
 
         Returns:
             Dictionary mapping symbols to DataFrames
@@ -370,7 +382,12 @@ class YFinanceProvider(PriceDataProvider):
                 raise ValueError("No start_date provided and no default start_date available")
             start_date = self.start_date
 
-        return self.get_historical_data(symbols=symbols, start_date=start_date, end_date=end_date)
+        return self.get_historical_data(
+            symbols=symbols,
+            start_date=start_date,
+            end_date=end_date,
+            liquidity_config=liquidity_config
+        )
 
     def validate_symbol(self, symbol: str) -> bool:
         """

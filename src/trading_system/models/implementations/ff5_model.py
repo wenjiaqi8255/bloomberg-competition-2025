@@ -372,29 +372,15 @@ class FF5RegressionModel(BaseModel):
 
     def get_hyperparameter_search_space(self) -> Dict[str, Any]:
         """
-        Get hyperparameter search space for FF5 model optimization.
+        Get hyperparameter search space for FF5 model optimization (MVP - simple dict).
 
         Returns:
-            Dictionary defining the search space for Optuna optimization
+            Simple dictionary defining parameter ranges for optimization
         """
-        from ..finetune.hyperparameter_optimizer import SearchSpace
-
         return {
-            'regularization': SearchSpace(
-                param_type='categorical',
-                choices=['none', 'ridge']
-            ),
-            'alpha': SearchSpace(
-                param_type='float',
-                low=0.01,
-                high=10.0,
-                step=0.1,
-                log_scale=True
-            ),
-            'standardize': SearchSpace(
-                param_type='categorical',
-                choices=[True, False]
-            )
+            'regularization': ['none', 'ridge'],
+            'alpha': (0.01, 10.0),
+            'standardize': [True, False]
         }
 
     def get_tunable_hyperparameters(self) -> List[str]:

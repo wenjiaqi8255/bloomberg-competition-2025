@@ -1,0 +1,119 @@
+# ============================================================================
+# Liquidity Filter Configuration Template
+# ============================================================================
+#
+# This template demonstrates how to configure liquidity filtering in the
+# trading system. Liquidity filters are applied early in the data pipeline
+# to remove small-cap and illiquid stocks that can impact strategy performance.
+#
+# The configuration follows the KISS principle with clear, self-documenting
+# parameters that can be easily adjusted based on strategy requirements.
+# ============================================================================
+
+# Data Provider Configuration with Liquidity Filtering
+# --------------------------------------------------
+data_provider:
+  type: "YFinanceProvider"
+  parameters:
+    max_retries: 3
+    retry_delay: 1.0
+    request_timeout: 30
+    cache_enabled: true
+    rate_limit: 0.5
+
+  # Liquidity filtering configuration
+  # These filters are applied during data fetching to ensure only
+  # liquid, tradeable stocks enter the strategy pipeline
+  liquidity_filter:
+    # Master switch to enable/disable filtering
+    enabled: true
+
+    # Market capitalization filter (USD)
+    # Institutional-grade liquidity threshold - typically $1B+
+    min_market_cap: 1000000000  # $1B minimum
+
+    # Trading volume filter (USD)
+    # Ensures sufficient daily volume for execution
+    min_avg_daily_volume: 1000000  # $1M average daily volume
+
+    # Price range filters (USD)
+    # Filter out penny stocks and extremely high-priced stocks
+    min_price: 5.0        # $5 minimum (avoid penny stocks)
+    max_price: 1000.0     # $1000 maximum (avoid exotic instruments)
+
+    # Data quality filters
+    # Ensure sufficient historical data for reliable analysis
+    min_history_days: 252  # 1 year of trading data
+    volume_lookback_days: 21  # 1 month for volume average
+
+# Example Configurations for Different Strategy Types
+# ================================================
+
+# Conservative Institutional Strategy (high liquidity)
+# -------------------------------------------------
+# liquidity_filter:
+#   enabled: true
+#   min_market_cap: 5000000000    # $5B+ (large caps only)
+#   min_avg_daily_volume: 5000000 # $5M+ daily volume
+#   min_price: 10.0              # $10+ minimum
+#   min_history_days: 504        # 2 years history
+
+# Mid-Frequency Trading Strategy (moderate liquidity)
+# -------------------------------------------------
+# liquidity_filter:
+#   enabled: true
+#   min_market_cap: 500000000     # $500M+ minimum
+#   min_avg_daily_volume: 500000  # $500K+ daily volume
+#   min_price: 2.0               # $2+ minimum
+#   min_history_days: 126        # 6 months history
+
+# High-Frequency Research Strategy (broad universe)
+# ------------------------------------------------
+# liquidity_filter:
+#   enabled: true
+#   min_market_cap: 100000000     # $100M+ minimum
+#   min_avg_daily_volume: 100000  # $100K+ daily volume
+#   min_price: 1.0               # $1+ minimum
+#   min_history_days: 63         # 3 months history
+
+# Development/Testing Mode (minimal filtering)
+# -------------------------------------------
+# liquidity_filter:
+#   enabled: false  # Disable for maximum universe during development
+
+# Implementation Notes
+# ===================
+#
+# 1. Early Filtering: These filters are applied in the data provider layer,
+#    ensuring illiquid stocks never reach the strategy engine.
+#
+# 2. Performance: Filtering early reduces computational burden on downstream
+#    processes like feature engineering and model training.
+#
+# 3. Consistency: All data providers use the same LiquidityFilter utility,
+#    ensuring consistent behavior across different data sources.
+#
+# 4. Configuration: Parameters can be adjusted per strategy or market regime.
+#    Use conservative settings for live trading, looser for backtesting.
+#
+# 5. Monitoring: The system logs filtering statistics showing how many stocks
+#    are removed at each step, helping to optimize filter parameters.
+#
+# Usage Examples
+# ==============
+#
+# In Python code:
+# ```python
+# # Method 1: Via constructor
+# provider = YFinanceProvider(
+#     liquidity_config=config['data_provider']['liquidity_filter']
+# )
+#
+# # Method 2: Via method call
+# data = provider.get_historical_data(
+#     symbols=symbols,
+#     start_date=start_date,
+#     end_date=end_date,
+#     liquidity_config=config['data_provider']['liquidity_filter']
+# )
+# ```

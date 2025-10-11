@@ -19,6 +19,8 @@ import json
 from ...types.portfolio import Portfolio, Trade
 from ...types.data_types import SystemPerformance
 from ...utils.performance import PerformanceMetrics as UnifiedPerformanceMetrics
+from ..utils.performance_tracker import ComponentPerformanceTrackerMixin
+from ..utils.config_validator import ComponentConfigValidator
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +151,7 @@ class PerformanceReport:
         return len(self.alerts) > 0
 
 
-class PerformanceReporter:
+class PerformanceReporter(ComponentPerformanceTrackerMixin):
     """
     Generates and manages performance reports.
 
@@ -169,6 +171,7 @@ class PerformanceReporter:
         Args:
             config: Reporting configuration
         """
+        super().__init__()
         self.config = config
 
         # Performance history
