@@ -16,7 +16,7 @@ def validate_inputs(strategy_signals: Dict[datetime, List[Any]],
                    price_data: Dict[str, pd.DataFrame],
                    benchmark_data: Optional[pd.DataFrame] = None) -> bool:
     """
-    Validate backtest input data.
+    Validate backtest input data with robust data handling.
 
     Args:
         strategy_signals: Dictionary mapping dates to trading signals
@@ -43,18 +43,35 @@ def validate_inputs(strategy_signals: Dict[datetime, List[Any]],
     if len(price_data) == 0:
         raise ValueError("Price data dictionary is empty")
 
-    # Check that all symbols in signals have price data
+    # Extract all symbols from signals (handle both DataFrame and other formats)
     all_symbols = set()
-    for signals in strategy_signals.values():
-        for signal in signals:
-            if hasattr(signal, 'symbol'):
-                all_symbols.add(signal.symbol)
-            elif isinstance(signal, dict) and 'symbol' in signal:
-                all_symbols.add(signal['symbol'])
+    if isinstance(next(iter(strategy_signals.values())), pd.DataFrame):
+        # Handle DataFrame format (dates index, symbols columns)
+        for signals_df in strategy_signals.values():
+            all_symbols.update(signals_df.columns)
+    else:
+        # Handle list of signals format
+        for signals in strategy_signals.values():
+            for signal in signals:
+                if hasattr(signal, 'symbol'):
+                    all_symbols.add(signal.symbol)
+                elif isinstance(signal, dict) and 'symbol' in signal:
+                    all_symbols.add(signal['symbol'])
 
+    # Check for missing symbols and provide robust handling
     missing_symbols = all_symbols - set(price_data.keys())
     if missing_symbols:
-        raise ValueError(f"Missing price data for symbols: {missing_symbols}")
+        logger.warning(f"Missing price data for symbols: {missing_symbols}. These symbols will be excluded from backtest.")
+
+        # Check if we have enough remaining symbols to proceed
+        available_symbols = all_symbols - missing_symbols
+        if len(available_symbols) == 0:
+            raise ValueError("No symbols have valid price data")
+
+        if len(available_symbols) < 5:
+            logger.warning(f"Only {len(available_symbols)} symbols have valid price data. This may affect backtest quality.")
+
+        logger.info(f"Proceeding with {len(available_symbols)} symbols, excluding {len(missing_symbols)} missing symbols")
 
     # Validate price data format
     for symbol, data in price_data.items():
@@ -64,9 +81,52 @@ def validate_inputs(strategy_signals: Dict[datetime, List[Any]],
     if benchmark_data is not None:
         validate_price_data(benchmark_data, "benchmark")
 
-    logger.info(f"Input validation passed: {len(all_symbols)} symbols, "
+    available_symbols_count = len(all_symbols - missing_symbols)
+    logger.info(f"Input validation passed: {available_symbols_count} available symbols, "
                f"{len(strategy_signals)} signal dates")
     return True
+
+
+def filter_strategy_signals(strategy_signals: Dict[datetime, List[Any]],
+                           available_symbols: set) -> Dict[datetime, List[Any]]:
+    """
+    Filter strategy signals to only include symbols with available price data.
+
+    Args:
+        strategy_signals: Original strategy signals
+        available_symbols: Set of symbols with valid price data
+
+    Returns:
+        Filtered strategy signals
+    """
+    if not strategy_signals:
+        return strategy_signals
+
+    filtered_signals = {}
+
+    if isinstance(next(iter(strategy_signals.values())), pd.DataFrame):
+        # Handle DataFrame format (dates index, symbols columns)
+        for date, signals_df in strategy_signals.items():
+            # Filter columns to only include available symbols
+            available_cols = [col for col in signals_df.columns if col in available_symbols]
+            filtered_signals[date] = signals_df[available_cols]
+            removed_cols = set(signals_df.columns) - set(available_cols)
+            if removed_cols:
+                logger.debug(f"Removed {len(removed_cols)} symbols on {date}: {removed_cols}")
+    else:
+        # Handle list of signals format
+        for date, signals in strategy_signals.items():
+            # Filter signals to only include available symbols
+            filtered = []
+            for signal in signals:
+                symbol = signal.symbol if hasattr(signal, 'symbol') else signal.get('symbol')
+                if symbol in available_symbols:
+                    filtered.append(signal)
+                else:
+                    logger.debug(f"Removed signal for {symbol} on {date}")
+            filtered_signals[date] = filtered
+
+    return filtered_signals
 
 
 def validate_price_data(price_data: pd.DataFrame, name: str) -> bool:

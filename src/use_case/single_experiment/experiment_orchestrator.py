@@ -64,16 +64,14 @@ from ...trading_system.models.training.training_pipeline import TrainingPipeline
 from ...trading_system.feature_engineering.pipeline import FeatureEngineeringPipeline
 from ...trading_system.strategy_backtest.strategy_runner import create_strategy_runner
 from ...trading_system.config.factory import ConfigFactory
+from ...trading_system.config.system import SystemConfig
 from ...trading_system.data.base_data_provider import BaseDataProvider
-from ...trading_system.orchestration.components.coordinator import StrategyCoordinator
-from ...trading_system.orchestration.components.allocator import CapitalAllocator
-from ...trading_system.orchestration.components.compliance import ComplianceMonitor
-from ...trading_system.orchestration.components.executor import TradeExecutor
-from ...trading_system.orchestration.components.reporter import PerformanceReporter
 from ...trading_system.experiment_tracking.wandb_adapter import WandBExperimentTracker
 from ...trading_system.experiment_tracking.interface import ExperimentTrackerInterface
+from ...use_case.portfolio_generation.system_orchestrator import SystemOrchestrator
 
 logger = logging.getLogger(__name__)
+
 
 
 def _create_data_provider(config: Dict[str, Any]) -> BaseDataProvider:
@@ -268,6 +266,10 @@ class ExperimentOrchestrator:
         backtest_results = backtest_runner.run_strategy(experiment_name=experiment_name)
         
         logger.info("Backtest complete.")
+        
+        # --- Part 2.5: Save Strategy Returns ---
+        logger.info("Saving strategy returns...")
+        self._save_strategy_returns(backtest_results, model_id)
 
         # --- Part 3: Collect Component Stats ---
         component_stats = self._extract_real_component_stats(backtest_results)
@@ -282,7 +284,8 @@ class ExperimentOrchestrator:
             "trained_model_id": model_id,
             "training_summary": training_results.get('pipeline_info'),
             "performance_metrics": backtest_results.get('performance_metrics'),
-            "component_stats": component_stats
+            "component_stats": component_stats,
+            "returns_path": str(self.get_strategy_returns_path(model_id))
         }
         
         logger.info("End-to-end experiment finished successfully.")
@@ -324,3 +327,156 @@ class ExperimentOrchestrator:
         
         return stats
         
+    def _save_strategy_returns(self, backtest_results: Dict[str, Any], model_id: str):
+        """
+        Save strategy returns in standard format for MetaModel training.
+
+        Args:
+            backtest_results: Results from backtest runner
+            model_id: The model ID for this strategy
+        """
+        returns_path = self.get_strategy_returns_path(model_id)
+        returns_path.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            import pandas as pd
+
+            # Extract daily returns from BacktestResults object
+            backtest_result_obj = backtest_results.get('backtest_results')
+
+            if backtest_result_obj is None:
+                logger.warning("No backtest_results in backtest results, cannot save returns")
+                return
+
+            # Access the daily_returns series from BacktestResults object
+            daily_returns = getattr(backtest_result_obj, 'daily_returns', None)
+
+            if daily_returns is None or len(daily_returns) == 0:
+                logger.warning("No daily_returns found in backtest results, cannot save returns")
+                return
+
+            # Convert to DataFrame if it's a pandas Series
+            if isinstance(daily_returns, pd.Series):
+                returns_df = daily_returns.to_frame(name='daily_return')
+            else:
+                # If it's already a DataFrame, ensure it has the right column name
+                returns_df = pd.DataFrame(daily_returns, columns=['daily_return'])
+
+            # Save the daily returns
+            returns_df.to_csv(returns_path)
+
+            logger.info(f"Strategy returns saved to {returns_path}")
+            logger.info(f"Saved {len(returns_df)} observations from {returns_df.index.min()} to {returns_df.index.max()}")
+
+        except Exception as e:
+            logger.error(f"Failed to save strategy returns: {e}")
+            raise
+
+    def get_strategy_returns_path(self, model_id: str) -> Path:
+        """
+        Get the standard path for strategy returns file.
+        
+        Args:
+            model_id: The model ID for this strategy
+            
+        Returns:
+            Path to the strategy returns CSV file
+        """
+        return Path(f"./results/{model_id}/strategy_returns.csv")
+
+    def _create_system_config_from_experiment_config(self, model_id: str) -> SystemConfig:
+        """
+        从实验配置创建系统配置，支持 portfolio construction 方法选择。
+        
+        Args:
+            model_id: 训练好的模型ID
+            
+        Returns:
+            SystemConfig 对象
+        """
+        # 从策略配置中提取 portfolio_construction 配置
+        strategy_config = self.full_config.get('strategy', {})
+        strategy_params = strategy_config.get('parameters', {})
+        portfolio_construction_config = strategy_params.get('portfolio_construction', {})
+        
+        # 从回测配置中提取基本参数
+        backtest_config = self.full_config.get('backtest', {})
+        
+        # 从训练参数中提取 universe
+        training_params = self.full_config.get('training_setup', {}).get('parameters', {})
+        universe = training_params.get('symbols', [])
+        
+        # 创建策略配置
+        strategy_name = strategy_config.get('name', 'ff5_strategy')
+        strategy_type = strategy_config.get('type', 'fama_french_5')
+        
+        # 构建策略配置字典
+        strategy_dict = {
+            'name': strategy_name,
+            'type': strategy_type,
+            'config': {
+                'model_id': model_id,
+                'model_registry_path': "./models/",
+                'universe': universe,
+                **strategy_params  # 包含所有策略参数，包括 portfolio_construction
+            }
+        }
+        
+        # 创建系统配置
+        system_config = SystemConfig(
+            name=f"experiment_system_{model_id}",
+            
+            # 基本参数
+            initial_capital=backtest_config.get('initial_capital', 1000000),
+            start_date=backtest_config.get('start_date'),
+            end_date=backtest_config.get('end_date'),
+            transaction_costs=backtest_config.get('commission_rate', 0.001),
+            slippage=backtest_config.get('slippage_rate', 0.0005),
+            
+            # 策略配置
+            strategies=[strategy_dict],
+            strategy_allocations={strategy_name: 1.0},  # 100% 分配给单个策略
+            
+            # Portfolio construction 配置
+            portfolio_construction=portfolio_construction_config,
+            
+            # 风险参数
+            max_single_position_weight=backtest_config.get('position_limit', 0.08),
+            max_positions=len(universe) if universe else 50,
+            
+            # 执行参数
+            commission_rate=backtest_config.get('commission_rate', 0.001),
+            expected_slippage_bps=backtest_config.get('slippage_rate', 0.0005) * 10000,
+            
+            # 报告参数
+            benchmark_symbol=backtest_config.get('benchmark_symbol', 'SPY'),
+            output_directory=f"./results/{model_id}",
+            
+            # 其他默认参数
+            enable_short_selling=strategy_params.get('enable_short_selling', False),
+            rebalance_frequency=7 if backtest_config.get('rebalance_frequency') == 'weekly' else 30,
+        )
+        
+        method = portfolio_construction_config.get('method', 'default')
+        logger.info(f"🔧 Created SystemConfig with portfolio_construction method: {method}")
+        
+        if method == 'box_based':
+            stocks_per_box = portfolio_construction_config.get('stocks_per_box', 'default')
+            logger.info(f"   📦 Box-based configuration: {stocks_per_box} stocks per box")
+        elif method == 'quantitative':
+            optimizer = portfolio_construction_config.get('optimizer', {}).get('method', 'default')
+            logger.info(f"   📊 Quantitative configuration: {optimizer} optimizer")
+            
+        return system_config
+
+    def get_results_directory(self, model_id: str) -> Path:
+        """
+        Get the results directory for a model.
+        
+        Args:
+            model_id: The model ID
+            
+        Returns:
+            Path to the results directory
+        """
+        return Path(f"./results/{model_id}")

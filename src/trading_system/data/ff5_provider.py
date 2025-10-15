@@ -41,7 +41,7 @@ class FF5DataProvider(FactorDataProvider):
 
     BASE_URL = "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/"
 
-    def __init__(self, data_frequency: str = "monthly", cache_dir: str = None,
+    def __init__(self, data_frequency: str = "daily", cache_dir: str = None,
                  max_retries: int = 3, retry_delay: float = 1.0,
                  request_timeout: int = 30, cache_enabled: bool = True,
                  file_path: str = None):

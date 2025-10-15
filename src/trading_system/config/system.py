@@ -48,6 +48,45 @@ class SystemConfig(BaseConfig):
     enable_short_selling: bool = False
     emergency_stop_loss: float = -0.20  # Portfolio level stop loss
 
+    # Strategy orchestration parameters
+    strategies: List[Dict[str, Any]] = field(default_factory=list)
+    strategy_allocations: Dict[str, float] = field(default_factory=dict)
+    max_signals_per_day: int = 100
+    signal_conflict_resolution: str = "priority"  # "priority", "weighted", "latest"
+    min_signal_strength: float = 0.1
+    max_position_size: float = 0.1
+    capacity_scaling: bool = True
+
+    # Capital allocation parameters
+    rebalance_threshold: float = 0.05
+    max_single_position_weight: float = 0.1
+    cash_buffer_weight: float = 0.05
+
+    # Compliance parameters
+    box_exposure_limits: Dict[str, float] = field(default_factory=dict)
+    max_concentration_top5: float = 0.4
+    max_concentration_top10: float = 0.6
+
+    # Execution parameters
+    max_order_size_percent: float = 0.1
+    min_order_size_usd: float = 1000
+    max_positions_per_day: int = 50
+    commission_rate: float = 0.001
+    cooling_period_hours: int = 1
+    default_order_type: str = "market"
+    expected_slippage_bps: float = 5.0
+
+    # Reporting parameters
+    daily_reports: bool = True
+    weekly_reports: bool = True
+    monthly_reports: bool = True
+    benchmark_symbol: str = "SPY"
+    file_format: str = "csv"
+    output_directory: str = "./results"
+
+    # Portfolio construction
+    portfolio_construction: Dict[str, Any] = field(default_factory=dict)
+
     # Monitoring and reporting
     enable_monitoring: bool = True
     monitoring_frequency: str = "daily"  # "hourly", "daily", "weekly"

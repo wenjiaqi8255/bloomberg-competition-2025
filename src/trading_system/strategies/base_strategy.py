@@ -24,7 +24,7 @@ The only difference between strategies is:
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, List
 import pandas as pd
 import numpy as np
 
@@ -118,30 +118,43 @@ class BaseStrategy(ABC):
                         end_date: datetime) -> pd.DataFrame:
         """
         Generate trading signals using the unified pipeline.
-        
+
         This method implements the standard flow:
-        1. Compute features using FeaturePipeline
-        2. Get predictions from Model
-        
+        1. Filter available symbols with valid price data
+        2. Compute features using FeaturePipeline
+        3. Get predictions from Model
+
         Args:
             price_data: Dictionary mapping symbols to OHLCV DataFrames
             start_date: Start date for signal generation
             end_date: End date for signal generation
-        
+
         Returns:
             DataFrame with expected returns or raw model predictions.
         """
         if not price_data:
             logger.warning("Empty price data provided")
             return pd.DataFrame()
-        
+
         try:
             logger.info(f"[{self.name}] Generating signals from {start_date} to {end_date}")
-            
+
+            # Step 0: Filter symbols with valid price data
+            logger.debug(f"[{self.name}] Step 0: Filtering available symbols...")
+            valid_price_data = self._filter_valid_price_data(price_data)
+
+            if not valid_price_data:
+                logger.error(f"[{self.name}] No valid price data found after filtering")
+                return pd.DataFrame()
+
+            removed_symbols = set(price_data.keys()) - set(valid_price_data.keys())
+            if removed_symbols:
+                logger.info(f"[{self.name}] Excluded {len(removed_symbols)} symbols with invalid data: {sorted(removed_symbols)}")
+
             # Step 1: Compute features using pipeline
             logger.debug(f"[{self.name}] Step 1: Computing features...")
-            features = self._compute_features(price_data)
-            
+            features = self._compute_features(valid_price_data)
+
             if features.empty:
                 logger.warning(f"[{self.name}] Feature computation returned empty DataFrame")
                 return pd.DataFrame()
@@ -150,17 +163,17 @@ class BaseStrategy(ABC):
 
             # Step 2: Get model predictions
             logger.info(f"[{self.name}] Step 2: Getting model predictions...")
-            predictions = self._get_predictions(features, price_data, start_date, end_date)
+            predictions = self._get_predictions(features, valid_price_data, start_date, end_date)
 
             logger.info(f"[{self.name}] Predictions returned: shape={predictions.shape}, empty={predictions.empty}")
 
             if predictions.empty:
                 logger.warning(f"[{self.name}] Model predictions returned empty DataFrame")
                 return pd.DataFrame()
-            
+
             # Step 3: Evaluate signal quality (NEW)
             logger.debug(f"[{self.name}] Step 3: Evaluating signal quality...")
-            self._evaluate_and_cache_signals(predictions, price_data)
+            self._evaluate_and_cache_signals(predictions, valid_price_data)
 
             # Step 4: Apply short selling restrictions if configured
             logger.debug(f"[{self.name}] Step 4: Applying short selling restrictions...")
@@ -168,10 +181,45 @@ class BaseStrategy(ABC):
 
             logger.info(f"[{self.name}] Generated signals for {len(filtered_predictions.columns)} assets")
             return filtered_predictions
-            
+
         except Exception as e:
             logger.error(f"[{self.name}] Signal generation failed: {e}", exc_info=True)
             return pd.DataFrame()
+
+    def _filter_valid_price_data(self, price_data: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
+        """
+        Filter price data to only include symbols with valid, non-empty data.
+
+        Args:
+            price_data: Original price data dictionary
+
+        Returns:
+            Filtered price data dictionary with only valid entries
+        """
+        valid_data = {}
+
+        for symbol, data in price_data.items():
+            # Check if data exists and is not empty
+            if data is not None and not data.empty:
+                # Check for essential columns and data quality
+                if 'Close' in data.columns and not data['Close'].isna().all():
+                    # Check for minimum data requirements (at least some trading days)
+                    if len(data) >= 10:  # At least 10 trading days
+                        valid_data[symbol] = data
+                        logger.debug(f"[{self.name}] Valid data found for {symbol}: {len(data)} trading days")
+                    else:
+                        logger.warning(f"[{self.name}] Insufficient data for {symbol}: only {len(data)} rows")
+                else:
+                    logger.warning(f"[{self.name}] No valid Close prices for {symbol}")
+            else:
+                logger.warning(f"[{self.name}] Empty or None data for {symbol}")
+
+        if not valid_data:
+            logger.error(f"[{self.name}] No valid price data found after filtering")
+        else:
+            logger.info(f"[{self.name}] Filtered to {len(valid_data)} symbols with valid data")
+
+        return valid_data
     
     def _compute_features(self, price_data: Dict[str, pd.DataFrame]) -> pd.DataFrame:
         """
@@ -212,10 +260,14 @@ class BaseStrategy(ABC):
                         start_date: datetime,
                         end_date: datetime) -> pd.DataFrame:
         """
-        Get predictions from the model for each date in the range.
+        Generic fallback implementation for getting predictions from any model type.
+
+        This method provides a basic iterative prediction approach that works with
+        any model implementation. Model-specific strategies should override this
+        method to provide optimized batch prediction logic.
 
         Args:
-            features: Computed features with MultiIndex (symbol, date)
+            features: Computed features with MultiIndex (symbol, date) or other format
             price_data: Original price data
             start_date: Start date
             end_date: End date
@@ -224,7 +276,7 @@ class BaseStrategy(ABC):
             DataFrame with predictions (expected returns or signals) indexed by date
         """
         try:
-            logger.info(f"[{self.name}] 🔍 _get_predictions started")
+            logger.info(f"[{self.name}] 🔍 _get_predictions started (generic fallback)")
             logger.info(f"[{self.name}] Features shape: {features.shape}, columns: {list(features.columns[:10])}...")
             logger.info(f"[{self.name}] Price data keys: {list(price_data.keys())}")
             logger.info(f"[{self.name}] Date range: {start_date} to {end_date}")
@@ -233,92 +285,111 @@ class BaseStrategy(ABC):
             # Create date range for predictions
             dates = pd.date_range(start=start_date, end=end_date, freq='D')
             logger.info(f"[{self.name}] Prediction dates count: {len(dates)}")
+
+            # Get list of symbols to predict
+            symbols = list(price_data.keys())
+            logger.info(f"[{self.name}] Symbols to predict: {len(symbols)}")
+
             predictions_dict = {}
-            symbols_processed = 0
 
-            for symbol in price_data.keys():
-                logger.info(f"[{self.name}] Processing symbol {symbol}...")
-                symbols_processed += 1
+            # Generic iterative approach - works for any model type
+            for date in dates:
+                try:
+                    logger.debug(f"[{self.name}] Processing date {date}...")
 
-                # Get predictions for each date
-                symbol_predictions = []
+                    # Create predictions for this date using the generic approach
+                    date_predictions = self._predict_single_date_generic(features, symbols, date)
+                    predictions_dict[date] = date_predictions
+                    logger.debug(f"[{self.name}] Generated predictions for {date}: {date_predictions.shape}")
 
-                for date in dates:
-                    try:
-                        # Extract symbol features for this specific date (time-varying features)
-                        symbol_features = self._extract_symbol_features(features, symbol, date)
-                        logger.info(f"[{self.name}] Symbol {symbol}: extracted {len(symbol_features.columns)} features for {date}")
+                except Exception as e:
+                    logger.error(f"[{self.name}] Failed to get predictions for {date}: {e}")
+                    # Create zero predictions for this date
+                    predictions_dict[date] = pd.Series([0.0] * len(symbols), index=symbols)
 
-                        if symbol_features.empty:
-                            logger.warning(f"[{self.name}] No features found for {symbol} on {date}")
-                            symbol_predictions.append(0.0)
-                            continue
-
-                        # Get prediction from model for this specific date
-                        logger.debug(f"[{self.name}] Getting prediction for {symbol} on {date}")
-                        logger.debug(f"[{self.name}] Symbol features shape: {symbol_features.shape}, columns: {list(symbol_features.columns)}")
-                        logger.debug(f"[{self.name}] Symbol features sample: {symbol_features.iloc[-1].to_dict() if not symbol_features.empty else 'Empty'}")
-
-                        result = self.model_predictor.predict(
-                            features=symbol_features,
-                            symbol=symbol,
-                            prediction_date=date
-                        )
-                        logger.debug(f"[{self.name}] Model prediction result for {symbol} on {date}: {result}")
-
-                        # Extract prediction value with more detailed logging
-                        prediction_value = result.get('prediction', 0.0)
-                        logger.debug(f"[{self.name}] Extracted prediction value: {prediction_value}")
-
-                        # Additional debugging for zero predictions
-                        if abs(prediction_value) < 1e-10:
-                            logger.warning(f"[{self.name}] ⚠️ Zero prediction for {symbol} on {date}")
-                            logger.warning(f"[{self.name}] Model result keys: {list(result.keys())}")
-                            logger.warning(f"[{self.name}] Model result full: {result}")
-
-                        symbol_predictions.append(prediction_value)
-
-                    except Exception as e:
-                        logger.warning(f"[{self.name}] Failed to get prediction for {symbol} on {date}: {e}")
-                        symbol_predictions.append(0.0)
-
-                predictions_dict[symbol] = symbol_predictions
-                logger.debug(f"[{self.name}] Generated {len(symbol_predictions)} predictions for {symbol}")
-
-            # Convert to DataFrame format
+            # Convert dictionary to DataFrame format (dates as index, symbols as columns)
             if predictions_dict:
-                data_matrix = []
-                for i in range(len(dates)):
-                    row = [predictions_dict[symbol][i] for symbol in predictions_dict.keys()]
-                    data_matrix.append(row)
-
-                predictions_df = pd.DataFrame(
-                    index=dates,
-                    columns=list(predictions_dict.keys()),
-                    data=data_matrix
-                )
+                predictions_df = pd.DataFrame(predictions_dict).T  # Transpose: rows=dates, cols=symbols
+                logger.info(f"[{self.name}] ✅ Created DataFrame: shape={predictions_df.shape}")
+                logger.info(f"[{self.name}] 📊 Columns (symbols): {list(predictions_df.columns)}")
+                logger.info(f"[{self.name}] 📅 Index (dates): {predictions_df.index[0]} to {predictions_df.index[-1]}")
             else:
                 predictions_df = pd.DataFrame(index=dates)
 
-            logger.info(f"[{self.name}] ✅ Created DataFrame: shape={predictions_df.shape}, symbols={len(predictions_dict)}, processed={symbols_processed}")
-            logger.info(f"[{self.name}] 📊 Prediction dict keys: {list(predictions_dict.keys())}")
-            logger.info(f"[{self.name}] 📅 Date range: {start_date} to {end_date}")
-
-            # Log some sample predictions to verify they're not all the same
+            # Log sample predictions to verify they're not all the same
             if not predictions_df.empty:
                 logger.info(f"[{self.name}] 📈 Sample predictions:")
-                logger.info(f"[{self.name}]   First date: {predictions_df.iloc[0].to_dict()}")
-                logger.info(f"[{self.name}]   Last date: {predictions_df.iloc[-1].to_dict()}")
+                logger.info(f"[{self.name}]   First date ({predictions_df.index[0]}): {predictions_df.iloc[0].to_dict()}")
+                if len(predictions_df) > 1:
+                    logger.info(f"[{self.name}]   Last date ({predictions_df.index[-1]}): {predictions_df.iloc[-1].to_dict()}")
                 logger.info(f"[{self.name}]   Prediction variance: {predictions_df.var().to_dict()}")
 
             return predictions_df
 
         except Exception as e:
-            logger.error(f"[{self.name}] ❌ Prediction failed: {e}")
+            logger.error(f"[{self.name}] ❌ Generic prediction failed: {e}")
             import traceback
             logger.error(f"[{self.name}] Traceback: {traceback.format_exc()}")
             return pd.DataFrame()
     
+    def _predict_single_date_generic(self, features: pd.DataFrame, symbols: List[str], date: datetime) -> pd.Series:
+        """
+        Generic method to predict a single date using model-agnostic approach.
+
+        This method extracts features for each symbol and calls the model predictor
+        individually. This works with any model type and feature format.
+
+        Args:
+            features: Computed features DataFrame (any format)
+            symbols: List of symbols to predict
+            date: Prediction date
+
+        Returns:
+            Series with predictions indexed by symbols
+        """
+        try:
+            predictions = []
+
+            for symbol in symbols:
+                try:
+                    # Extract features for this symbol using the generic method
+                    symbol_features = self._extract_symbol_features(features, symbol, date)
+
+                    if symbol_features.empty:
+                        logger.warning(f"[{self.name}] No features found for {symbol} on {date}")
+                        predictions.append(0.0)
+                        continue
+
+                    # Use model predictor to get prediction
+                    result = self.model_predictor.predict(
+                        features=symbol_features,
+                        symbol=symbol,
+                        prediction_date=date
+                    )
+
+                    # Extract prediction value (handle different result formats)
+                    if isinstance(result, dict):
+                        prediction_value = result.get('prediction', 0.0)
+                    elif isinstance(result, (int, float)):
+                        prediction_value = float(result)
+                    elif hasattr(result, 'iloc'):  # pandas Series/DataFrame
+                        prediction_value = float(result.iloc[0]) if len(result) > 0 else 0.0
+                    else:
+                        prediction_value = 0.0
+
+                    predictions.append(prediction_value)
+
+                except Exception as e:
+                    logger.warning(f"[{self.name}] Generic prediction failed for {symbol}: {e}")
+                    predictions.append(0.0)
+
+            return pd.Series(predictions, index=symbols, name='prediction')
+
+        except Exception as e:
+            logger.error(f"[{self.name}] Generic single-date prediction failed: {e}")
+            # Return zero predictions as fallback
+            return pd.Series([0.0] * len(symbols), index=symbols, name='prediction')
+
     def _get_feature_pipeline(self):
         """
         Get the appropriate feature pipeline for predictions.

@@ -175,10 +175,13 @@ class FeatureEngineeringPipeline:
             for symbol, symbol_data in data['price_data'].items():
                 all_dates.update(symbol_data.index.tolist())
             train_end_date = max(all_dates)
-            
+
             # Fit box feature provider
             self.box_feature_provider.fit(data['price_data'], train_end_date)
             logger.info("BoxFeatureProvider fitted successfully")
+
+        # Note: FF5 betas computation moved to FF5Model class
+        # Pipeline is now responsible only for feature extraction (algorithms), not parameter estimation
 
         # Step 3: Compute features to learn NaN fill statistics
         logger.info("Computing features to learn NaN fill statistics...")
@@ -695,99 +698,109 @@ class FeatureEngineeringPipeline:
 
     def _create_factor_features(self, price_data: Dict[str, pd.DataFrame], factor_data: pd.DataFrame) -> pd.DataFrame:
         """
-        Create factor features independently from price_data structure.
-        
-        This method creates factor features without depending on existing features,
-        following KISS principle - each feature type is processed independently.
-        
+        只提取因子值，不计算betas
+
+        Betas应该由模型自己计算，不是特征工程的职责。
+        Pipeline只负责提供"算法"（因子值提取），而不是"值"（betas）。
+
         Args:
             price_data: Dictionary of price DataFrames by symbol
             factor_data: Factor data DataFrame with numeric columns
-            
+
         Returns:
-            DataFrame with factor features in proper MultiIndex format
+            DataFrame with factor values only in proper MultiIndex format
         """
         if factor_data is None or not isinstance(factor_data, pd.DataFrame) or factor_data.empty:
-            logger.info("No factor data available, returning empty DataFrame")
+            logger.warning("No factor data available, returning empty DataFrame")
             return pd.DataFrame()
-        
+
         try:
-            logger.info(f"Creating factor features from factor data with shape {factor_data.shape}")
-            
-            # Filter out non-numeric columns (metadata)
-            numeric_factor_data = factor_data.select_dtypes(include=[np.number])
-            non_numeric_cols = set(factor_data.columns) - set(numeric_factor_data.columns)
-            if non_numeric_cols:
-                logger.info(f"Filtering out non-numeric factor columns: {non_numeric_cols}")
-            
-            factor_data = numeric_factor_data
-            
-            # Ensure factor data index is datetime
-            factor_data.index = pd.to_datetime(factor_data.index)
-            
-            # Get all unique dates from price data
+            logger.info("Creating factor features (values only)...")
+
+            # 确保因子数据包含必要的FF5因子
+            factor_cols = ['MKT', 'SMB', 'HML', 'RMW', 'CMA']
+            missing_factors = [col for col in factor_cols if col not in factor_data.columns]
+            if missing_factors:
+                logger.error(f"Missing FF5 factors in factor_data: {missing_factors}")
+                return pd.DataFrame()
+
+            # 只选择数值型的因子数据
+            factor_data_numeric = factor_data[factor_cols].select_dtypes(include=[np.number])
+
+            # 确保因子数据索引是datetime
+            factor_data_numeric.index = pd.to_datetime(factor_data_numeric.index)
+
+            # 获取所有日期和符号
             all_dates = set()
-            all_symbols = set()
             for symbol, data in price_data.items():
                 if not data.empty:
                     all_dates.update(data.index.tolist())
-                    all_symbols.add(symbol)
-            
+
             all_dates = sorted(list(all_dates))
-            all_symbols = sorted(list(all_symbols))
-            
-            if not all_dates or not all_symbols:
-                logger.warning("No valid dates or symbols found in price data")
+
+            if not all_dates:
+                logger.warning("No valid dates found in price data")
                 return pd.DataFrame()
-            
-            # Resample factor data to match all dates
-            factor_data_resampled = factor_data.reindex(all_dates, method='ffill')
-            
-            # Create factor features for each symbol
-            all_factor_features = []
+
+            # 对齐因子数据到所有日期
+            factor_data_resampled = factor_data_numeric.reindex(all_dates, method='ffill')
+
+            # 处理缺失值
+            if factor_data_resampled.isna().any().any():
+                logger.warning("Factor data contains missing values, applying forward fill")
+                factor_data_resampled = factor_data_resampled.fillna(method='ffill').fillna(0)
+
+            # 为每个符号创建特征（只包含因子值）
+            all_features = []
             index_format = self._get_index_format_for_model()
-            level_0_name, level_1_name = index_format
-            
-            for symbol in all_symbols:
-                # Create DataFrame with factor columns for this symbol
-                symbol_factor_features = pd.DataFrame(index=all_dates)
-                
-                # Add each factor column
-                for factor_col in factor_data_resampled.columns:
-                    symbol_factor_features[factor_col] = factor_data_resampled[factor_col].values
-                
-                # Create MultiIndex
-                if index_format == ('symbol', 'date'):
-                    # Time series format: (symbol, date)
-                    symbol_multiindex = pd.MultiIndex.from_arrays([
-                        [symbol] * len(all_dates), 
-                        pd.to_datetime(all_dates)
-                    ], names=[level_0_name, level_1_name])
-                else:
-                    # Panel data format: (date, symbol)
-                    symbol_multiindex = pd.MultiIndex.from_arrays([
-                        pd.to_datetime(all_dates),
-                        [symbol] * len(all_dates)
-                    ], names=[level_0_name, level_1_name])
-                
-                symbol_factor_features.index = symbol_multiindex
-                all_factor_features.append(symbol_factor_features)
-            
-            # Combine all factor features
-            if all_factor_features:
-                combined_factor_features = pd.concat(all_factor_features, axis=0)
-                combined_factor_features.sort_index(inplace=True)
-                logger.info(f"Factor features created: {combined_factor_features.shape}")
-                logger.info(f"Factor columns: {list(combined_factor_features.columns)}")
-                return combined_factor_features
+
+            for symbol in price_data.keys():
+                try:
+                    # 为每个日期创建特征
+                    symbol_features = pd.DataFrame(index=all_dates)
+
+                    # 只保留因子值（这是"算法"而不是"值"）
+                    for factor_col in factor_cols:
+                        symbol_features[factor_col] = factor_data_resampled[factor_col].values
+
+                    # 创建MultiIndex
+                    if index_format == ('symbol', 'date'):
+                        # Time series format: (symbol, date)
+                        symbol_multiindex = pd.MultiIndex.from_arrays([
+                            [symbol] * len(all_dates),
+                            pd.to_datetime(all_dates)
+                        ], names=['symbol', 'date'])
+                    else:
+                        # Panel data format: (date, symbol)
+                        symbol_multiindex = pd.MultiIndex.from_arrays([
+                            pd.to_datetime(all_dates),
+                            [symbol] * len(all_dates)
+                        ], names=['date', 'symbol'])
+
+                    symbol_features.index = symbol_multiindex
+                    all_features.append(symbol_features)
+
+                    logger.debug(f"Created factor features for {symbol}: {symbol_features.shape}")
+
+                except Exception as e:
+                    logger.error(f"Failed to create factor features for {symbol}: {e}")
+                    continue
+
+            # 合并所有特征
+            if all_features:
+                combined_features = pd.concat(all_features, axis=0)
+                combined_features.sort_index(inplace=True)
+
+                logger.info(f"Factor features created: {combined_features.shape}")
+                logger.info(f"Factor columns: {list(combined_features.columns)}")
+                return combined_features
             else:
                 logger.warning("No factor features created")
                 return pd.DataFrame()
-                
+
         except Exception as e:
             logger.error(f"Failed to create factor features: {e}")
             return pd.DataFrame()
-    
 
     def _handle_nan_values(self, features: pd.DataFrame, use_learned_stats: bool = False) -> pd.DataFrame:
         """

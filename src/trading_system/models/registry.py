@@ -9,6 +9,7 @@ from .base.model_factory import ModelFactory
 from .implementations.ff5_model import FF5RegressionModel
 from .implementations.momentum_model import MomentumRankingModel
 from .implementations.fama_macbeth_model import FamaMacBethModel
+from .implementations.ensemble_model import EnsembleModel
 
 # Try to import ML models (optional dependencies)
 try:
@@ -101,6 +102,18 @@ def register_all_models():
                 "early_stopping_patience": 10
             }
         )
+
+    # Register Ensemble Model
+    ModelFactory.register(
+        model_type="ensemble",
+        model_class=EnsembleModel,
+        description="Ensemble model combining multiple base models with metamodel weights",
+        default_config={
+            "base_model_ids": [],
+            "model_weights": {},
+            "model_registry_path": "./models/"
+        }
+    )
 
 # Auto-register models when this module is imported
 register_all_models()

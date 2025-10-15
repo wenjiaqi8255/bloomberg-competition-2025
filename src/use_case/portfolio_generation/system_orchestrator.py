@@ -255,11 +255,11 @@ class SystemOrchestrator:
         try:
             # Create portfolio construction request
             request = PortfolioConstructionRequest(
-                signals=signals,
-                signal_dataframes=signal_dataframes,
                 date=date,
-                universe_size=getattr(self.config, 'universe_size', 100),
-                risk_aversion=getattr(self.config, 'risk_aversion', 2.0)
+                universe=list(signals.index),
+                signals=signals,
+                price_data={},  # TODO: Pass actual price data
+                constraints={}
             )
             
             # Get portfolio builder from factory

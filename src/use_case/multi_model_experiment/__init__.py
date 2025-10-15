@@ -20,11 +20,9 @@ Architecture:
 """
 
 from .multi_model_orchestrator import MultiModelOrchestrator
-from .components.model_trainer import ModelTrainerWithHPO
-from .components.metamodel_trainer import MetaModelTrainerWithHPO
+from .components.metamodel_trainer import MetaModelTrainer
 
 __all__ = [
     'MultiModelOrchestrator',
-    'ModelTrainerWithHPO', 
-    'MetaModelTrainerWithHPO'
+    'MetaModelTrainer'
 ]

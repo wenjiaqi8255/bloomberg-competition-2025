@@ -236,60 +236,192 @@ class MLStrategy(BaseStrategy):
                         start_date: datetime,
                         end_date: datetime) -> pd.DataFrame:
         """
-        Override to add basic signal strength filtering for ML predictions.
+        Optimized ML prediction using batch processing for better performance.
+
+        This method leverages XGBoost's batch prediction capabilities to optimize
+        performance when predicting for multiple stocks across multiple time periods.
 
         SOLID Principle: Strategy only provides expected returns, not position sizing.
         Weight adjustment is delegated to portfolio optimizer layer.
         """
-        # Get base predictions from parent
-        predictions = super()._get_predictions(features, price_data, start_date, end_date)
+        try:
+            logger.info(f"[{self.name}] 🚀 Starting optimized batch ML predictions...")
+            logger.info(f"[{self.name}] Features shape: {features.shape}")
+            logger.info(f"[{self.name}] Model training stocks: {len(self.model_training_stocks)}")
 
-        if predictions.empty:
-            return predictions
+            # Check if model supports batch prediction
+            model = self.model_predictor.model
+            if hasattr(model, 'predict_batch'):
+                logger.info(f"[{self.name}] ✅ Using optimized batch prediction")
+                predictions = self._get_predictions_batch_optimized(features, price_data, start_date, end_date)
+            else:
+                logger.info(f"[{self.name}] ⚠️ Model doesn't support batch prediction, using standard method")
+                predictions = super()._get_predictions(features, price_data, start_date, end_date)
 
-        logger.info(f"[{self.name}] 📊 Raw predictions (expected returns) statistics:")
-        logger.info(f"[{self.name}]   Shape: {predictions.shape}")
-        logger.info(f"[{self.name}]   Mean: {predictions.mean().mean():.6f}")
-        logger.info(f"[{self.name}]   Std: {predictions.std().mean():.6f}")
-        logger.info(f"[{self.name}]   Min: {predictions.min().min():.6f}")
-        logger.info(f"[{self.name}]   Max: {predictions.max().max():.6f}")
+            if predictions.empty:
+                return predictions
 
-        # Apply strategy-layer normalization (Layer 1 of dual-layer architecture)
-        # For ML strategies, always use min-max normalization to ensure [0,1] range for TradingSignal compatibility
-        if self.enable_normalization:
-            normalization_method = 'minmax'  # Force min-max for ML strategies
-            predictions = self._apply_normalization(predictions, normalization_method)
-            logger.info(f"[{self.name}] 🔄 Applied strategy-layer normalization (method: {normalization_method})")
-            logger.info(f"[{self.name}]   Normalized range: [{predictions.min().min():.6f}, {predictions.max().max():.6f}]")
-        else:
-            logger.info(f"[{self.name}] ⚪ Strategy-layer normalization disabled")
+            logger.info(f"[{self.name}] 📊 Raw predictions (expected returns) statistics:")
+            logger.info(f"[{self.name}]   Shape: {predictions.shape}")
+            logger.info(f"[{self.name}]   Mean: {predictions.mean().mean():.6f}")
+            logger.info(f"[{self.name}]   Std: {predictions.std().mean():.6f}")
+            logger.info(f"[{self.name}]   Min: {predictions.min().min():.6f}")
+            logger.info(f"[{self.name}]   Max: {predictions.max().max():.6f}")
 
-        # Apply minimal signal strength filtering - only filter extremely weak signals
-        # Strategy layer's role: identify strong vs weak signals, not weight allocation
-        filtered_predictions = predictions.copy()
+            # Apply strategy-layer normalization (Layer 1 of dual-layer architecture)
+            # For ML strategies, always use min-max normalization to ensure [0,1] range for TradingSignal compatibility
+            if self.enable_normalization:
+                normalization_method = 'minmax'  # Force min-max for ML strategies
+                predictions = self._apply_normalization(predictions, normalization_method)
+                logger.info(f"[{self.name}] 🔄 Applied strategy-layer normalization (method: {normalization_method})")
+                logger.info(f"[{self.name}]   Normalized range: [{predictions.min().min():.6f}, {predictions.max().max():.6f}]")
+            else:
+                logger.info(f"[{self.name}] ⚪ Strategy-layer normalization disabled")
 
-        # Only filter out extremely weak signals (keep most information for optimizer)
-        # Use different threshold based on whether signals are normalized
-        if self.enable_normalization and self.normalization_method == 'zscore':
-            # For Z-score normalized signals, use a reasonable threshold
-            weak_signal_threshold = 0.1  # ~0.1 sigma is quite weak
-        else:
-            # For non-normalized or MinMax signals, use absolute threshold
-            weak_signal_threshold = 0.001
+            # Apply minimal signal strength filtering - only filter extremely weak signals
+            # Strategy layer's role: identify strong vs weak signals, not weight allocation
+            filtered_predictions = predictions.copy()
 
-        weak_signal_mask = filtered_predictions.abs() < weak_signal_threshold
-        num_weak_signals = weak_signal_mask.sum().sum()
-        filtered_predictions[weak_signal_mask] = 0.0
+            # Only filter out extremely weak signals (keep most information for optimizer)
+            # Use different threshold based on whether signals are normalized
+            if self.enable_normalization and self.normalization_method == 'zscore':
+                # For Z-score normalized signals, use a reasonable threshold
+                weak_signal_threshold = 0.1  # ~0.1 sigma is quite weak
+            else:
+                # For non-normalized or MinMax signals, use absolute threshold
+                weak_signal_threshold = 0.001
 
-        if num_weak_signals > 0:
-            logger.info(f"[{self.name}] 🎯 Filtered {num_weak_signals} extremely weak signals (threshold={weak_signal_threshold})")
+            weak_signal_mask = filtered_predictions.abs() < weak_signal_threshold
+            num_weak_signals = weak_signal_mask.sum().sum()
+            filtered_predictions[weak_signal_mask] = 0.0
 
-        logger.info(f"[{self.name}] 📈 Expected returns for portfolio optimizer:")
-        logger.info(f"[{self.name}]   Mean: {filtered_predictions.mean().mean():.6f}")
-        logger.info(f"[{self.name}]   Std: {filtered_predictions.std().mean():.6f}")
-        logger.info(f"[{self.name}]   Non-zero signals: {(filtered_predictions != 0).sum().sum()}")
+            if num_weak_signals > 0:
+                logger.info(f"[{self.name}] 🎯 Filtered {num_weak_signals} extremely weak signals (threshold={weak_signal_threshold})")
 
-        return filtered_predictions
+            logger.info(f"[{self.name}] 📈 Expected returns for portfolio optimizer:")
+            logger.info(f"[{self.name}]   Mean: {filtered_predictions.mean().mean():.6f}")
+            logger.info(f"[{self.name}]   Std: {filtered_predictions.std().mean():.6f}")
+            logger.info(f"[{self.name}]   Non-zero signals: {(filtered_predictions != 0).sum().sum()}")
+
+            return filtered_predictions
+
+        except Exception as e:
+            logger.error(f"[{self.name}] ❌ Batch prediction failed, falling back to standard method: {e}")
+            # Fallback to parent method
+            return super()._get_predictions(features, price_data, start_date, end_date)
+
+    def _get_predictions_batch_optimized(self,
+                                         features: pd.DataFrame,
+                                         price_data: Dict[str, pd.DataFrame],
+                                         start_date: datetime,
+                                         end_date: datetime) -> pd.DataFrame:
+        """
+        Optimized batch prediction implementation for XGBoost models.
+
+        This method groups predictions by symbol and uses batch prediction
+        to reduce overhead and improve performance.
+
+        Args:
+            features: Computed features DataFrame
+            price_data: Original price data
+            start_date: Start date for predictions
+            end_date: End date for predictions
+
+        Returns:
+            DataFrame with predictions indexed by date
+        """
+        try:
+            logger.info(f"[{self.name}] 🚀 Batch-optimized prediction starting...")
+
+            # Create date range for predictions
+            dates = pd.date_range(start=start_date, end=end_date, freq='D')
+            logger.info(f"[{self.name}] Processing {len(dates)} dates for {len(self.model_training_stocks)} symbols")
+
+            # Group features by symbol for batch processing
+            symbol_features_dict = {}
+            for symbol in self.model_training_stocks:
+                try:
+                    # Extract all features for this symbol across all dates
+                    symbol_features = self._extract_symbol_features(features, symbol)
+                    if not symbol_features.empty:
+                        symbol_features_dict[symbol] = symbol_features
+                        logger.debug(f"[{self.name}] Extracted {len(symbol_features)} feature rows for {symbol}")
+                    else:
+                        logger.warning(f"[{self.name}] No features found for {symbol}")
+                except Exception as e:
+                    logger.warning(f"[{self.name}] Failed to extract features for {symbol}: {e}")
+
+            if not symbol_features_dict:
+                logger.error(f"[{self.name}] No valid features found for any symbols")
+                return pd.DataFrame()
+
+            logger.info(f"[{self.name}] Prepared features for {len(symbol_features_dict)} symbols")
+
+            # Create batch predictions for each date
+            predictions_dict = {}
+            model = self.model_predictor.model
+
+            for date in dates:
+                try:
+                    # Prepare batch of features for all symbols on this date
+                    date_features_batch = []
+                    date_symbols = []
+
+                    for symbol, symbol_features in symbol_features_dict.items():
+                        # Try to get features for this specific date
+                        date_features = self._extract_symbol_features(features, symbol, date)
+                        if not date_features.empty:
+                            date_features_batch.append(date_features.iloc[0])  # Get the single row
+                            date_symbols.append(symbol)
+
+                    if date_features_batch:
+                        # Convert batch to DataFrame for prediction
+                        batch_df = pd.DataFrame(date_features_batch, index=date_symbols)
+                        logger.debug(f"[{self.name}] Batch prediction for {date}: {batch_df.shape}")
+
+                        # Use model's batch prediction
+                        if hasattr(model, 'predict_batch'):
+                            # For XGBoost with explicit batch method
+                            batch_predictions = model.predict_batch([batch_df])[0]
+                        else:
+                            # Fallback to standard predict
+                            batch_predictions = model.predict(batch_df)
+
+                        # Create Series with predictions indexed by symbols
+                        date_predictions = pd.Series(batch_predictions, index=date_symbols, name='prediction')
+                        predictions_dict[date] = date_predictions
+
+                        logger.debug(f"[{self.name}] Generated {len(date_predictions)} predictions for {date}")
+                    else:
+                        logger.debug(f"[{self.name}] No features available for {date}")
+                        # Create zero predictions for available symbols
+                        zero_predictions = pd.Series([0.0] * len(self.model_training_stocks),
+                                                   index=self.model_training_stocks, name='prediction')
+                        predictions_dict[date] = zero_predictions
+
+                except Exception as e:
+                    logger.error(f"[{self.name}] Batch prediction failed for {date}: {e}")
+                    # Create zero predictions as fallback
+                    zero_predictions = pd.Series([0.0] * len(self.model_training_stocks),
+                                               index=self.model_training_stocks, name='prediction')
+                    predictions_dict[date] = zero_predictions
+
+            # Convert dictionary to DataFrame format (dates as index, symbols as columns)
+            if predictions_dict:
+                predictions_df = pd.DataFrame(predictions_dict).T  # Transpose: rows=dates, cols=symbols
+                logger.info(f"[{self.name}] ✅ Batch prediction completed: shape={predictions_df.shape}")
+                logger.info(f"[{self.name}] 📊 Columns (symbols): {list(predictions_df.columns)}")
+                logger.info(f"[{self.name}] 📅 Index (dates): {predictions_df.index[0]} to {predictions_df.index[-1]}")
+                return predictions_df
+            else:
+                logger.error(f"[{self.name}] No predictions generated")
+                return pd.DataFrame()
+
+        except Exception as e:
+            logger.error(f"[{self.name}] ❌ Batch prediction optimization failed: {e}")
+            import traceback
+            logger.error(f"[{self.name}] Traceback: {traceback.format_exc()}")
+            return pd.DataFrame()
 
     # NOTE: Strategy-layer normalization re-enabled for dual-layer architecture
     # Layer 1: Strategy-level normalization (ensures consistent scale within each strategy)

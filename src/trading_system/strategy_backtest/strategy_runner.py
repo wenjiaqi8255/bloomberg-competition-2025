@@ -53,7 +53,7 @@ Distinction from SystemOrchestrator:
 import logging
 import os
 from datetime import datetime
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 import pandas as pd
 
@@ -69,6 +69,10 @@ from src.trading_system.experiment_tracking import (
     create_backtest_config
 )
 from ..types import TradingSignal, SignalType
+# Portfolio construction imports
+from ..portfolio_construction import (
+    IPortfolioBuilder, PortfolioConstructionRequest, PortfolioBuilderFactory
+)
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +175,7 @@ class StrategyRunner:
         self.backtest_engine = None
         self.experiment_tracker = experiment_tracker
         self.plotter = None
+        self.portfolio_builder: Optional[IPortfolioBuilder] = None
 
         # Results storage
         self.results = {}
@@ -300,6 +305,9 @@ class StrategyRunner:
 
             from ..utils.plotting import BacktestPlotter
             self.plotter = BacktestPlotter(self.experiment_tracker)
+            
+            # Initialize portfolio builder if configured
+            self._initialize_portfolio_builder()
   
             self.is_initialized = True
             logger.info("Strategy runner initialized successfully")
@@ -307,6 +315,87 @@ class StrategyRunner:
         except Exception as e:
             logger.error(f"Failed to initialize strategy runner: {e}", exc_info=True)
             raise
+
+    def _initialize_portfolio_builder(self):
+        """Initialize portfolio builder if configured in strategy parameters."""
+        try:
+            strategy_config = self.configs.get('strategy')
+            if not strategy_config:
+                logger.info("No strategy config found, skipping portfolio builder initialization")
+                return
+                
+            strategy_params = strategy_config.parameters or {}
+            portfolio_construction_config = strategy_params.get('portfolio_construction', {})
+            
+            if not portfolio_construction_config:
+                logger.info("No portfolio_construction config found, using default signal processing")
+                return
+                
+            # Create portfolio builder using factory
+            self.portfolio_builder = PortfolioBuilderFactory.create_builder(portfolio_construction_config)
+            logger.info(f"Initialized portfolio builder with method: {portfolio_construction_config.get('method', 'unknown')}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to initialize portfolio builder: {e}")
+            logger.info("Continuing with default signal processing")
+
+    def _apply_portfolio_construction(self, strategy_signals: pd.DataFrame, price_data: Dict[str, pd.DataFrame], start_date: datetime) -> pd.DataFrame:
+        """
+        Apply portfolio construction to strategy signals.
+        
+        Args:
+            strategy_signals: Raw strategy signals DataFrame
+            price_data: Price data for all symbols
+            start_date: Start date for portfolio construction
+            
+        Returns:
+            Processed signals DataFrame with portfolio construction applied
+        """
+        try:
+            if self.portfolio_builder is None:
+                logger.warning("Portfolio builder not initialized, returning original signals")
+                return strategy_signals
+                
+            # Create portfolio construction request
+            # For now, we'll process signals date by date
+            processed_signals = pd.DataFrame(index=strategy_signals.index, columns=strategy_signals.columns)
+            
+            for i, date in enumerate(strategy_signals.index):
+                try:
+                    # Get signals for this date
+                    date_signals = strategy_signals.loc[date]
+                    
+                    # Log progress for first few dates and every 10th date
+                    if i < 3 or i % 10 == 0:
+                        logger.info(f"   📅 Processing date {i+1}/{len(strategy_signals)}: {date.date()}")
+                    
+                    # Create portfolio construction request
+                    request = PortfolioConstructionRequest(
+                        date=date,
+                        universe=list(date_signals.index),
+                        signals=date_signals,
+                        price_data=price_data,
+                        constraints={}
+                    )
+                    
+                    # Build portfolio
+                    portfolio_weights = self.portfolio_builder.build_portfolio(request)
+                    
+                    # Update processed signals
+                    processed_signals.loc[date] = portfolio_weights
+                    
+                except Exception as e:
+                    logger.warning(f"Portfolio construction failed for date {date}: {e}")
+                    # Fall back to original signals for this date
+                    processed_signals.loc[date] = strategy_signals.loc[date]
+            
+            logger.info(f"Portfolio construction applied successfully to {len(processed_signals)} dates")
+            return processed_signals
+            
+        except Exception as e:
+            logger.error(f"Portfolio construction failed: {e}")
+            logger.info("Returning original signals")
+            return strategy_signals
 
     def run_strategy(self, experiment_name: str = None) -> Dict[str, Any]:
         """
@@ -385,6 +474,14 @@ class StrategyRunner:
                 backtest_config.start_date,
                 backtest_config.end_date
             )
+
+            # Step 3.5: Apply portfolio construction if configured
+            if self.portfolio_builder and not strategy_signals.empty:
+                logger.info("🔧 APPLYING PORTFOLIO CONSTRUCTION...")
+                logger.info(f"   📊 Input signals shape: {strategy_signals.shape}")
+                logger.info(f"   📅 Date range: {strategy_signals.index[0].date()} to {strategy_signals.index[-1].date()}")
+                strategy_signals = self._apply_portfolio_construction(strategy_signals, price_data, backtest_config.start_date)
+                logger.info(f"   ✅ Portfolio construction completed. Output shape: {strategy_signals.shape}")
 
             # Step 4: Convert signals to unified format and run backtest
             unified_strategy_signals = self._convert_signals_to_unified_format(strategy_signals, price_data)

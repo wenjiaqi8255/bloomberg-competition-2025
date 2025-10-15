@@ -4,7 +4,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-from src.trading_system.data.strategy_data_collector import StrategyDataCollector
+from src.trading_system.data.enhanced_strategy_data_collector import EnhancedStrategyDataCollector
 from src.trading_system.metamodel.meta_model import MetaModel
 from src.trading_system.models.model_persistence import ModelRegistry
 from src.trading_system.utils.performance import PerformanceMetrics
@@ -34,8 +34,22 @@ class MetaModelRunConfig:
 
 
 class MetaModelPipeline:
+    """
+    Pipeline for metamodel training and evaluation with single responsibility.
+
+    INPUTS:
+    - config: MetaModelRunConfig - Strategy names, dates, method, parameters
+    - results_dir: str - Directory containing strategy results
+    - registry_dir: str - Directory for model persistence
+
+    OUTPUTS:
+    - trained metamodel with strategy weights and performance metrics
+    - saved model artifacts in registry
+
+    RESPONSIBILITY: Only provide pipeline operations for metamodel training and saving.
+    """
     def __init__(self, results_dir: str = "./results", registry_dir: str = "./models"):
-        self.repo = StrategyDataCollector(results_dir)
+        self.repo = EnhancedStrategyDataCollector(results_dir)
         self.registry = ModelRegistry(registry_dir)
 
     def collect(self, cfg: MetaModelRunConfig) -> Tuple[pd.DataFrame, pd.Series]:

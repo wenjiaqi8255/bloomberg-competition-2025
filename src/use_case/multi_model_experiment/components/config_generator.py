@@ -66,24 +66,28 @@ class ModelConfigGenerator:
     def _create_training_setup(self, model_config: Dict[str, Any]) -> Dict[str, Any]:
         """
         Create the training_setup section for a single model.
-        
+
         Args:
             model_config: Model-specific configuration
-            
+
         Returns:
             training_setup configuration dictionary
         """
         model_type = model_config.get('model_type')
         if not model_type:
             raise ValueError("model_config must contain 'model_type'")
-        
+
         # Extract HPO configuration
         hpo_trials = model_config.get('hpo_trials', 10)
         hpo_metric = model_config.get('hpo_metric', 'sharpe_ratio')
-        
+
         # Extract model parameters (excluding HPO-specific ones)
         model_parameters = {k: v for k, v in model_config.get('parameters', {}).items()}
-        
+
+        # Get periods and universe from base config
+        periods = self.base_config.get('periods', {})
+        universe = self.base_config.get('universe', [])
+
         training_setup = {
             'model': {
                 'model_type': model_type,
@@ -99,10 +103,13 @@ class ModelConfigGenerator:
             },
             'parameters': {
                 'validation_split': 0.2,
-                'early_stopping_rounds': 10
+                'early_stopping_rounds': 10,
+                'start_date': periods.get('train', {}).get('start'),
+                'end_date': periods.get('train', {}).get('end'),
+                'symbols': universe
             }
         }
-        
+
         return training_setup
 
     def _validate_required_sections(self, config: Dict[str, Any]):

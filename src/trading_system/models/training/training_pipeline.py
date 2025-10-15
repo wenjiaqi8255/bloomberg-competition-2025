@@ -325,7 +325,7 @@ class TrainingPipeline:
 
         # Load factor data if needed
         factor_data = {}
-        if self.model_type == "ff5_regression" or self.model_type == "residual_predictor":
+        if self.model_type == "ff5_regression":
             if self.factor_data_provider is not None:
                 logger.info(f"Loading factor data using {type(self.factor_data_provider).__name__}")
                 factor_data = self.factor_data_provider.get_factor_returns(start_date, end_date)

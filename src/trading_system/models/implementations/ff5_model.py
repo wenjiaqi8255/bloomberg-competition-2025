@@ -61,9 +61,13 @@ class FF5RegressionModel(BaseModel):
         super().__init__(model_type, config)
 
         # Model configuration
-        self.regularization = self.config.get('regularization', 'none')
+        self.regularization = self.config.get('regularization', 'ridge')  # Use ridge by default
         self.alpha = self.config.get('alpha', 1.0)
         self.standardize = self.config.get('standardize', False)
+
+        # Storage for per-symbol betas and alphas
+        self.betas = {}  # {symbol: np.ndarray(5,)}
+        self.alphas = {}  # {symbol: float}
 
         # Initialize model components
         if self.regularization == 'ridge':
@@ -82,14 +86,18 @@ class FF5RegressionModel(BaseModel):
         self._expected_features = ['MKT', 'SMB', 'HML', 'RMW', 'CMA']
 
         logger.info(f"Initialized FF5 regression model with {self.regularization} regularization")
+        logger.info("Model will compute betas for each individual stock")
 
     def fit(self, X: pd.DataFrame, y: pd.Series) -> 'FF5RegressionModel':
         """
-        Fit the factor model to estimate betas.
+        Fit the factor model to estimate betas for each stock.
+
+        This method implements the "Betas as model parameters" architecture.
+        Each symbol gets its own set of betas computed independently.
 
         Args:
-            X: Factor returns DataFrame with columns ['MKT', 'SMB', 'HML', 'RMW', 'CMA']
-            y: Stock excess returns Series aligned with X
+            X: Factor returns DataFrame with MultiIndex (symbol, date) and columns ['MKT', 'SMB', 'HML', 'RMW', 'CMA']
+            y: Stock excess returns Series with MultiIndex (symbol, date) aligned with X
 
         Returns:
             Self for method chaining
@@ -106,45 +114,115 @@ class FF5RegressionModel(BaseModel):
             if missing_factors:
                 raise ValueError(f"Missing required factor columns: {missing_factors}")
 
-            # Align and clean data
-            aligned_data = pd.concat([y, X[self._expected_features]], axis=1).dropna()
-            if len(aligned_data) == 0:
-                raise ValueError("No valid data points after alignment")
+            # Verify MultiIndex structure
+            if not isinstance(X.index, pd.MultiIndex) or not isinstance(y.index, pd.MultiIndex):
+                raise ValueError("X and y must have MultiIndex with 'symbol' and 'date' levels")
 
-            y_clean = aligned_data.iloc[:, 0]
-            X_clean = aligned_data.iloc[:, 1:]
+            if not all(level in X.index.names for level in ['symbol', 'date']):
+                raise ValueError("X must have MultiIndex with 'symbol' and 'date' levels")
 
-            # Standardize factors if requested
-            if self.standardize:
-                X_clean = pd.DataFrame(
-                    self._scaler.fit_transform(X_clean),
-                    index=X_clean.index,
-                    columns=X_clean.columns
-                )
+            if not all(level in y.index.names for level in ['symbol', 'date']):
+                raise ValueError("y must have MultiIndex with 'symbol' and 'date' levels")
 
-            # Fit the regression model
-            self._model.fit(X_clean, y_clean)
+            # Get unique symbols
+            if 'symbol' in X.index.names:
+                symbols = X.index.get_level_values('symbol').unique()
+            else:
+                raise ValueError("X MultiIndex must have 'symbol' level")
+
+            logger.info(f"Fitting FF5 model for {len(symbols)} symbols: {list(symbols)}")
+
+            # Clear previous betas
+            self.betas = {}
+            self.alphas = {}
+
+            total_samples = 0
+            successful_symbols = 0
+
+            # Fit a separate regression for each symbol
+            for symbol in symbols:
+                try:
+                    # Extract data for this symbol
+                    symbol_X = X.xs(symbol, level='symbol')
+                    symbol_y = y.xs(symbol, level='symbol')
+
+                    # Align data by index (date)
+                    aligned_data = pd.concat([symbol_y, symbol_X[self._expected_features]], axis=1, join='inner').dropna()
+
+                    if len(aligned_data) < 50:  # Need at least 50 observations
+                        logger.warning(f"Insufficient data for {symbol}: {len(aligned_data)} observations, skipping")
+                        continue
+
+                    symbol_y_clean = aligned_data.iloc[:, 0]
+                    symbol_X_clean = aligned_data.iloc[:, 1:]
+
+                    # Standardize factors if requested (per symbol)
+                    if self.standardize:
+                        symbol_scaler = StandardScaler()
+                        symbol_X_clean = pd.DataFrame(
+                            symbol_scaler.fit_transform(symbol_X_clean),
+                            index=symbol_X_clean.index,
+                            columns=symbol_X_clean.columns
+                        )
+                    else:
+                        symbol_scaler = None
+
+                    # Create and fit regression model for this symbol
+                    if self.regularization == 'ridge':
+                        symbol_model = Ridge(alpha=max(abs(float(self.alpha)), 1e-6))
+                    else:
+                        symbol_model = LinearRegression()
+
+                    symbol_model.fit(symbol_X_clean, symbol_y_clean)
+
+                    # Store betas and alpha for this symbol
+                    self.betas[symbol] = symbol_model.coef_
+                    self.alphas[symbol] = symbol_model.intercept_
+
+                    total_samples += len(symbol_y_clean)
+                    successful_symbols += 1
+
+                    logger.debug(f"{symbol}: fitted with {len(symbol_y_clean)} samples, "
+                                f"alpha={symbol_model.intercept_:.4f}, "
+                                f"betas=[{symbol_model.coef_[0]:.3f}, {symbol_model.coef_[1]:.3f}, {symbol_model.coef_[2]:.3f}, {symbol_model.coef_[3]:.3f}, {symbol_model.coef_[4]:.3f}]")
+
+                except Exception as e:
+                    logger.error(f"Failed to fit {symbol}: {e}")
+                    continue
 
             # Update model status and metadata
             self.status = ModelStatus.TRAINED
-            self.metadata.training_samples = len(y_clean)
-            self.metadata.features = list(X_clean.columns)
+            self.metadata.training_samples = total_samples
+            self.metadata.features = list(self._expected_features)
 
-            # Store betas as hyperparameters for feature importance
-            betas = dict(zip(X_clean.columns, self._model.coef_))
-            self.metadata.hyperparameters.update({
-                'betas': betas,
-                'alpha': self._model.intercept_,
-                'regularization': self.regularization,
-                'regularization_alpha': self.alpha,
-                'standardize': self.standardize
-            })
+            # Store summary statistics in hyperparameters
+            if self.betas:
+                beta_arrays = np.array(list(self.betas.values()))
+                mean_betas = dict(zip(self._expected_features, np.mean(beta_arrays, axis=0)))
+                std_betas = dict(zip(self._expected_features, np.std(beta_arrays, axis=0)))
 
-            logger.info(f"Successfully fitted FF5 model on {len(y_clean)} samples")
-            logger.info(f"Beta estimates: {betas}")
+                self.metadata.hyperparameters.update({
+                    'symbols_trained': successful_symbols,
+                    'total_samples': total_samples,
+                    'mean_betas': mean_betas,
+                    'std_betas': std_betas,
+                    'regularization': self.regularization,
+                    'regularization_alpha': self.alpha,
+                    'standardize': self.standardize
+                })
 
-            # Mark model as trained for registration purposes
-            self.is_trained = True
+                logger.info(f"Successfully fitted FF5 model for {successful_symbols}/{len(symbols)} symbols")
+                logger.info(f"Total samples used: {total_samples}")
+                logger.info(f"Mean betas: {mean_betas}")
+                logger.info(f"Beta std dev: {std_betas}")
+
+                # Mark model as trained for registration purposes
+                self.is_trained = True
+
+            else:
+                logger.error("No symbols were successfully fitted")
+                self.status = ModelStatus.FAILED
+                raise ValueError("Failed to fit any symbols")
 
             return self
 
@@ -153,15 +231,27 @@ class FF5RegressionModel(BaseModel):
             logger.error(f"Failed to fit FF5 regression model: {e}")
             raise
 
-    def predict(self, X: pd.DataFrame) -> np.ndarray:
+    def predict(self,
+                X: pd.DataFrame,
+                symbols: Optional[List[str]] = None) -> Union[pd.Series, pd.DataFrame]:
         """
-        Predict factor-implied returns.
+        Predict factor-implied returns using stored betas.
+
+        This method supports both batch prediction (new) and MultiIndex prediction (backward compatibility).
 
         Args:
-            X: Factor returns DataFrame with required factor columns
+            X: Factor returns DataFrame with required factor columns ['MKT', 'SMB', 'HML', 'RMW', 'CMA']
+               Can be either:
+               - Regular DataFrame with factor values only (for batch prediction)
+               - MultiIndex DataFrame with (symbol, date) levels (for backward compatibility)
+            symbols: Optional list of symbols to predict. If None:
+                    - For batch prediction: uses all trained symbols
+                    - For MultiIndex input: extracts symbols from index
 
         Returns:
-            Array of predicted stock returns
+            - pd.Series: For single-day predictions (len(X) == 1) with symbols as index
+            - pd.DataFrame: For multi-day predictions with dates as index, symbols as columns
+            - pd.Series with MultiIndex: For backward compatibility with MultiIndex input
 
         Raises:
             ValueError: If model is not trained or data is invalid
@@ -171,15 +261,15 @@ class FF5RegressionModel(BaseModel):
         logger.info(f"Expected features: {self._expected_features}")
         logger.info(f"Input columns: {list(X.columns)}")
         logger.info(f"Input shape: {X.shape}")
-        logger.info(f"Input sample: {X.iloc[-1].to_dict() if not X.empty else 'Empty'}")
+        logger.info(f"Symbols parameter: {symbols}")
 
         if self.status != ModelStatus.TRAINED:
             raise ValueError("Model must be trained before making predictions")
 
-        try:
-            # Validate input data
-            self.validate_data(X)
+        if not self.betas:
+            raise ValueError("Model has no fitted betas - was fit() called successfully?")
 
+        try:
             # Check for required factor columns
             missing_factors = set(self._expected_features) - set(X.columns)
             if missing_factors:
@@ -188,33 +278,20 @@ class FF5RegressionModel(BaseModel):
                 logger.error(f"❌ Expected columns: {self._expected_features}")
                 raise ValueError(f"Missing required factor columns: {missing_factors}")
 
-            # Use only expected factor columns in correct order
-            X_pred = X[self._expected_features].copy()
-            logger.info(f"Using factor columns: {list(X_pred.columns)}")
-            logger.info(f"Factor data sample: {X_pred.iloc[-1].to_dict() if not X_pred.empty else 'Empty'}")
+            # Backward compatibility: Handle MultiIndex input
+            if isinstance(X.index, pd.MultiIndex) and symbols is None:
+                logger.warning("Detected MultiIndex input. Consider using symbols parameter for clarity.")
+                # Extract symbols from MultiIndex for backward compatibility
+                if 'symbol' in X.index.names:
+                    symbols = X.index.get_level_values('symbol').unique().tolist()
+                else:
+                    raise ValueError("MultiIndex must have 'symbol' level")
 
-            # Standardize if scaler was fitted during training
-            if self.standardize and self._scaler is not None:
-                logger.info(f"Applying standardization with scaler: {type(self._scaler)}")
-                X_pred = pd.DataFrame(
-                    self._scaler.transform(X_pred),
-                    index=X_pred.index,
-                    columns=X_pred.columns
-                )
-                logger.info(f"Standardized data sample: {X_pred.iloc[-1].to_dict() if not X_pred.empty else 'Empty'}")
+                # Use original MultiIndex logic for backward compatibility
+                return self._predict_multiindex(X, symbols)
 
-            # Make predictions
-            logger.info(f"Calling underlying model.predict()")
-            logger.info(f"Model type: {type(self._model)}")
-            predictions = self._model.predict(X_pred)
-            logger.info(f"Raw model predictions: {predictions} (type: {type(predictions)}, shape: {getattr(predictions, 'shape', 'N/A')})")
-
-            if isinstance(predictions, np.ndarray):
-                logger.info(f"Prediction stats: min={predictions.min():.6f}, max={predictions.max():.6f}, mean={predictions.mean():.6f}, std={predictions.std():.6f}")
-                logger.info(f"Zero predictions count: {(predictions == 0).sum()}/{len(predictions)}")
-
-            logger.info(f"Made predictions for {len(predictions)} samples")
-            return predictions
+            # New batch prediction logic
+            return self._predict_batch(X, symbols)
 
         except Exception as e:
             logger.error(f"Failed to make predictions: {e}")
@@ -222,44 +299,225 @@ class FF5RegressionModel(BaseModel):
             logger.error(f"Traceback: {traceback.format_exc()}")
             raise
 
-    def get_feature_importance(self) -> Dict[str, float]:
+    def _predict_multiindex(self, X: pd.DataFrame, symbols: List[str]) -> pd.Series:
         """
-        Get factor betas as feature importance scores.
+        Backward compatibility: Original MultiIndex prediction logic.
+
+        Args:
+            X: MultiIndex DataFrame with (symbol, date) levels
+            symbols: List of symbols to predict
 
         Returns:
-            Dictionary mapping factor names to their beta coefficients
+            Series with MultiIndex (symbol, date)
         """
-        if self.status != ModelStatus.TRAINED:
+        logger.info("Using backward compatibility MultiIndex prediction")
+
+        # Use only expected factor columns in correct order
+        X_pred = X[self._expected_features].copy()
+        logger.info(f"Using factor columns: {list(X_pred.columns)}")
+
+        predictions = []
+
+        # Make predictions for each symbol using its stored betas
+        for symbol in symbols:
+            if symbol not in self.betas:
+                logger.warning(f"No fitted betas for {symbol}, skipping")
+                continue
+
+            try:
+                # Extract factor data for this symbol
+                symbol_X = X_pred.xs(symbol, level='symbol')
+
+                # Get stored betas and alpha for this symbol
+                symbol_betas = self.betas[symbol]  # shape: (5,)
+                symbol_alpha = self.alphas[symbol]  # scalar
+
+                # Compute predictions: y = alpha + beta @ X
+                symbol_predictions = (
+                    symbol_alpha +
+                    symbol_X.values @ symbol_betas  # Matrix multiplication
+                )
+
+                # Create Series with correct index
+                pred_series = pd.Series(
+                    symbol_predictions,
+                    index=symbol_X.index,
+                    name='ff5_prediction'
+                )
+
+                predictions.append(pred_series)
+                logger.debug(f"Generated {len(symbol_predictions)} predictions for {symbol}")
+
+            except Exception as e:
+                logger.error(f"Failed to predict for {symbol}: {e}")
+                continue
+
+        if not predictions:
+            raise ValueError("No predictions could be generated")
+
+        # Combine all predictions and restore MultiIndex
+        all_predictions = pd.concat(predictions)
+
+        # Create proper MultiIndex
+        if 'symbol' in X.index.names and 'date' in X.index.names:
+            # Create MultiIndex tuples
+            index_tuples = []
+            for symbol in symbols:
+                if symbol in self.betas:
+                    symbol_dates = X.xs(symbol, level='symbol').index
+                    for date in symbol_dates:
+                        index_tuples.append((symbol, date))
+
+            all_predictions.index = pd.MultiIndex.from_tuples(
+                index_tuples,
+                names=['symbol', 'date']
+            )
+
+        logger.info(f"Generated {len(all_predictions)} predictions total (MultiIndex)")
+        return all_predictions
+
+    def _predict_batch(self, X: pd.DataFrame, symbols: Optional[List[str]]) -> Union[pd.Series, pd.DataFrame]:
+        """
+        New batch prediction logic for better performance.
+
+        Args:
+            X: DataFrame with factor values only, shape (T, 5)
+            symbols: List of symbols to predict. If None, uses all trained symbols.
+
+        Returns:
+            - pd.Series: For single day (T=1) with symbols as index
+            - pd.DataFrame: For multiple days (T>1) with dates as index, symbols as columns
+        """
+        logger.info("Using new batch prediction logic")
+
+        # Determine symbols to predict
+        if symbols is None:
+            symbols = list(self.betas.keys())
+            logger.info(f"No symbols provided, using all {len(symbols)} trained symbols")
+
+        # Filter to only symbols that have fitted betas
+        valid_symbols = [s for s in symbols if s in self.betas]
+        if not valid_symbols:
+            raise ValueError(f"No valid symbols found. Available symbols: {list(self.betas.keys())}")
+
+        logger.info(f"Predicting for {len(valid_symbols)} symbols: {valid_symbols}")
+
+        # Extract factor values (shared by all symbols)
+        factor_values = X[self._expected_features].values  # shape: (T, 5)
+        logger.info(f"Factor values shape: {factor_values.shape}")
+
+        # Batch predict all symbols
+        predictions = {}
+        for symbol in valid_symbols:
+            try:
+                # Get stored betas and alpha for this symbol
+                symbol_betas = self.betas[symbol]  # shape: (5,)
+                symbol_alpha = self.alphas[symbol]  # scalar
+
+                # Vectorized prediction: y = alpha + X @ beta
+                # factor_values: (T, 5), symbol_betas: (5,) -> result: (T,)
+                symbol_predictions = symbol_alpha + factor_values @ symbol_betas
+
+                predictions[symbol] = symbol_predictions
+                logger.debug(f"Generated {len(symbol_predictions)} predictions for {symbol}")
+
+            except Exception as e:
+                logger.error(f"Failed to predict for {symbol}: {e}")
+                continue
+
+        if not predictions:
+            raise ValueError("No predictions could be generated")
+
+        # Convert to appropriate output format
+        if len(X) == 1:
+            # Single day: return Series with symbols as index
+            result = pd.Series(
+                {symbol: predictions[symbol][0] for symbol in predictions},
+                name='ff5_prediction'
+            )
+            logger.info(f"Generated single-day predictions for {len(result)} symbols")
+            return result
+        else:
+            # Multiple days: return DataFrame with dates as index, symbols as columns
+            result = pd.DataFrame(
+                {symbol: predictions[symbol] for symbol in predictions},
+                index=X.index
+            )
+            logger.info(f"Generated multi-day predictions: {result.shape}")
+            return result
+
+    def get_feature_importance(self) -> Dict[str, float]:
+        """
+        Get mean factor betas as feature importance scores.
+
+        Returns:
+            Dictionary mapping factor names to their mean beta coefficients across all symbols
+        """
+        if self.status != ModelStatus.TRAINED or not self.betas:
             return {}
 
-        betas = self.metadata.hyperparameters.get('betas', {})
-        if not betas:
-            # Fallback: get coefficients directly from model
-            if hasattr(self._model, 'coef_') and hasattr(self._model, 'feature_names_in_'):
-                betas = dict(zip(self._model.feature_names_in_, self._model.coef_))
+        # Calculate mean betas across all symbols
+        beta_arrays = np.array(list(self.betas.values()))
+        mean_betas = dict(zip(self._expected_features, np.mean(beta_arrays, axis=0)))
 
-        return betas
+        return mean_betas
 
-    def get_factor_exposures(self) -> Dict[str, float]:
+    def get_factor_exposures(self, symbol: Optional[str] = None) -> Dict[str, float]:
         """
-        Get current factor betas (exposures).
+        Get factor betas (exposures) for a specific symbol or mean across all symbols.
+
+        Args:
+            symbol: Optional symbol name. If None, returns mean betas.
 
         Returns:
             Dictionary of factor betas
         """
-        return self.get_feature_importance()
+        if self.status != ModelStatus.TRAINED or not self.betas:
+            return {}
 
-    def get_alpha(self) -> float:
+        if symbol and symbol in self.betas:
+            # Return betas for specific symbol
+            return dict(zip(self._expected_features, self.betas[symbol]))
+        else:
+            # Return mean betas across all symbols
+            return self.get_feature_importance()
+
+    def get_alpha(self, symbol: Optional[str] = None) -> float:
         """
-        Get the model's alpha (intercept).
+        Get the model's alpha (intercept) for a specific symbol or mean across all symbols.
+
+        Args:
+            symbol: Optional symbol name. If None, returns mean alpha.
 
         Returns:
             Alpha value
         """
-        if self.status != ModelStatus.TRAINED:
+        if self.status != ModelStatus.TRAINED or not self.alphas:
             return 0.0
 
-        return self.metadata.hyperparameters.get('alpha', 0.0)
+        if symbol and symbol in self.alphas:
+            return self.alphas[symbol]
+        else:
+            # Return mean alpha across all symbols
+            return np.mean(list(self.alphas.values()))
+
+    def get_symbol_betas(self) -> Dict[str, np.ndarray]:
+        """
+        Get all symbol betas.
+
+        Returns:
+            Dictionary mapping symbol names to their beta coefficient arrays
+        """
+        return self.betas.copy()
+
+    def get_symbol_alphas(self) -> Dict[str, float]:
+        """
+        Get all symbol alphas.
+
+        Returns:
+            Dictionary mapping symbol names to their alpha values
+        """
+        return self.alphas.copy()
 
     def get_model_info(self) -> Dict[str, Any]:
         """

@@ -287,31 +287,52 @@ class XGBoostModel(BaseModel):
             logger.warning(f"Could not get feature importance: {e}")
             return {}
     
-    def get_model_info(self) -> Dict[str, Any]:
+    def predict_batch(self, X_batch: List[pd.DataFrame]) -> List[np.ndarray]:
         """
-        Get comprehensive model information.
-        
+        Make batch predictions for multiple DataFrames efficiently.
+
+        This method leverages XGBoost's native batch prediction capabilities
+        to optimize performance when predicting for multiple stocks or time periods.
+
+        Args:
+            X_batch: List of feature DataFrames for prediction
+
         Returns:
-            Dictionary with model details
+            List of prediction arrays, one per input DataFrame
+
+        Raises:
+            ValueError: If model is not trained or data is invalid
         """
-        info = {
-            'model_type': self.model_type,
-            'status': self.status,
-            'n_estimators': self.n_estimators,
-            'max_depth': self.max_depth,
-            'learning_rate': self.learning_rate,
-            'training_samples': self.metadata.training_samples,
-            'n_features': len(self._feature_names) if self._feature_names else 0,
-            'best_iteration': self._best_iteration
-        }
-        
-        # Add top features if available
-        importance = self.get_feature_importance()
-        if importance:
-            sorted_features = sorted(importance.items(), key=lambda x: x[1], reverse=True)
-            info['top_10_features'] = dict(sorted_features[:10])
-        
-        return info
+        if self.status != ModelStatus.TRAINED:
+            raise ValueError("Model must be trained before making predictions")
+
+        try:
+            predictions = []
+
+            for X in X_batch:
+                # Validate input data
+                self.validate_data(X)
+
+                # Ensure correct feature order
+                if self._feature_names:
+                    missing_features = set(self._feature_names) - set(X.columns)
+                    if missing_features:
+                        raise ValueError(f"Missing features: {missing_features}")
+                    X_pred = X[self._feature_names]
+                else:
+                    X_pred = X
+
+                # Make predictions for this batch
+                batch_predictions = self._model.predict(X_pred)
+                predictions.append(batch_predictions)
+
+            total_samples = sum(len(pred) for pred in predictions)
+            logger.debug(f"Made batch predictions for {total_samples} samples across {len(X_batch)} DataFrames")
+            return predictions
+
+        except Exception as e:
+            logger.error(f"Failed to make batch predictions: {e}")
+            raise
     
     def save(self, path: Union[str, Path]) -> None:
         """
@@ -456,7 +477,7 @@ class XGBoostModel(BaseModel):
         """
         return {
             'model_type': self.model_type,
-            'status': self.status.value,
+            'status': str(self.status),  # Convert to string to avoid .value error
             'hyperparameters': self.get_model_params(),
             'feature_names': self._feature_names,
             'best_iteration': self._best_iteration,

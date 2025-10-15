@@ -17,7 +17,7 @@ from .types.results import BacktestResults
 from ..utils.performance import PerformanceMetrics
 from ..utils.risk import RiskCalculator
 from .costs.transaction_costs import TransactionCostModel, TradeDirection
-from .utils.validators import validate_inputs, align_data_periods, clean_price_data
+from .utils.validators import validate_inputs, align_data_periods, clean_price_data, filter_strategy_signals
 from ..types import Position, Trade
 
 logger = logging.getLogger(__name__)
@@ -102,9 +102,14 @@ class BacktestEngine:
 
             # DELEGATE to existing validators - use established validation logic
             validate_inputs(strategy_signals, price_data, benchmark_data)
+
+            # Filter strategy signals to only include symbols with available price data
+            available_symbols = set(price_data.keys())
+            filtered_signals = filter_strategy_signals(strategy_signals, available_symbols)
+
             self.price_data = clean_price_data(price_data)
             self.benchmark_data = benchmark_data
-            self.strategy_signals = strategy_signals
+            self.strategy_signals = filtered_signals
 
             # Preload price data for performance optimization
             self._price_cache, self._sorted_dates_cache = self._preload_price_data()

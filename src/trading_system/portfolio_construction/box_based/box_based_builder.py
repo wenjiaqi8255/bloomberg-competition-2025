@@ -180,7 +180,19 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
             normalized_weights = self._normalize_weights(final_weights)
             construction_log.append(f"Final portfolio: {len(normalized_weights)} positions")
 
-            logger.info(f"Box-Based portfolio construction completed: {len(normalized_weights)} positions")
+            # Log final portfolio summary
+            logger.info("🎯 FINAL PORTFOLIO SUMMARY:")
+            logger.info(f"   📊 Total positions: {len(normalized_weights)}")
+            logger.info(f"   💰 Total weight: {sum(normalized_weights.values()):.4f}")
+            
+            # Log top positions
+            sorted_positions = sorted(normalized_weights.items(), key=lambda x: x[1], reverse=True)
+            top_positions = sorted_positions[:10]  # Top 10 positions
+            logger.info("   🏆 Top positions:")
+            for stock, weight in top_positions:
+                logger.info(f"      {stock}: {weight:.4f} ({weight*100:.2f}%)")
+
+            logger.info(f"✅ Box-Based portfolio construction completed: {len(normalized_weights)} positions")
             return pd.Series(normalized_weights)
 
         except Exception as e:
@@ -319,7 +331,21 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
             candidate_stocks, signals, self.stocks_per_box
         )
 
+        # Log detailed stock selection information
+        logger.info(f"📦 Box {box_key}:")
+        logger.info(f"   📊 Available stocks: {len(candidate_stocks)} ({', '.join(candidate_stocks[:5])}{'...' if len(candidate_stocks) > 5 else ''})")
+        logger.info(f"   🎯 Selected stocks: {len(selected_stocks)} ({', '.join(selected_stocks)})")
+        
+        # Log signal strengths for selected stocks
+        if selected_stocks and not signals.empty:
+            signal_info = []
+            for stock in selected_stocks:
+                signal_value = signals.get(stock, 0)
+                signal_info.append(f"{stock}({signal_value:.4f})")
+            logger.info(f"   📈 Signal strengths: {', '.join(signal_info)}")
+
         if not selected_stocks:
+            logger.warning(f"   ❌ No stocks selected from box {box_key}")
             return {
                 'weights': {},
                 'reason': "No stocks selected from box"
@@ -337,8 +363,12 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
         try:
             stock_weights = self.weight_allocator.allocate(selected_stocks, target_weight, signals)
 
-            logger.debug(f"Allocated {target_weight:.4f} weight to box {box_key} "
-                        f"across {len(stock_weights)} stocks")
+            # Log detailed weight allocation
+            logger.info(f"   💰 Box weight: {target_weight:.4f} ({target_weight*100:.2f}%)")
+            weight_info = []
+            for stock, weight in stock_weights.items():
+                weight_info.append(f"{stock}({weight:.4f})")
+            logger.info(f"   ⚖️  Stock weights: {', '.join(weight_info)}")
 
             return {
                 'weights': stock_weights,

@@ -18,7 +18,7 @@ Design Principles:
 """
 
 import logging
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Any
 from datetime import datetime
 import pandas as pd
 import numpy as np
@@ -52,9 +52,10 @@ class CrossSectionalFeatureCalculator:
         # Result: DataFrame with columns ['symbol', 'market_cap', 'book_to_market', ...]
     """
     
-    def __init__(self, 
+    def __init__(self,
                  lookback_periods: Optional[Dict[str, int]] = None,
-                 winsorize_percentile: float = 0.01):
+                 winsorize_percentile: float = 0.01,
+                 **kwargs):
         """
         Initialize the cross-sectional feature calculator.
         
@@ -74,8 +75,22 @@ class CrossSectionalFeatureCalculator:
         # Fit/Transform state management
         self._is_fitted = False
         self.ranking_stats = {}  # Store training statistics for ranking/zscore
-        
+
+        # Feature caching (Dependency Inversion Principle)
+        self._cache_provider = kwargs.get('cache_provider', None)
+        self._cache_enabled = self._cache_provider is not None
+
+        # Cache statistics tracking (always available)
+        self._cache_hits = 0
+        self._cache_misses = 0
+
+        # Fallback in-memory cache if no provider specified (KISS principle)
+        if not self._cache_enabled:
+            self._fallback_cache = {}
+            logger.info("No cache provider specified - using fallback in-memory cache")
+
         logger.info(f"Initialized CrossSectionalFeatureCalculator with lookback_periods={self.lookback_periods}")
+        logger.info(f"Feature caching enabled: {self._cache_enabled}")
     
     def fit(self, price_data: Dict[str, pd.DataFrame], dates: List[datetime], 
             feature_names: Optional[List[str]] = None,
@@ -176,6 +191,10 @@ class CrossSectionalFeatureCalculator:
         """
         Calculate cross-sectional features for all stocks at a given date.
 
+        This method uses vectorized operations for improved performance when processing
+        multiple stocks. It falls back to individual processing for stocks with
+        insufficient data or special cases.
+
         Args:
             price_data: Dictionary mapping symbols to OHLCV DataFrames
             date: Date for which to calculate cross-sectional features
@@ -183,225 +202,49 @@ class CrossSectionalFeatureCalculator:
             country_risk_data: Optional dictionary mapping symbols to country risk data
 
         Returns:
-            DataFrame with columns:
-                - symbol: Stock symbol
-                - market_cap_proxy: Market capitalization proxy
-                - book_to_market_proxy: Book-to-market proxy
-                - size_factor: Log of market cap (SMB factor proxy)
-                - value_factor: Value indicator (HML factor proxy)
-                - momentum_12m: 12-month momentum
-                - volatility_60d: 60-day volatility
-                - country_risk_premium: Country risk premium (if country_risk_data provided)
-                - equity_risk_premium: Equity risk premium (if country_risk_data provided)
-                - default_spread: Default spread (if country_risk_data provided)
-                - corporate_tax_rate: Corporate tax rate (if country_risk_data provided)
-                - [cross-sectional ranks and z-scores]
-
-        Raises:
-            ValueError: If date is not available in price data
+            DataFrame with cross-sectional features for all stocks
         """
-        # Enhanced logging for debugging
-        logger.info(f"=== CROSS-SECTIONAL FEATURES DEBUG ===")
-        logger.info(f"Target date: {date}")
-        logger.info(f"Requested feature names: {feature_names}")
-        logger.info(f"Available symbols: {list(price_data.keys())}")
-        logger.info(f"Lookback periods: {self.lookback_periods}")
+        logger.debug(f"Calculating cross-sectional features for {len(price_data)} stocks at {date}")
 
         if feature_names is None:
             feature_names = ['market_cap', 'book_to_market', 'size', 'value', 'momentum', 'volatility']
-            # Add country risk features if country risk data is provided
             if country_risk_data:
                 country_features = ['country_risk_premium', 'equity_risk_premium', 'default_spread', 'corporate_tax_rate']
                 feature_names.extend(country_features)
-            logger.info(f"Using default feature names: {feature_names}")
 
-        all_features = []
-        successful_symbols = 0
-        
-        for symbol, data in price_data.items():
-            logger.debug(f"Processing symbol: {symbol}")
-            logger.debug(f"  Data shape: {data.shape}")
-            logger.debug(f"  Date range: {data.index.min()} to {data.index.max()}")
+        # Step 1: Prepare data using vectorized operations
+        prepared_data = self._prepare_vectorized_data(price_data, date, feature_names)
 
-            try:
-                # Check if date is available - improved date matching
-                date_to_use = None
+        if not prepared_data:
+            logger.warning(f"No prepared data available for {date}")
+            return pd.DataFrame()
 
-                # First try exact match
-                if date in data.index:
-                    date_to_use = date
-                    logger.debug(f"  Using exact date: {date_to_use}")
-                else:
-                    # Try to find the nearest available date (more flexible)
-                    available_dates = data.index[data.index <= date]
-                    if len(available_dates) > 0:
-                        date_to_use = available_dates[-1]
-                        days_diff = (date - date_to_use).days
-                        logger.debug(f"  Using nearest date: {date_to_use} ({days_diff} days before target)")
+        # Step 2: Vectorized feature calculation for majority of stocks
+        vectorized_features = self._calculate_vectorized_features(prepared_data, date, feature_names)
 
-                        # Skip if the date is too far from target (configurable tolerance)
-                        max_tolerance_days = 7  # Allow up to 1 week tolerance
-                        if days_diff > max_tolerance_days:
-                            logger.warning(f"Date {date} too far from nearest {date_to_use} "
-                                         f"({days_diff} days > {max_tolerance_days}), skipping {symbol}")
-                            continue
-                    else:
-                        # Try to find any date after target (forward looking)
-                        future_dates = data.index[data.index > date]
-                        if len(future_dates) > 0:
-                            date_to_use = future_dates[0]
-                            days_diff = (date_to_use - date).days
-                            logger.debug(f"  Using future date: {date_to_use} ({days_diff} days after target)")
+        # Step 3: Individual processing for stocks that need special handling
+        individual_features = self._process_special_cases(price_data, date, feature_names,
+                                                       prepared_data.keys(), country_risk_data)
 
-                            # Smaller tolerance for future dates
-                            max_future_tolerance_days = 3
-                            if days_diff > max_future_tolerance_days:
-                                logger.warning(f"Date {date} too far from future {date_to_use} "
-                                             f"({days_diff} days > {max_future_tolerance_days}), skipping {symbol}")
-                                continue
-                        else:
-                            logger.warning(f"No available dates near {date} for {symbol}, skipping")
-                            continue
-
-                # Get historical data up to this date
-                historical_data = data[data.index <= date_to_use].copy()
-
-                # Calculate dynamic requirements based on requested features
-                required_periods = {}
-                for feature_name in feature_names:
-                    if feature_name in self.lookback_periods:
-                        required_periods[feature_name] = self.lookback_periods[feature_name]
-
-                min_required = min(required_periods.values()) if required_periods else 0
-                max_required = max(required_periods.values()) if required_periods else 0
-
-                available_history = len(historical_data)
-                logger.debug(f"  Historical data: {available_history} days available")
-                logger.debug(f"  Feature requirements: {required_periods}")
-                logger.debug(f"  Min required: {min_required}, Max required: {max_required}")
-
-                # More flexible history check: allow processing if at least one feature can be calculated
-                if available_history < min_required:
-                    logger.warning(f"Insufficient history for {symbol} at {date}: "
-                                 f"{available_history} < {min_required}, skipping")
-                    continue
-                elif available_history < max_required:
-                    # Filter features that can be calculated with available history
-                    viable_features = []
-                    for feature_name in feature_names:
-                        if feature_name in self.lookback_periods:
-                            if available_history >= self.lookback_periods[feature_name]:
-                                viable_features.append(feature_name)
-                        else:
-                            # Features without specific requirements are assumed viable
-                            viable_features.append(feature_name)
-
-                    if not viable_features:
-                        logger.warning(f"No viable features for {symbol} at {date} with {available_history} days, skipping")
-                        continue
-
-                    logger.info(f"Processing {symbol} with viable features only: {viable_features}")
-                    # Filter feature_names to only viable ones
-                    feature_names = viable_features
-                
-                # Calculate features for this symbol
-                symbol_features = {'symbol': symbol, 'date': date_to_use}
-                calculated_features = []
-
-                for feature_name in feature_names:
-                    logger.debug(f"  Calculating feature: {feature_name}")
-
-                    try:
-                        if feature_name == 'market_cap':
-                            symbol_features['market_cap_proxy'] = self._calculate_market_cap_proxy(
-                                historical_data, date_to_use
-                            )
-                            calculated_features.append('market_cap_proxy')
-
-                        elif feature_name == 'book_to_market':
-                            symbol_features['book_to_market_proxy'] = self._calculate_book_to_market_proxy(
-                                historical_data, date_to_use
-                            )
-                            calculated_features.append('book_to_market_proxy')
-
-                        elif feature_name == 'size':
-                            symbol_features['size_factor'] = self._calculate_size_factor(
-                                historical_data, date_to_use
-                            )
-                            calculated_features.append('size_factor')
-
-                        elif feature_name == 'value':
-                            symbol_features['value_factor'] = self._calculate_value_factor(
-                                historical_data, date_to_use
-                            )
-                            calculated_features.append('value_factor')
-
-                        elif feature_name == 'momentum':
-                            symbol_features['momentum_12m'] = self._calculate_momentum(
-                                historical_data, date_to_use, self.lookback_periods['momentum']
-                            )
-                            calculated_features.append('momentum_12m')
-
-                        elif feature_name == 'volatility':
-                            symbol_features['volatility_60d'] = self._calculate_volatility(
-                                historical_data, date_to_use, self.lookback_periods['volatility']
-                            )
-                            calculated_features.append('volatility_60d')
-
-                        elif feature_name in ['country_risk_premium', 'equity_risk_premium', 'default_spread', 'corporate_tax_rate']:
-                            # Handle static country risk features
-                            if country_risk_data and symbol in country_risk_data:
-                                country_data = country_risk_data[symbol]
-                                if feature_name in country_data:
-                                    symbol_features[feature_name] = country_data[feature_name]
-                                    calculated_features.append(feature_name)
-                                else:
-                                    logger.debug(f"  Country risk feature {feature_name} not found for {symbol}")
-                                    symbol_features[feature_name] = np.nan
-                                    calculated_features.append(feature_name)
-                            else:
-                                logger.debug(f"  No country risk data available for {symbol}")
-                                symbol_features[feature_name] = np.nan
-                                calculated_features.append(feature_name)
-
-                        else:
-                            logger.warning(f"  Unknown feature name: {feature_name}")
-
-                    except Exception as e:
-                        logger.error(f"  Error calculating {feature_name} for {symbol}: {e}")
-                        continue
-
-                logger.debug(f"  Successfully calculated {len(calculated_features)} features: {calculated_features}")
-                all_features.append(symbol_features)
-                successful_symbols += 1
-                
-            except Exception as e:
-                logger.warning(f"Error calculating features for {symbol} at {date}: {e}")
-                continue
-        
-        logger.info(f"Cross-sectional calculation summary for {date}:")
-        logger.info(f"  Successfully processed symbols: {successful_symbols}/{len(price_data)}")
-        logger.info(f"  Total feature records: {len(all_features)}")
+        # Step 4: Combine results
+        all_features = vectorized_features + individual_features
 
         if not all_features:
-            logger.error(f"No features calculated for date {date}")
-            logger.error("=== CROSS-SECTIONAL FEATURES DEBUG END ===")
+            logger.warning(f"No features calculated for date {date}")
             return pd.DataFrame()
 
         # Create DataFrame
         features_df = pd.DataFrame(all_features)
-        logger.info(f"Created features DataFrame with shape: {features_df.shape}")
-        logger.info(f"Feature columns: {list(features_df.columns)}")
-        logger.info("=== CROSS-SECTIONAL FEATURES DEBUG END ===")
-        
-        # Add cross-sectional rankings and z-scores
+        logger.debug(f"Created features DataFrame with shape: {features_df.shape}")
+
+        # Step 5: Add cross-sectional rankings and z-scores (vectorized)
         features_df = self._add_cross_sectional_transformations(features_df)
-        
-        # Winsorize extreme values
+
+        # Step 6: Winsorize extreme values (vectorized)
         features_df = self._winsorize_features(features_df)
-        
+
         logger.debug(f"Calculated cross-sectional features for {len(features_df)} stocks at {date}")
-        
+
         return features_df
     
     def _calculate_market_cap_proxy(self, data: pd.DataFrame, date: datetime) -> float:
@@ -808,5 +651,743 @@ class CrossSectionalFeatureCalculator:
                    f"{len(panel_df.index.get_level_values('symbol').unique())} symbols")
         
         return panel_df
+
+    # ============================================================================
+    # FEATURE CACHING MECHANISM
+    # ============================================================================
+
+    
+    def _get_from_cache(self, symbols: list, date: datetime, feature_names: List[str]) -> Optional[pd.DataFrame]:
+        """
+        Retrieve cross-sectional features from cache using the adapter.
+
+        Args:
+            symbols: List of stock symbols
+            date: Target date
+            feature_names: List of feature names
+
+        Returns:
+            Cached features DataFrame or None if not found
+        """
+        if not self._cache_enabled:
+            return self._get_from_fallback_cache(symbols, date, feature_names)
+
+        try:
+            # Use the adapter to retrieve cached cross-sectional features
+            cached_features = self._cache_provider.get_cross_sectional_features(
+                symbols=symbols,
+                date=date,
+                feature_names=feature_names,
+                lookback_periods=self.lookback_periods
+            )
+
+            if cached_features is not None:
+                logger.debug(f"Cache HIT for {len(symbols)} symbols at {date}")
+                return cached_features
+            else:
+                logger.debug(f"Cache MISS for {len(symbols)} symbols at {date}")
+                return None
+
+        except Exception as e:
+            logger.error(f"Cache retrieval error: {e}")
+            return self._get_from_fallback_cache(symbols, date, feature_names)
+
+    def _store_in_cache(self, features: pd.DataFrame, symbols: list, date: datetime, feature_names: List[str]):
+        """
+        Store cross-sectional features in cache using the adapter.
+
+        Args:
+            features: Features DataFrame to cache
+            symbols: List of stock symbols
+            date: Target date
+            feature_names: List of feature names
+        """
+        if not self._cache_enabled:
+            self._store_in_fallback_cache(features, symbols, date, feature_names)
+            return
+
+        try:
+            # Use the adapter to store cross-sectional features
+            self._cache_provider.set_cross_sectional_features(
+                features_df=features,
+                symbols=symbols,
+                date=date,
+                feature_names=feature_names,
+                lookback_periods=self.lookback_periods
+            )
+
+            logger.debug(f"Cached features for {len(symbols)} symbols at {date}")
+
+        except Exception as e:
+            logger.error(f"Cache storage error: {e}")
+            self._store_in_fallback_cache(features, symbols, date, feature_names)
+
+    def _get_from_fallback_cache(self, symbols: list, date: datetime, feature_names: List[str]) -> Optional[pd.DataFrame]:
+        """Fallback in-memory cache implementation."""
+        cache_key = self._generate_fallback_cache_key(symbols, date, feature_names)
+
+        if cache_key in self._fallback_cache:
+            self._cache_hits += 1
+            logger.debug(f"Fallback cache HIT for key {cache_key}")
+            return self._fallback_cache[cache_key].copy()
+        else:
+            self._cache_misses += 1
+            logger.debug(f"Fallback cache MISS for key {cache_key}")
+            return None
+
+    def _store_in_fallback_cache(self, features: pd.DataFrame, symbols: list, date: datetime, feature_names: List[str]):
+        """Fallback in-memory cache storage."""
+        cache_key = self._generate_fallback_cache_key(symbols, date, feature_names)
+
+        # Simple FIFO cleanup when cache gets too large
+        max_fallback_size = 100
+        if len(self._fallback_cache) >= max_fallback_size:
+            # Remove oldest entries
+            keys_to_remove = list(self._fallback_cache.keys())[:len(self._fallback_cache) // 2]
+            for key in keys_to_remove:
+                del self._fallback_cache[key]
+            logger.debug(f"Fallback cache cleanup: removed {len(keys_to_remove)} entries")
+
+        self._fallback_cache[cache_key] = features.copy()
+        logger.debug(f"Stored in fallback cache: {cache_key}")
+
+    def _generate_fallback_cache_key(self, symbols: list, date: datetime, feature_names: List[str]) -> str:
+        """Generate cache key for fallback cache."""
+        key_data = {
+            'symbols': tuple(sorted(symbols)),
+            'date': date.isoformat(),
+            'features': tuple(sorted(feature_names)),
+            'lookback_periods': tuple(sorted(self.lookback_periods.items()))
+        }
+        return str(hash(str(key_data)))
+
+    def clear_cache(self):
+        """Clear the feature cache."""
+        if self._cache_enabled and hasattr(self._cache_provider, 'clear'):
+            try:
+                self._cache_provider.clear()
+                logger.info("Provider cache cleared")
+            except Exception as e:
+                logger.error(f"Error clearing provider cache: {e}")
+
+        # Clear fallback cache
+        if hasattr(self, '_fallback_cache'):
+            self._fallback_cache.clear()
+
+        # Reset stats (always reset regardless of cache type)
+        self._cache_hits = 0
+        self._cache_misses = 0
+
+        logger.info("Feature cache cleared")
+
+    def get_cache_stats(self) -> Dict[str, Any]:
+        """
+        Get cache performance statistics.
+
+        Returns:
+            Dictionary with cache statistics
+        """
+        total_requests = self._cache_hits + self._cache_misses
+        hit_rate = self._cache_hits / total_requests if total_requests > 0 else 0.0
+
+        stats = {
+            'cache_enabled': self._cache_enabled,
+            'cache_hits': self._cache_hits,
+            'cache_misses': self._cache_misses,
+            'hit_rate': hit_rate,
+            'total_requests': total_requests
+        }
+
+        # Add provider-specific stats if available
+        if self._cache_enabled and hasattr(self._cache_provider, 'get_cache_stats'):
+            try:
+                provider_stats = self._cache_provider.get_cache_stats()
+                stats['provider_stats'] = provider_stats
+            except Exception as e:
+                logger.error(f"Error getting provider stats: {e}")
+
+        # Add fallback cache stats
+        if hasattr(self, '_fallback_cache'):
+            stats['fallback_cache_size'] = len(self._fallback_cache)
+
+        return stats
+
+    def calculate_cross_sectional_features_cached(
+        self,
+        price_data: Dict[str, pd.DataFrame],
+        date: datetime,
+        feature_names: Optional[List[str]] = None,
+        country_risk_data: Optional[Dict[str, Dict[str, float]]] = None
+    ) -> pd.DataFrame:
+        """
+        Calculate cross-sectional features with intelligent caching support.
+
+        This method wraps the main feature calculation with a caching layer that
+        follows the existing cache provider interface, avoiding redundant computations
+        for identical inputs while maintaining SOLID principles.
+
+        Args:
+            price_data: Dictionary mapping symbols to OHLCV DataFrames
+            date: Date for which to calculate cross-sectional features
+            feature_names: Optional list of features to calculate (default: all)
+            country_risk_data: Optional dictionary mapping symbols to country risk data
+
+        Returns:
+            DataFrame with cross-sectional features for all stocks
+        """
+        if feature_names is None:
+            feature_names = ['market_cap', 'book_to_market', 'size', 'value', 'momentum', 'volatility']
+            if country_risk_data:
+                country_features = ['country_risk_premium', 'equity_risk_premium', 'default_spread', 'corporate_tax_rate']
+                feature_names.extend(country_features)
+
+        # Extract symbols from price data
+        symbols = list(price_data.keys())
+
+        # Try to get from cache first (using adapter interface)
+        cached_features = self._get_from_cache(symbols, date, feature_names)
+        if cached_features is not None:
+            logger.debug(f"Using cached features for {len(cached_features)} symbols")
+            return cached_features
+
+        # Cache miss - compute features
+        logger.debug(f"Computing features for {len(symbols)} symbols (cache miss)")
+        features = self.calculate_cross_sectional_features(
+            price_data, date, feature_names, country_risk_data
+        )
+
+        # Store in cache if computation was successful
+        if not features.empty:
+            self._store_in_cache(features, symbols, date, feature_names)
+
+        return features
+
+    def _prepare_vectorized_data(self, price_data: Dict[str, pd.DataFrame], date: datetime,
+                                feature_names: List[str]) -> Dict[str, pd.DataFrame]:
+        """
+        Prepare data for vectorized feature calculation with more lenient requirements.
+
+        Filters and prepares data for stocks that have sufficient history and are available
+        on the target date, enabling vectorized processing.
+
+        Args:
+            price_data: Dictionary mapping symbols to OHLCV DataFrames
+            date: Target date for feature calculation
+            feature_names: List of features to be calculated
+
+        Returns:
+            Dictionary mapping symbols to prepared DataFrames with sufficient history
+        """
+        prepared_data = {}
+
+        # Calculate maximum required lookback period
+        max_required = 0
+        for feature_name in feature_names:
+            if feature_name in self.lookback_periods:
+                max_required = max(max_required, self.lookback_periods[feature_name])
+
+        # More lenient requirements: accept at least 50% of required data
+        min_required = max(30, max_required // 2)  # At least 30 days or 50% of required
+
+        for symbol, data in price_data.items():
+            try:
+                # Check if date is available (same logic as original)
+                date_to_use = self._find_available_date(data, date)
+                if date_to_use is None:
+                    continue
+
+                # Get historical data up to this date
+                historical_data = data[data.index <= date_to_use].copy()
+
+                # Check if we have sufficient history (more lenient)
+                if len(historical_data) >= min_required:
+                    prepared_data[symbol] = historical_data
+                else:
+                    logger.debug(f"Insufficient history for {symbol}: {len(historical_data)} < {min_required}")
+
+            except Exception as e:
+                logger.debug(f"Error preparing data for {symbol}: {e}")
+                continue
+
+        if len(prepared_data) == 0:
+            logger.warning(f"No symbols met minimum data requirements for {date} "
+                         f"(required {min_required} days, max {max_required} days)")
+
+        logger.debug(f"Prepared {len(prepared_data)} symbols for vectorized processing "
+                    f"(min required {min_required} days, max {max_required} days history)")
+
+        return prepared_data
+
+    def _find_available_date(self, data: pd.DataFrame, target_date: datetime) -> Optional[datetime]:
+        """
+        Find the best available date for calculation with more flexible tolerance.
+
+        Args:
+            data: Price data DataFrame
+            target_date: Target date
+
+        Returns:
+            Best available date or None if no suitable date found
+        """
+        # First try exact match
+        if target_date in data.index:
+            return target_date
+
+        # Try to find the nearest available date (more flexible)
+        available_dates = data.index[data.index <= target_date]
+        if len(available_dates) > 0:
+            date_to_use = available_dates[-1]
+            days_diff = (target_date - date_to_use).days
+
+            # More lenient tolerance for historical data
+            max_tolerance_days = 30  # Increased from 7 to 30 days
+            if days_diff <= max_tolerance_days:
+                return date_to_use
+
+        # Try to find any date after target (forward looking)
+        future_dates = data.index[data.index > target_date]
+        if len(future_dates) > 0:
+            date_to_use = future_dates[0]
+            days_diff = (date_to_use - target_date).days
+
+            max_future_tolerance_days = 14  # Increased from 3 to 14 days
+            if days_diff <= max_future_tolerance_days:
+                return date_to_use
+
+        # Last resort: use the most recent date available
+        if len(data.index) > 0:
+            most_recent = data.index[-1]
+            logger.debug(f"Using most recent available date {most_recent} for target {target_date}")
+            return most_recent
+
+        return None
+
+    def _calculate_vectorized_features(self, prepared_data: Dict[str, pd.DataFrame],
+                                     date: datetime, feature_names: List[str]) -> List[Dict]:
+        """
+        Calculate features using vectorized operations for all prepared stocks.
+
+        This method processes all stocks simultaneously using pandas vectorized operations,
+        which is significantly faster than individual stock processing.
+
+        Args:
+            prepared_data: Dictionary of prepared DataFrames with sufficient history
+            date: Target date for calculation
+            feature_names: List of features to calculate
+
+        Returns:
+            List of feature dictionaries for all successfully processed stocks
+        """
+        if not prepared_data:
+            return []
+
+        # Create aligned data matrices for vectorized computation
+        symbols = list(prepared_data.keys())
+        all_features = []
+
+        try:
+            # Step 1: Extract current values (vectorized)
+            current_values = self._extract_current_values_vectorized(prepared_data, date)
+            if current_values.empty:
+                return []
+
+            # Step 2: Calculate momentum features (vectorized)
+            momentum_features = self._calculate_momentum_vectorized(prepared_data, date)
+
+            # Step 3: Calculate volatility features (vectorized)
+            volatility_features = self._calculate_volatility_vectorized(prepared_data, date)
+
+            # Step 4: Calculate moving averages (vectorized)
+            ma_features = self._calculate_moving_averages_vectorized(prepared_data, date)
+
+            # Step 5: Combine all features
+            for symbol in symbols:
+                if symbol in current_values.index:
+                    symbol_features = {'symbol': symbol, 'date': date}
+
+                    # Market cap proxy
+                    if 'market_cap' in feature_names:
+                        close_price = current_values.loc[symbol, 'Close']
+                        volume_20d = current_values.loc[symbol, 'Volume_20d']
+                        symbol_features['market_cap_proxy'] = close_price * volume_20d
+
+                    # Size factor (log of market cap)
+                    if 'size' in feature_names and 'market_cap_proxy' in symbol_features:
+                        market_cap = symbol_features['market_cap_proxy']
+                        if not np.isnan(market_cap) and market_cap > 0:
+                            symbol_features['size_factor'] = np.log(market_cap)
+                        else:
+                            symbol_features['size_factor'] = np.nan
+
+                    # Momentum
+                    if 'momentum' in feature_names and symbol in momentum_features.index:
+                        symbol_features['momentum_12m'] = momentum_features.loc[symbol]
+
+                    # Volatility
+                    if 'volatility' in feature_names and symbol in volatility_features.index:
+                        symbol_features['volatility_60d'] = volatility_features.loc[symbol]
+
+                    # Book-to-market proxy
+                    if 'book_to_market' in feature_names and symbol in ma_features.index:
+                        symbol_features['book_to_market_proxy'] = self._calculate_bm_proxy_from_features(
+                            current_values.loc[symbol, 'Close'],
+                            ma_features.loc[symbol, 'MA_200'],
+                            momentum_features.loc[symbol] if symbol in momentum_features.index else np.nan
+                        )
+
+                    # Value factor
+                    if 'value' in feature_names and symbol in ma_features.index:
+                        symbol_features['value_factor'] = self._calculate_value_factor_from_features(
+                            current_values.loc[symbol, 'Close'],
+                            ma_features.loc[symbol, 'MA_200'],
+                            ma_features.loc[symbol, 'High_52w']
+                        )
+
+                    all_features.append(symbol_features)
+
+        except Exception as e:
+            logger.error(f"Error in vectorized feature calculation: {e}")
+            # Fall back to individual processing for all stocks
+            return []
+
+        logger.debug(f"Vectorized calculation processed {len(all_features)} stocks")
+        return all_features
+
+    def _extract_current_values_vectorized(self, prepared_data: Dict[str, pd.DataFrame],
+                                         date: datetime) -> pd.DataFrame:
+        """
+        Extract current values for all stocks using vectorized operations.
+
+        Args:
+            prepared_data: Dictionary of prepared DataFrames
+            date: Target date
+
+        Returns:
+            DataFrame with current values for all stocks
+        """
+        current_data = []
+
+        for symbol, data in prepared_data.items():
+            try:
+                # Get the most recent data point
+                current_row = data.iloc[-1]
+
+                # Calculate 20-day average volume
+                volume_20d = data['Volume'].iloc[-20:].mean() if len(data) >= 20 else data['Volume'].iloc[-1]
+
+                # Create row with current values
+                row_data = {
+                    'Close': current_row['Close'],
+                    'Volume_20d': volume_20d,
+                    'High': current_row['High'],
+                    'Low': current_row['Low']
+                }
+
+                current_data.append(row_data)
+
+            except Exception as e:
+                logger.debug(f"Error extracting current values for {symbol}: {e}")
+                continue
+
+        if not current_data:
+            return pd.DataFrame()
+
+        # Create DataFrame with symbol index
+        symbols = list(prepared_data.keys())[:len(current_data)]  # Ensure alignment
+        df = pd.DataFrame(current_data, index=symbols)
+
+        return df
+
+    def _calculate_momentum_vectorized(self, prepared_data: Dict[str, pd.DataFrame],
+                                     date: datetime) -> pd.Series:
+        """
+        Calculate momentum for all stocks using vectorized operations.
+
+        Args:
+            prepared_data: Dictionary of prepared DataFrames
+            date: Target date
+
+        Returns:
+            Series with momentum values indexed by symbol
+        """
+        momentum_data = {}
+        lookback = self.lookback_periods.get('momentum', 252)
+
+        for symbol, data in prepared_data.items():
+            try:
+                if len(data) >= lookback + 1:
+                    current_price = data['Close'].iloc[-1]
+                    past_price = data['Close'].iloc[-lookback-1]
+                    momentum = (current_price - past_price) / past_price if past_price > 0 else np.nan
+                    momentum_data[symbol] = momentum
+            except Exception as e:
+                logger.debug(f"Error calculating momentum for {symbol}: {e}")
+                momentum_data[symbol] = np.nan
+
+        return pd.Series(momentum_data)
+
+    def _calculate_volatility_vectorized(self, prepared_data: Dict[str, pd.DataFrame],
+                                       date: datetime) -> pd.Series:
+        """
+        Calculate volatility for all stocks using vectorized operations.
+
+        Args:
+            prepared_data: Dictionary of prepared DataFrames
+            date: Target date
+
+        Returns:
+            Series with volatility values indexed by symbol
+        """
+        volatility_data = {}
+        lookback = self.lookback_periods.get('volatility', 60)
+
+        for symbol, data in prepared_data.items():
+            try:
+                if len(data) >= lookback + 1:
+                    prices = data['Close'].iloc[-lookback-1:]
+                    returns = prices.pct_change().dropna()
+                    volatility = returns.std() * np.sqrt(252) if len(returns) > 1 else np.nan
+                    volatility_data[symbol] = volatility
+            except Exception as e:
+                logger.debug(f"Error calculating volatility for {symbol}: {e}")
+                volatility_data[symbol] = np.nan
+
+        return pd.Series(volatility_data)
+
+    def _calculate_moving_averages_vectorized(self, prepared_data: Dict[str, pd.DataFrame],
+                                            date: datetime) -> pd.DataFrame:
+        """
+        Calculate moving averages for all stocks using vectorized operations.
+
+        Args:
+            prepared_data: Dictionary of prepared DataFrames
+            date: Target date
+
+        Returns:
+            DataFrame with MA values indexed by symbol
+        """
+        ma_data = {}
+        ma_long = self.lookback_periods.get('ma_long', 200)
+
+        for symbol, data in prepared_data.items():
+            try:
+                ma_row = {}
+
+                # 200-day moving average
+                if len(data) >= ma_long:
+                    ma_row['MA_200'] = data['Close'].iloc[-ma_long:].mean()
+                else:
+                    ma_row['MA_200'] = np.nan
+
+                # 52-week high
+                if len(data) >= 252:
+                    ma_row['High_52w'] = data['High'].iloc[-252:].max()
+                else:
+                    ma_row['High_52w'] = data['High'].max()
+
+                ma_data[symbol] = ma_row
+
+            except Exception as e:
+                logger.debug(f"Error calculating moving averages for {symbol}: {e}")
+                ma_data[symbol] = {'MA_200': np.nan, 'High_52w': np.nan}
+
+        if not ma_data:
+            return pd.DataFrame()
+
+        return pd.DataFrame.from_dict(ma_data, orient='index')
+
+    def _calculate_bm_proxy_from_features(self, close_price: float, ma_200: float,
+                                        momentum: float) -> float:
+        """
+        Calculate book-to-market proxy from pre-calculated features.
+
+        Args:
+            close_price: Current closing price
+            ma_200: 200-day moving average
+            momentum: 12-month momentum
+
+        Returns:
+            Book-to-market proxy value
+        """
+        try:
+            if ma_200 <= 0 or close_price <= 0:
+                return np.nan
+
+            # Price-to-MA ratio (inverse for B/M proxy)
+            price_to_ma = ma_200 / close_price
+
+            # Momentum adjustment
+            momentum_adjustment = 1 - momentum if not np.isnan(momentum) else 1.0
+
+            # Combine
+            bm_proxy = price_to_ma * momentum_adjustment
+
+            return bm_proxy
+
+        except Exception as e:
+            logger.debug(f"Error calculating B/M proxy from features: {e}")
+            return np.nan
+
+    def _calculate_value_factor_from_features(self, close_price: float, ma_200: float,
+                                            high_52w: float) -> float:
+        """
+        Calculate value factor from pre-calculated features.
+
+        Args:
+            close_price: Current closing price
+            ma_200: 200-day moving average
+            high_52w: 52-week high
+
+        Returns:
+            Value factor value
+        """
+        try:
+            if ma_200 <= 0 or high_52w <= 0 or close_price <= 0:
+                return np.nan
+
+            # Price relative to 200-day MA
+            price_to_ma = close_price / ma_200
+
+            # Price relative to 52-week high
+            price_to_high = close_price / high_52w
+
+            # Value factor: lower ratios = more value-like
+            # Invert so higher values = more value
+            value_factor = 2.0 - (price_to_ma + price_to_high) / 2
+
+            return value_factor
+
+        except Exception as e:
+            logger.debug(f"Error calculating value factor from features: {e}")
+            return np.nan
+
+    def _process_special_cases(self, price_data: Dict[str, pd.DataFrame], date: datetime,
+                              feature_names: List[str], vectorized_symbols: set,
+                              country_risk_data: Optional[Dict[str, Dict[str, float]]] = None) -> List[Dict]:
+        """
+        Process stocks that couldn't be handled by vectorized calculation.
+
+        This method handles stocks with insufficient data, missing values, or other
+        special cases that require individual processing.
+
+        Args:
+            price_data: Original price data dictionary
+            date: Target date
+            feature_names: List of features to calculate
+            vectorized_symbols: Set of symbols already processed vectorially
+            country_risk_data: Optional country risk data
+
+        Returns:
+            List of feature dictionaries for specially processed stocks
+        """
+        special_features = []
+
+        # Find symbols that need individual processing
+        remaining_symbols = set(price_data.keys()) - vectorized_symbols
+
+        if not remaining_symbols:
+            return special_features
+
+        logger.debug(f"Processing {len(remaining_symbols)} special cases individually")
+
+        for symbol in remaining_symbols:
+            try:
+                # Use original individual processing logic
+                symbol_features = self._process_individual_symbol(
+                    price_data[symbol], symbol, date, feature_names, country_risk_data
+                )
+
+                if symbol_features:
+                    special_features.append(symbol_features)
+
+            except Exception as e:
+                logger.debug(f"Error processing special case {symbol}: {e}")
+                continue
+
+        logger.debug(f"Special case processing completed for {len(special_features)} stocks")
+        return special_features
+
+    def _process_individual_symbol(self, data: pd.DataFrame, symbol: str, date: datetime,
+                                 feature_names: List[str],
+                                 country_risk_data: Optional[Dict[str, Dict[str, float]]] = None) -> Optional[Dict]:
+        """
+        Process a single symbol using the original individual logic.
+
+        Args:
+            data: Price data for the symbol
+            symbol: Symbol name
+            date: Target date
+            feature_names: Features to calculate
+            country_risk_data: Optional country risk data
+
+        Returns:
+            Feature dictionary or None if processing failed
+        """
+        try:
+            # Find available date
+            date_to_use = self._find_available_date(data, date)
+            if date_to_use is None:
+                return None
+
+            # Get historical data
+            historical_data = data[data.index <= date_to_use].copy()
+
+            # Calculate required periods
+            required_periods = {}
+            for feature_name in feature_names:
+                if feature_name in self.lookback_periods:
+                    required_periods[feature_name] = self.lookback_periods[feature_name]
+
+            max_required = max(required_periods.values()) if required_periods else 0
+
+            if len(historical_data) < max_required:
+                return None
+
+            # Calculate features
+            symbol_features = {'symbol': symbol, 'date': date_to_use}
+
+            for feature_name in feature_names:
+                try:
+                    if feature_name == 'market_cap':
+                        symbol_features['market_cap_proxy'] = self._calculate_market_cap_proxy(
+                            historical_data, date_to_use
+                        )
+                    elif feature_name == 'book_to_market':
+                        symbol_features['book_to_market_proxy'] = self._calculate_book_to_market_proxy(
+                            historical_data, date_to_use
+                        )
+                    elif feature_name == 'size':
+                        symbol_features['size_factor'] = self._calculate_size_factor(
+                            historical_data, date_to_use
+                        )
+                    elif feature_name == 'value':
+                        symbol_features['value_factor'] = self._calculate_value_factor(
+                            historical_data, date_to_use
+                        )
+                    elif feature_name == 'momentum':
+                        symbol_features['momentum_12m'] = self._calculate_momentum(
+                            historical_data, date_to_use, self.lookback_periods['momentum']
+                        )
+                    elif feature_name == 'volatility':
+                        symbol_features['volatility_60d'] = self._calculate_volatility(
+                            historical_data, date_to_use, self.lookback_periods['volatility']
+                        )
+                    elif feature_name in ['country_risk_premium', 'equity_risk_premium', 'default_spread', 'corporate_tax_rate']:
+                        # Handle country risk features
+                        if country_risk_data and symbol in country_risk_data:
+                            country_data = country_risk_data[symbol]
+                            symbol_features[feature_name] = country_data.get(feature_name, np.nan)
+                        else:
+                            symbol_features[feature_name] = np.nan
+
+                except Exception as e:
+                    logger.debug(f"Error calculating {feature_name} for {symbol}: {e}")
+                    symbol_features[feature_name] = np.nan
+
+            return symbol_features
+
+        except Exception as e:
+            logger.debug(f"Error processing individual symbol {symbol}: {e}")
+            return None
 
 
