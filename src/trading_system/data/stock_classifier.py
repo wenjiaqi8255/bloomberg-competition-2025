@@ -303,7 +303,29 @@ class StockClassifier(ClassificationProvider):
             # Get market data as of classification date
             data_up_to_date = price_data[price_data.index <= as_of_date]
             if len(data_up_to_date) < 20:  # Need minimum data
-                return None
+                # Try to fetch more data if current data is insufficient
+                logger.debug(f"Insufficient data for {symbol} ({len(data_up_to_date)} < 20), fetching more...")
+                try:
+                    more_data = self.yfinance_provider.get_historical_data(
+                        [symbol],
+                        start_date=as_of_date - timedelta(days=365),
+                        end_date=as_of_date
+                    )
+                    if symbol in more_data and more_data[symbol] is not None:
+                        price_data = more_data[symbol]
+                        data_up_to_date = price_data[price_data.index <= as_of_date]
+                        logger.debug(f"Fetched {len(data_up_to_date)} rows for {symbol}")
+                    else:
+                        logger.warning(f"Could not fetch additional data for {symbol}")
+                        return None
+                except Exception as e:
+                    logger.warning(f"Failed to fetch more data for {symbol}: {e}")
+                    return None
+
+                # Still insufficient after retry
+                if len(data_up_to_date) < 20:
+                    logger.warning(f"Still insufficient data for {symbol} after retry: {len(data_up_to_date)} < 20")
+                    return None
 
             # 1. Classify by Size (market capitalization)
             size_category, market_cap = self._classify_by_size(symbol, data_up_to_date)

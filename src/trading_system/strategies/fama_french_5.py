@@ -269,9 +269,26 @@ class FamaFrench5Strategy(BaseStrategy):
         try:
             logger.info(f"[{self.name}] 🔍 _get_predictions started (FF5 batch mode)")
             logger.info(f"[{self.name}] Features shape: {features.shape}, columns: {list(features.columns[:10])}...")
+            logger.info(f"[{self.name}] Full feature columns: {list(features.columns)}")
             logger.info(f"[{self.name}] Price data keys: {list(price_data.keys())}")
             logger.info(f"[{self.name}] Date range: {start_date} to {end_date}")
             logger.info(f"[{self.name}] Model predictor type: {type(self.model_predictor)}")
+
+            # CRITICAL: Check if FF5 factors are present in features
+            expected_factors = ['MKT', 'SMB', 'HML', 'RMW', 'CMA']
+            available_factors = [col for col in features.columns if col in expected_factors]
+            missing_factors = set(expected_factors) - set(available_factors)
+
+            logger.info(f"[{self.name}] FF5 FACTOR ANALYSIS:")
+            logger.info(f"[{self.name}] Expected factors: {expected_factors}")
+            logger.info(f"[{self.name}] Available factors: {available_factors}")
+            logger.info(f"[{self.name}] Missing factors: {list(missing_factors)}")
+
+            if missing_factors:
+                logger.error(f"[{self.name}] ❌ CRITICAL: Missing FF5 factors - predictions will be zero!")
+                return pd.DataFrame()
+            else:
+                logger.info(f"[{self.name}] ✅ All FF5 factors present - proceeding with predictions")
 
             # Create date range for predictions
             dates = pd.date_range(start=start_date, end=end_date, freq='D')
@@ -286,22 +303,53 @@ class FamaFrench5Strategy(BaseStrategy):
             # FF5-optimized single loop over dates
             for date in dates:
                 try:
-                    logger.debug(f"[{self.name}] Processing date {date}...")
+                    logger.info(f"[{self.name}] 🎯 Processing date {date}...")
 
                     # Extract FF5 factor values for this date (shared by all symbols)
                     date_factors = self._extract_date_factors(features, date)
 
                     if date_factors.empty:
-                        logger.warning(f"[{self.name}] No FF5 factors found for {date}")
+                        logger.error(f"[{self.name}] ❌ No FF5 factors found for {date} - this will cause zero predictions!")
+                        logger.error(f"[{self.name}] Features available for this date:")
+                        if isinstance(features.index, pd.MultiIndex):
+                            try:
+                                date_features = features.xs(date, level='date')
+                                logger.error(f"[{self.name}]   Shape: {date_features.shape}")
+                                logger.error(f"[{self.name}]   Columns: {list(date_features.columns)}")
+                            except:
+                                logger.error(f"[{self.name}]   Could not extract features for this date")
+                        else:
+                            logger.error(f"[{self.name}]   Date in features index: {date in features.index}")
+
                         # Create zero predictions for all symbols
                         date_predictions = pd.Series([0.0] * len(symbols), index=symbols)
+                        logger.warning(f"[{self.name}] ⚠️ Created ZERO predictions for all {len(symbols)} symbols")
                     else:
-                        logger.debug(f"[{self.name}] Extracted FF5 factors for {date}: shape={date_factors.shape}")
+                        logger.info(f"[{self.name}] ✅ Extracted FF5 factors for {date}:")
+                        logger.info(f"[{self.name}]   Shape: {date_factors.shape}")
+                        logger.info(f"[{self.name}]   Columns: {list(date_factors.columns)}")
+                        logger.info(f"[{self.name}]   Values: {date_factors.iloc[0].to_dict()}")
+
+                        # Check model predictor state
+                        logger.info(f"[{self.name}] Model predictor state:")
+                        logger.info(f"[{self.name}]   Has model: {hasattr(self.model_predictor, 'model')}")
+                        if hasattr(self.model_predictor, 'model') and self.model_predictor.model is not None:
+                            logger.info(f"[{self.name}]   Model type: {type(self.model_predictor.model)}")
+                            if hasattr(self.model_predictor.model, 'coef_'):
+                                coef = self.model_predictor.model.coef_
+                                logger.info(f"[{self.name}]   Model coefficients: {coef}")
+                                if len(coef) == len(available_factors):
+                                    logger.info(f"[{self.name}]   ✅ Coefficients match factors")
+                                    # Calculate expected prediction manually
+                                    manual_prediction = sum(coef[i] * date_factors.iloc[0][available_factors[i]] for i in range(len(coef)))
+                                    logger.info(f"[{self.name}]   Manual calculation: {manual_prediction:.6f}")
+                                else:
+                                    logger.warning(f"[{self.name}]   ⚠️ Coefficient count mismatch: {len(coef)} vs {len(available_factors)}")
 
                         # Batch predict all symbols for this date
                         if hasattr(self.model_predictor, 'predict_batch'):
                             # Use new batch prediction if available
-                            logger.debug(f"[{self.name}] Using FF5 batch prediction for {len(symbols)} symbols")
+                            logger.info(f"[{self.name}] Using FF5 batch prediction for {len(symbols)} symbols")
                             date_predictions = self.model_predictor.predict_batch(
                                 factors=date_factors,
                                 symbols=symbols,
@@ -309,15 +357,25 @@ class FamaFrench5Strategy(BaseStrategy):
                             )
                         else:
                             # Fallback to FF5 iterative prediction
-                            logger.debug(f"[{self.name}] Using FF5 iterative prediction for {len(symbols)} symbols")
+                            logger.info(f"[{self.name}] Using FF5 iterative prediction for {len(symbols)} symbols")
                             date_predictions = self._predict_iterative(date_factors, symbols, date)
+
+                        logger.info(f"[{self.name}] Prediction results for {date}:")
+                        logger.info(f"[{self.name}]   Type: {type(date_predictions)}")
+                        if isinstance(date_predictions, pd.Series):
+                            logger.info(f"[{self.name}]   Shape: {date_predictions.shape}")
+                            logger.info(f"[{self.name}]   Non-zero count: {(date_predictions != 0).sum()}")
+                            logger.info(f"[{self.name}]   Range: {date_predictions.min():.6f} to {date_predictions.max():.6f}")
+                            logger.info(f"[{self.name}]   Sample values: {date_predictions.head().to_dict()}")
 
                     # Store predictions for this date
                     predictions_dict[date] = date_predictions
-                    logger.debug(f"[{self.name}] Generated FF5 predictions for {date}: {date_predictions.shape}")
+                    logger.debug(f"[{self.name}] Stored FF5 predictions for {date}")
 
                 except Exception as e:
                     logger.error(f"[{self.name}] Failed to get FF5 predictions for {date}: {e}")
+                    import traceback
+                    logger.error(f"[{self.name}] Traceback: {traceback.format_exc()}")
                     # Create zero predictions for this date
                     predictions_dict[date] = pd.Series([0.0] * len(symbols), index=symbols)
 
@@ -332,11 +390,25 @@ class FamaFrench5Strategy(BaseStrategy):
 
             # Log sample predictions to verify they're not all the same
             if not predictions_df.empty:
-                logger.info(f"[{self.name}] 📈 Sample FF5 predictions:")
+                logger.info(f"[{self.name}] 📈 FINAL FF5 PREDICTIONS ANALYSIS:")
                 logger.info(f"[{self.name}]   First date ({predictions_df.index[0]}): {predictions_df.iloc[0].to_dict()}")
                 if len(predictions_df) > 1:
                     logger.info(f"[{self.name}]   Last date ({predictions_df.index[-1]}): {predictions_df.iloc[-1].to_dict()}")
-                logger.info(f"[{self.name}]   Prediction variance: {predictions_df.var().to_dict()}")
+
+                # Overall statistics
+                all_values = predictions_df.values.flatten()
+                non_zero_count = (all_values != 0).sum()
+                logger.info(f"[{self.name}]   Total values: {len(all_values)}")
+                logger.info(f"[{self.name}]   Non-zero values: {non_zero_count}")
+                logger.info(f"[{self.name}]   Zero ratio: {(len(all_values) - non_zero_count) / len(all_values):.2%}")
+
+                if non_zero_count > 0:
+                    non_zero_values = all_values[all_values != 0]
+                    logger.info(f"[{self.name}]   Value range: {non_zero_values.min():.6f} to {non_zero_values.max():.6f}")
+                    logger.info(f"[{self.name}]   Value mean: {non_zero_values.mean():.6f}")
+                    logger.info(f"[{self.name}]   Prediction variance: {predictions_df.var().mean():.6f}")
+                else:
+                    logger.error(f"[{self.name}]   ❌ ALL PREDICTIONS ARE ZERO!")
 
             return predictions_df
 
@@ -372,16 +444,57 @@ class FamaFrench5Strategy(BaseStrategy):
                 logger.warning(f"[{self.name}] No FF5 factor columns found in features. Available: {list(features.columns)}")
                 return pd.DataFrame(columns=factor_cols)
 
+            # CRITICAL FIX: Handle date mismatch - find the most recent available date
+            target_date = date
+            available_dates = []
+
             if not isinstance(features.index, pd.MultiIndex):
-                # If not MultiIndex, try to find the date in index
-                if date in features.index:
+                # Simple index case
+                available_dates = features.index.tolist()
+            else:
+                # MultiIndex case - extract unique dates
+                if 'date' in features.index.names:
+                    available_dates = features.index.get_level_values('date').unique().tolist()
+                elif 'symbol' in features.index.names and len(features.index.names) == 2:
+                    # Might be (symbol, date) format
+                    available_dates = features.index.get_level_values(1).unique().tolist()
+
+            # Convert to datetime for comparison
+            available_dates = [pd.to_datetime(d) for d in available_dates]
+            available_dates = sorted(available_dates)
+
+            logger.info(f"[{self.name}] Date extraction analysis:")
+            logger.info(f"[{self.name}]   Requested date: {target_date}")
+            logger.info(f"[{self.name}]   Available date range: {available_dates[0]} to {available_dates[-1]}")
+            logger.info(f"[{self.name}]   Total available dates: {len(available_dates)}")
+
+            # Find the most recent date on or before the target date
+            best_date = None
+            for avail_date in reversed(available_dates):
+                if avail_date <= target_date:
+                    best_date = avail_date
+                    break
+
+            if best_date is None:
+                logger.error(f"[{self.name}] No available date on or before {target_date}")
+                return pd.DataFrame(columns=factor_cols)
+
+            if best_date != target_date:
+                logger.warning(f"[{self.name}] Date mismatch: using {best_date} instead of {target_date}")
+                logger.info(f"[{self.name}] This is normal for weekends/holidays when factor data isn't updated")
+
+            target_date = best_date  # Use the best available date
+
+            if not isinstance(features.index, pd.MultiIndex):
+                # If not MultiIndex, use the best_date directly
+                if target_date in features.index:
                     return pd.DataFrame(
-                        [features.loc[date, available_factor_cols].values],
+                        [features.loc[target_date, available_factor_cols].values],
                         columns=available_factor_cols,
-                        index=[date]
+                        index=[date]  # Return original requested date for consistency
                     )
                 else:
-                    logger.warning(f"[{self.name}] Date {date} not found in features index")
+                    logger.warning(f"[{self.name}] Date {target_date} not found in features index")
                     return pd.DataFrame(columns=available_factor_cols)
 
             # Handle MultiIndex structure
@@ -391,7 +504,7 @@ class FamaFrench5Strategy(BaseStrategy):
                 # Panel data format (date, symbol) or (symbol, date)
                 try:
                     # Extract data for this specific date
-                    date_data = features.xs(date, level='date')
+                    date_data = features.xs(target_date, level='date')
 
                     # Get FF5 factor values for any symbol (they should be the same)
                     if not date_data.empty:
@@ -399,18 +512,19 @@ class FamaFrench5Strategy(BaseStrategy):
                         first_symbol = date_data.index[0]
                         factor_values = date_data.loc[first_symbol, available_factor_cols]
 
-                        # Return as DataFrame
+                        # Return as DataFrame with original requested date
                         result = pd.DataFrame([factor_values.values],
                                                 columns=available_factor_cols,
-                                                index=[date])
-                        logger.debug(f"[{self.name}] Extracted FF5 factors for {date}: {result.to_dict('records')[0]}")
+                                                index=[date])  # Original requested date
+                        logger.info(f"[{self.name}] ✅ Extracted FF5 factors for requested {date} (using data from {target_date})")
+                        logger.debug(f"[{self.name}] Factor values: {result.to_dict('records')[0]}")
                         return result
                     else:
-                        logger.warning(f"[{self.name}] No data found for date {date}")
+                        logger.warning(f"[{self.name}] No data found for date {target_date}")
                         return pd.DataFrame(columns=available_factor_cols)
 
                 except Exception as e:
-                    logger.error(f"[{self.name}] Failed to extract FF5 factors for {date}: {e}")
+                    logger.error(f"[{self.name}] Failed to extract FF5 factors for {target_date}: {e}")
                     return pd.DataFrame(columns=available_factor_cols)
             else:
                 # Unknown index structure

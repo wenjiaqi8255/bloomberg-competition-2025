@@ -13,12 +13,12 @@ Key Design Principles:
 """
 
 from .base_model import BaseModel, ModelMetadata, ModelStatus
-from .model_factory import ModelFactory, ModelRegistry
+from .model_factory import ModelFactory, ModelTypeRegistry
 
 __all__ = [
     'BaseModel',
     'ModelMetadata',
     'ModelStatus',
     'ModelFactory',
-    'ModelRegistry'
+    'ModelTypeRegistry'
 ]

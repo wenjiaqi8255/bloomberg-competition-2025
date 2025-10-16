@@ -72,7 +72,7 @@ class MultiModelOrchestrator:
     def run_complete_experiment(self) -> Dict[str, Any]:
         """
         Run the complete multi-model experiment workflow.
-        
+
         Returns:
             Comprehensive results dictionary containing all experiment outcomes
         """
@@ -80,8 +80,12 @@ class MultiModelOrchestrator:
         logger.info("="*60)
         logger.info("STARTING MULTI-MODEL EXPERIMENT")
         logger.info("="*60)
-        
+
         try:
+            # Step 0: Validate overall data quality before training
+            logger.info("STEP 0: Validating overall data quality")
+            self._validate_data_quality()
+
             # Step 1: Train and backtest each base model with HPO
             logger.info("STEP 1: Training base models with HPO")
             self._train_base_models()
@@ -135,12 +139,114 @@ class MultiModelOrchestrator:
         """Create factor data provider from configuration."""
         provider_type = config.get('type')
         params = config.get('parameters', {})
-        
+
         if provider_type == "FF5DataProvider":
             from src.trading_system.data.ff5_provider import FF5DataProvider
             return FF5DataProvider(**params)
         else:
             return None  # Allow no factor data provider
+
+    def _validate_data_quality(self):
+        """
+        Validate overall data quality across all requested stocks before training.
+
+        This method checks:
+        1. Data availability for all stocks in the universe
+        2. Data quality metrics
+        3. Overall success rate meets minimum requirements
+
+        Raises:
+            ValueError: If data quality is insufficient for reliable training
+        """
+        logger.info("🔍 Validating overall data quality across all stocks...")
+
+        # Get universe and training period from config
+        universe = self.config.get('universe', [])
+        training_period = self.config.get('periods', {}).get('train', {})
+
+        if not universe:
+            raise ValueError("No universe defined in configuration")
+
+        if not training_period.get('start') or not training_period.get('end'):
+            raise ValueError("No training period defined in configuration")
+
+        logger.info(f"Validating data for {len(universe)} stocks")
+        logger.info(f"Training period: {training_period.get('start')} to {training_period.get('end')}")
+
+        # Get data quality configuration
+        validation_config = self.config.get('advanced', {}).get('validation', {})
+        min_success_rate = validation_config.get('min_data_success_rate', 0.8)  # Default: 80% of stocks must have data
+        min_absolute_stocks = validation_config.get('min_absolute_stocks', 10)  # Default: At least 10 stocks
+
+        try:
+            # Test data availability across all stocks
+            logger.info("Testing data availability across universe...")
+            available_data = self.data_provider.get_historical_data(
+                symbols=universe,
+                start_date=training_period.get('start'),
+                end_date=training_period.get('end')
+            )
+
+            # Calculate data quality metrics
+            requested_count = len(universe)
+            successful_count = len(available_data)
+            failed_count = requested_count - successful_count
+            success_rate = successful_count / requested_count if requested_count > 0 else 0
+            failed_symbols = [symbol for symbol in universe if symbol not in available_data]
+
+            # Create data quality report
+            data_quality_report = {
+                'requested_stocks': requested_count,
+                'successful_stocks': successful_count,
+                'failed_stocks': failed_count,
+                'success_rate': success_rate,
+                'failed_symbols': failed_symbols,
+                'successful_symbols': list(available_data.keys())
+            }
+
+            logger.info("📊 Data Quality Report:")
+            logger.info(f"  Requested stocks: {requested_count}")
+            logger.info(f"  Successful stocks: {successful_count}")
+            logger.info(f"  Failed stocks: {failed_count}")
+            logger.info(f"  Success rate: {success_rate:.1%}")
+
+            if failed_symbols:
+                logger.warning(f"  Failed symbols: {failed_symbols}")
+
+            # Validate against minimum requirements
+            meets_success_rate = success_rate >= min_success_rate
+            meets_absolute_count = successful_count >= min_absolute_stocks
+            overall_valid = meets_success_rate and meets_absolute_count
+
+            if not overall_valid:
+                error_messages = []
+                if not meets_success_rate:
+                    error_messages.append(
+                        f"Success rate {success_rate:.1%} below minimum {min_success_rate:.1%}"
+                    )
+                if not meets_absolute_count:
+                    error_messages.append(
+                        f"Successful stocks {successful_count} below minimum {min_absolute_stocks}"
+                    )
+
+                error_msg = "Data quality validation failed: " + "; ".join(error_messages)
+                logger.error(f"❌ {error_msg}")
+                raise ValueError(error_msg)
+
+            logger.info(f"✅ Data quality validation passed: {successful_count}/{requested_count} stocks available")
+
+            # Store data quality report for later reference
+            self.data_quality_report = data_quality_report
+
+            # Log successful stocks for debugging
+            logger.info(f"✅ Successfully validated data for {len(available_data)} stocks:")
+            for symbol in sorted(available_data.keys()):
+                data_points = len(available_data[symbol])
+                logger.debug(f"  {symbol}: {data_points} data points")
+
+        except Exception as e:
+            logger.error(f"❌ Data quality validation failed with error: {e}")
+            raise ValueError(f"Cannot proceed with experiment due to data quality issues: {e}")
 
     def _train_base_models(self):
         """

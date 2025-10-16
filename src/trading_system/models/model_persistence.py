@@ -93,6 +93,15 @@ class ModelRegistry:
 
                 model_metadata = convert_numpy(model_metadata)
 
+            # Extract actual training stocks from tags or model metadata
+            actual_training_stocks = []
+            if tags and 'symbols' in tags:
+                actual_training_stocks = tags['symbols']
+            elif tags and 'actual_training_stocks' in tags:
+                actual_training_stocks = tags['actual_training_stocks']
+            elif model_metadata and 'tags' in model_metadata and 'symbols' in model_metadata['tags']:
+                actual_training_stocks = model_metadata['tags']['symbols']
+
             metadata = {
                 "model_id": model_id,
                 "model_name": model_name,
@@ -101,7 +110,13 @@ class ModelRegistry:
                 "model_path": str(model_path.relative_to(self.storage_path)),
                 "artifact_paths": artifact_paths,
                 "tags": tags or {},
-                "model_metadata": model_metadata  # **新增：包含模型的完整元数据**
+                "model_metadata": model_metadata,  # 包含模型的完整元数据
+                "actual_training_stocks": actual_training_stocks,  # 新增：实际训练的股票列表
+                "data_quality_report": {
+                    "requested_stocks": len(tags.get('symbols', actual_training_stocks)),
+                    "successful_stocks": len(actual_training_stocks),
+                    "failed_stocks": len(tags.get('symbols', actual_training_stocks)) - len(actual_training_stocks)
+                }
             }
             metadata_path = model_dir / "metadata.json"
             with open(metadata_path, 'w') as f:

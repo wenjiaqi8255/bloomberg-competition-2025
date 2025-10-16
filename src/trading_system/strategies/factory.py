@@ -55,7 +55,9 @@ class StrategyFactory:
     _strategy_registry = {
         'ml': MLStrategy,  # Use multi-stock version for better compatibility
         'dual_momentum': DualMomentumStrategy,
+        'fama_macbeth': MLStrategy,  # Fama-MacBeth uses ML strategy with custom features
         'fama_french_5': FamaFrench5Strategy,
+        'ff5_regression': FamaFrench5Strategy,  # Map ff5_regression model to FF5 strategy
     }
     
     @classmethod
@@ -65,7 +67,7 @@ class StrategyFactory:
         
         Args:
             config: Strategy configuration with:
-                - type: Strategy type ('ml', 'dual_momentum', 'fama_french_5')
+                - type: Strategy type ('ml', 'dual_momentum', 'fama_french_5', 'ff5_regression')
                 - name: Strategy name
                 - model_id: Model identifier (e.g., 'random_forest_v1')
                 - feature_config: Optional feature pipeline config
@@ -116,8 +118,24 @@ class StrategyFactory:
             logger.debug(f"✓ Feature pipeline type: {type(feature_pipeline)}")
             logger.debug(f"✓ Feature pipeline fitted: {getattr(feature_pipeline, '_is_fitted', 'Unknown')}")
         else:
-            logger.warning("⚠ Creating new FeatureEngineeringPipeline from config (no fitted pipeline provided)")
-            feature_pipeline = cls._create_feature_pipeline(strategy_type, config)
+            # Check if config requests using fitted pipeline from model
+            use_fitted_pipeline = config.get('use_fitted_pipeline', False)
+            model_id = config.get('model_id')
+            model_registry_path = config.get('model_registry_path', './models/')
+
+            if use_fitted_pipeline and model_id:
+                logger.info(f"✓ Loading fitted FeatureEngineeringPipeline from model '{model_id}'")
+                feature_pipeline = cls._load_fitted_pipeline_from_model(
+                    model_id, model_registry_path
+                )
+                if feature_pipeline is not None:
+                    logger.info("✓ Successfully loaded fitted FeatureEngineeringPipeline from model")
+                else:
+                    logger.warning("⚠ Failed to load fitted pipeline from model, creating new one from config")
+                    feature_pipeline = cls._create_feature_pipeline(strategy_type, config)
+            else:
+                logger.warning("⚠ Creating new FeatureEngineeringPipeline from config (no fitted pipeline provided)")
+                feature_pipeline = cls._create_feature_pipeline(strategy_type, config)
         
         # Step 2: Create ModelPredictor, passing along any extra context like providers
         model_predictor = cls._create_model_predictor(model_id, config, **kwargs)
@@ -188,26 +206,45 @@ class StrategyFactory:
         return stock_classifier, None  # Return None for allocator since it's deprecated
 
     @classmethod
-    def _create_feature_pipeline(cls, 
-                                 strategy_type: str, 
+    def _create_feature_pipeline(cls,
+                                 strategy_type: str,
                                  config: Dict[str, Any]) -> FeatureEngineeringPipeline:
         """
-        Create feature pipeline based on strategy type.
-        
+        Create feature pipeline based on strategy type with model-specific configuration support.
+
         Different strategies need different features:
         - ML: Comprehensive features (momentum, volatility, technical, volume, etc.)
         - Dual Momentum: Only momentum features
-        - Fama-French: Factor features (or proxies)
+        - Fama-MacBeth: Cross-sectional features only
+        - FF5: Factor features only (from factor data provider)
+
+        Priority order for feature configuration:
+        1. Model-specific feature_config in config (highest priority)
+        2. Strategy type defaults (fallback)
         """
-        # Check if custom feature config provided
+        # Check if custom feature config provided (highest priority)
         if 'feature_config' in config:
-            logger.debug("Using custom feature configuration")
-            feature_config = FeatureConfig(**config['feature_config'])
-            return FeatureEngineeringPipeline(feature_config)
-        
+            logger.info(f"Using model-specific feature configuration for {strategy_type}")
+            feature_config_dict = config['feature_config']
+
+            # Ensure essential defaults for FF5 models
+            if strategy_type in ['fama_french_5', 'ff5_regression']:
+                # Force FF5 models to only use factor data
+                feature_config_dict = {
+                    'enabled_features': [],  # No technical features
+                    'include_technical': False,
+                    'include_cross_sectional': False,
+                    'include_theoretical': False,
+                    **feature_config_dict  # Allow overrides but ensure FF5 basics
+                }
+                logger.info(f"FF5 Strategy: Enforced factor-only config (factors come from factor data provider)")
+
+            feature_config = FeatureConfig(**feature_config_dict)
+            return FeatureEngineeringPipeline(feature_config, model_type=strategy_type)
+
         # Create default feature config based on strategy type
         logger.debug(f"Creating default feature pipeline for {strategy_type}")
-        
+
         if strategy_type == 'ml':
             # ML strategies: comprehensive features
             feature_config = FeatureConfig(
@@ -219,7 +256,7 @@ class StrategyFactory:
                 min_ic_threshold=0.02,
                 min_significance=0.1
             )
-            
+
         elif strategy_type == 'dual_momentum':
             # Dual momentum: only momentum features
             lookback = config.get('lookback_period', 252)
@@ -228,21 +265,41 @@ class StrategyFactory:
                 momentum_periods=[21, 63, lookback],
                 include_technical=False
             )
-            
-        elif strategy_type in ['fama_french_5']:
-            # Fama-French: NO technical features needed!
-            # FF5 model uses factor data directly, not technical indicators
+
+        elif strategy_type == 'fama_macbeth':
+            # Fama-MacBeth: cross-sectional features only
+            feature_config = FeatureConfig(
+                enabled_features=['cross_sectional'],
+                include_cross_sectional=True,
+                include_technical=False,
+                include_theoretical=False,
+                # Use default cross-sectional settings
+                cross_sectional_features=['market_cap', 'book_to_market', 'size', 'value', 'momentum', 'volatility'],
+                cross_sectional_lookback={
+                    'momentum': 252,
+                    'volatility': 60,
+                    'ma_long': 200,
+                    'ma_short': 50
+                },
+                winsorize_percentile=0.01
+            )
+
+        elif strategy_type in ['fama_french_5', 'ff5_regression']:
+            # Fama-French: NO technical or cross-sectional features needed!
+            # FF5 model uses factor data directly from factor data provider
             logger.info("FF5 Strategy: Using minimal feature config (factors come from factor data provider)")
             feature_config = FeatureConfig(
                 enabled_features=[],  # No technical features for FF5
-                include_technical=False
+                include_cross_sectional=False,  # Explicitly disable cross-sectional
+                include_technical=False,
+                include_theoretical=False
             )
-            
+
         else:
             # Default: balanced feature set
             feature_config = FeatureConfig()
-        
-        return FeatureEngineeringPipeline(feature_config)
+
+        return FeatureEngineeringPipeline(feature_config, model_type=strategy_type)
     
     @classmethod
     def _create_model_predictor(cls,
@@ -312,23 +369,36 @@ class StrategyFactory:
         
         # Mode 3: Create new model instance from factory (for rule-based or fresh models)
         logger.info(f"Mode 3: Creating new model instance from factory")
-        
+
         # Use the inferred type to handle versioned model_ids like 'ff5_regression_v1.2'
         model_type_to_create = cls._infer_model_type(model_id)
-        
+
         if ModelFactory.is_registered(model_type_to_create):
-            logger.info(f"Creating model '{model_type_to_create}' with config: {model_config}")
-            model = ModelFactory.create(model_type_to_create, config=model_config)
-            
+            # Special handling for ensemble models - pass ensemble configuration
+            if model_type_to_create == 'ensemble':
+                # Extract ensemble-specific parameters from config['parameters']
+                parameters = config.get('parameters', {})
+                ensemble_config = {
+                    'base_model_ids': parameters.get('base_model_ids', []),
+                    'model_weights': parameters.get('model_weights', {}),
+                    'model_registry_path': parameters.get('model_registry_path', './models/'),
+                    'combination_method': parameters.get('combination_method', 'weighted_average')
+                }
+                logger.info(f"Creating ensemble model with config: {ensemble_config}")
+                model = ModelFactory.create(model_type_to_create, config=ensemble_config)
+            else:
+                logger.info(f"Creating model '{model_type_to_create}' with config: {model_config}")
+                model = ModelFactory.create(model_type_to_create, config=model_config)
+
             logger.info(f"Model '{model_type_to_create}' created (status: {model.status})")
-            
+
             # Create predictor with direct model injection
             predictor = ModelPredictor(
                 model_instance=model,
                 model_registry_path=model_registry_path or './models',
                 **predictor_kwargs
             )
-            
+
             logger.info(f"✓ Model '{model_type_to_create}' created and injected into predictor")
             return predictor
         else:
@@ -414,13 +484,58 @@ class StrategyFactory:
         elif strategy_type == 'dual_momentum':
             params['lookback_period'] = config.get('lookback_period', 252)
             
-        elif strategy_type in ['fama_french_5']:
+        elif strategy_type in ['fama_french_5', 'ff5_regression']:
             params['lookback_days'] = config.get('lookback_days', 252)
             params['risk_free_rate'] = config.get('risk_free_rate', 0.02)
         
         return params
 
-    
+    @classmethod
+    def _load_fitted_pipeline_from_model(cls, model_id: str, model_registry_path: str):
+        """
+        Load the fitted feature pipeline from a saved model.
+
+        This method:
+        1. Creates a temporary ModelPredictor to load the model
+        2. Extracts the fitted feature pipeline from the model
+        3. Returns the pipeline for reuse in strategy creation
+
+        Args:
+            model_id: Model ID to load
+            model_registry_path: Path to model registry
+
+        Returns:
+            Fitted FeatureEngineeringPipeline or None if not found
+        """
+        try:
+            from ..models.serving.predictor import ModelPredictor
+            from ..models.model_persistence import ModelRegistry
+
+            # Create ModelPredictor to load the model
+            temp_predictor = ModelPredictor(model_registry_path=model_registry_path)
+            temp_predictor.load_model(model_id)
+
+            # Get the loaded model
+            model = temp_predictor.get_current_model()
+            if model is None:
+                logger.error(f"Failed to load model '{model_id}'")
+                return None
+
+            # Extract fitted feature pipeline from model
+            if hasattr(model, 'feature_pipeline'):
+                fitted_pipeline = model.feature_pipeline
+                logger.info(f"✅ Extracted fitted feature pipeline from model '{model_id}'")
+                logger.info(f"✅ Pipeline type: {type(fitted_pipeline)}")
+                logger.info(f"✅ Pipeline fitted: {getattr(fitted_pipeline, '_is_fitted', 'Unknown')}")
+                return fitted_pipeline
+            else:
+                logger.warning(f"⚠ Model '{model_id}' does not have a fitted feature pipeline")
+                return None
+
+        except Exception as e:
+            logger.error(f"❌ Failed to load fitted pipeline from model '{model_id}': {e}")
+            return None
+
 
 # TODO: REQUIRED FOR FULL FUNCTIONALITY
 # --------------------------------------

@@ -37,29 +37,38 @@ class ModelConfigGenerator:
     def generate_for_model(self, model_config: Dict[str, Any]) -> Dict[str, Any]:
         """
         Generate a complete experiment configuration for a single model.
-        
+
         Args:
             model_config: Model-specific configuration containing model_type, parameters, etc.
-            
+
         Returns:
             Complete experiment configuration dictionary
         """
         logger.debug(f"Generating config for model: {model_config.get('model_type', 'unknown')}")
-        
+
         # Start with a deep copy of the base config
         exp_config = copy.deepcopy(self.base_config)
-        
+
+        # DEBUG: Log critical provider configs before removal
+        logger.info(f"🔧 DEBUG: Original data_provider config: {exp_config.get('data_provider', 'NOT_FOUND')}")
+        logger.info(f"🔧 DEBUG: Original factor_data_provider config: {exp_config.get('factor_data_provider', 'NOT_FOUND')}")
+
         # Remove multi-model specific sections
         exp_config.pop('base_models', None)
         exp_config.pop('metamodel', None)
         exp_config.pop('fail_fast', None)
-        
+
         # Create training_setup section
         exp_config['training_setup'] = self._create_training_setup(model_config)
-        
+
+        # DEBUG: Log final provider configs in generated config
+        logger.info(f"🔧 DEBUG: Generated config data_provider: {exp_config.get('data_provider', 'NOT_FOUND')}")
+        logger.info(f"🔧 DEBUG: Generated config factor_data_provider: {exp_config.get('factor_data_provider', 'NOT_FOUND')}")
+        logger.info(f"🔧 DEBUG: Generated config sections: {list(exp_config.keys())}")
+
         # Ensure all required sections exist
         self._validate_required_sections(exp_config)
-        
+
         logger.debug(f"Generated config for {model_config.get('model_type')} with {len(exp_config)} sections")
         return exp_config
 
@@ -82,18 +91,29 @@ class ModelConfigGenerator:
         hpo_metric = model_config.get('hpo_metric', 'sharpe_ratio')
 
         # Extract model parameters (excluding HPO-specific ones)
-        model_parameters = {k: v for k, v in model_config.get('parameters', {}).items()}
+        model_parameters = {k: v for k, v in model_config.get('config', {}).items()}
 
         # Get periods and universe from base config
         periods = self.base_config.get('periods', {})
         universe = self.base_config.get('universe', [])
+
+        # Determine feature engineering configuration
+        # Priority: model-specific > global default
+        if 'feature_config' in model_config:
+            # Use model-specific feature configuration
+            feature_config = model_config['feature_config']
+            logger.info(f"Using model-specific feature config for {model_type}")
+        else:
+            # Use global feature engineering configuration as fallback
+            feature_config = self.base_config.get('feature_engineering', {})
+            logger.debug(f"Using global feature config for {model_type}")
 
         training_setup = {
             'model': {
                 'model_type': model_type,
                 **model_parameters
             },
-            'feature_engineering': self.base_config.get('feature_engineering', {}),
+            'feature_engineering': feature_config,
             'hyperparameter_optimization': {
                 'enabled': True,
                 'n_trials': hpo_trials,
@@ -152,22 +172,39 @@ class ModelConfigGenerator:
     def save_config_to_file(self, config: Dict[str, Any], file_path: str) -> str:
         """
         Save configuration to a YAML file.
-        
+
         Args:
             config: Configuration dictionary
             file_path: Path where to save the configuration
-            
+
         Returns:
             Path to the saved file
         """
         import yaml
-        
+
         path = Path(file_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        
+
+        # DEBUG: Log key configurations before saving
+        logger.info(f"🔧 DEBUG: Saving config to {path}")
+        logger.info(f"🔧 DEBUG: Config has data_provider: {'data_provider' in config}")
+        logger.info(f"🔧 DEBUG: Config has factor_data_provider: {'factor_data_provider' in config}")
+        if 'factor_data_provider' in config:
+            logger.info(f"🔧 DEBUG: Factor provider config: {config['factor_data_provider']}")
+
         with open(path, 'w') as f:
             yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-        
+
+        # DEBUG: Verify saved file content
+        try:
+            with open(path, 'r') as f:
+                saved_content = yaml.safe_load(f)
+            logger.info(f"🔧 DEBUG: Verified saved file has factor_data_provider: {'factor_data_provider' in saved_content}")
+            if 'factor_data_provider' in saved_content:
+                logger.info(f"🔧 DEBUG: Saved factor provider config: {saved_content['factor_data_provider']}")
+        except Exception as e:
+            logger.error(f"🔧 DEBUG: Failed to verify saved config: {e}")
+
         logger.debug(f"Saved configuration to {path}")
         return str(path)
 

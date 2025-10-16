@@ -1,0 +1,99 @@
+# Prediction Configuration - Quantitative Portfolio Construction
+# ======================================================
+# Configuration for generating investment predictions using quantitative portfolio construction.
+
+# Prediction settings
+prediction:
+  prediction_date: "2024-01-15"  # Date to make predictions for
+
+# Strategy configuration (determines which model type)
+strategy:
+  type: "ml"  # Options: 'fama_french_5', 'ml', 'meta'
+  name: "ML_Prediction_Strategy_Quantitative"
+
+  # For single model strategies (ff5, ml)
+  parameters:
+    model_id: "xgboost_20251015_161916"  # Trained model ID
+    model_registry_path: "./models/"
+    lookback_days: 252
+    min_signal_strength: 0.00001
+    enable_normalization: true
+    normalization_method: "minmax"
+    enable_short_selling: false
+
+# Data configuration - reuse from MultiModelOrchestrator pattern
+data_provider:
+  type: "YFinanceProvider"
+  parameters:
+    max_retries: 3
+    retry_delay: 1.0
+
+# Factor data provider (not needed for ML models)
+# factor_data_provider:
+
+# Universe configuration
+universe:
+  symbols:
+    - AAPL
+    - MSFT
+    - GOOGL
+    - AMZN
+    - META
+    - TSLA
+    - NVDA
+    - JPM
+    - V
+    - WMT
+    - JNJ
+    - PG
+    - UNH
+    - HD
+    - MA
+    - DIS
+    - PYPL
+    - ADBE
+    - CRM
+    - NFLX
+
+# Portfolio construction - Quantitative Method
+portfolio_construction:
+  method: "quantitative"  # Use quantitative construction
+
+  # Universe size for quantitative optimization
+  universe_size: 20
+
+  # Optimizer configuration
+  optimizer:
+    method: "mean_variance"  # Mean-variance optimization
+    risk_aversion: 1.0  # Risk aversion parameter
+
+  # Maximum and minimum position weights
+  max_weight: 0.15
+  min_weight: 0.02
+
+  # Covariance matrix estimation
+  covariance:
+    lookback_days: 252  # Use 1 year of data for covariance
+    method: "ledoit_wolf"  # Ledoit-Wolf shrinkage estimator
+    shrinkage: 0.1
+
+  # Additional constraints
+  enable_short_selling: false
+  sector_diversification: false
+
+# Risk constraints
+constraints:
+  max_position_weight: 0.15  # Maximum weight for any single position
+  min_position_weight: 0.02  # Minimum weight threshold
+  max_leverage: 1.0  # Maximum total portfolio leverage
+  max_portfolio_risk: 0.20  # Maximum portfolio volatility
+  sector_diversification: false  # Disable sector diversification for simplicity
+
+# Output configuration
+output:
+  format: "detailed"  # Options: 'simple', 'detailed', 'comparison'
+  include_risk_analysis: true
+  include_sector_analysis: false  # Simplified for quantitative
+  include_box_analysis: false  # Not applicable for quantitative
+  save_results: true
+  output_path: "./prediction_results_quantitative/"

@@ -49,6 +49,7 @@ class MLStrategy(BaseStrategy):
                  model_predictor: ModelPredictor,
                  universe: List[str],  # Trading universe (subset of model stocks)
                  model_training_stocks: Optional[List[str]] = None,  # Auto-detected if None
+                 available_universe: Optional[List[str]] = None,  # Actually available stocks
                  min_signal_strength: float = 0.1,
                  **kwargs):
         """
@@ -60,6 +61,7 @@ class MLStrategy(BaseStrategy):
             model_predictor: Predictor with ML model loaded
             universe: The list of symbols this strategy actually trades
             model_training_stocks: All stocks the model was trained on (auto-detected if None)
+            available_universe: Actually available stocks (overrides auto-detection if provided)
             min_signal_strength: Minimum signal strength to act on
             **kwargs: Additional parameters
         """
@@ -74,21 +76,54 @@ class MLStrategy(BaseStrategy):
         self.universe = universe
         self.min_signal_strength = min_signal_strength
 
-        # Auto-detect model training stocks if not provided
-        if model_training_stocks is None:
+        # Set minimum stocks requirement
+        self.minimum_stocks = kwargs.get('minimum_stocks', 10)  # Default minimum 10 stocks
+
+        # Use available universe if provided, otherwise auto-detect model training stocks
+        if available_universe is not None:
+            self.model_training_stocks = available_universe
+            logger.info(f"📊 STRATEGY INITIALIZATION:")
+            logger.info(f"  Using provided available universe: {available_universe}")
+        elif model_training_stocks is not None:
+            self.model_training_stocks = model_training_stocks
+            logger.info(f"📊 STRATEGY INITIALIZATION:")
+            logger.info(f"  Using provided model training stocks: {model_training_stocks}")
+        else:
             self.model_training_stocks = self._detect_model_training_stocks()
             # If detection fails, provide a default based on the model we know about
             if not self.model_training_stocks:
                 logger.warning("Model training stock detection failed, using default stocks")
                 self.model_training_stocks = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'TSLA', 'NVDA', 'JPM', 'V', 'WMT']
-        else:
-            self.model_training_stocks = model_training_stocks
 
-        logger.info(f"MultiStockMLStrategy '{name}' initialized:")
-        logger.info(f"  - Trading universe: {universe}")
-        logger.info(f"  - Model training stocks: {self.model_training_stocks}")
-        logger.info(f"  - Min signal strength: {min_signal_strength}")
-        logger.info(f"  - Will fetch data for {len(self.model_training_stocks)} stocks to ensure model compatibility")
+        logger.info("="*60)
+        logger.info(f"🤖 MULTI-STOCK ML STRATEGY INITIALIZED: {name}")
+        logger.info("="*60)
+        logger.info(f"📊 Configuration Summary:")
+        logger.info(f"  • Trading universe: {len(universe)} stocks: {universe}")
+        logger.info(f"  • Model training stocks: {len(self.model_training_stocks)} stocks")
+        logger.info(f"  • Minimum stocks required: {self.minimum_stocks}")
+        logger.info(f"  • Min signal strength: {min_signal_strength}")
+        logger.info(f"  • Data will be fetched for {len(self.model_training_stocks)} stocks to ensure model compatibility")
+
+        # Show which training stocks are also in trading universe
+        trading_overlap = set(universe) & set(self.model_training_stocks)
+        non_training_stocks = set(universe) - set(self.model_training_stocks)
+
+        logger.info(f"📈 Trading Strategy Details:")
+        logger.info(f"  • Stocks in both training and trading: {len(trading_overlap)}: {sorted(trading_overlap)}")
+        if non_training_stocks:
+            logger.info(f"  • Trading stocks not in training: {len(non_training_stocks)}: {sorted(non_training_stocks)}")
+
+        # Validate minimum stocks requirement
+        logger.info(f"🔍 Validating minimum stocks requirement...")
+        validation_result = self._validate_minimum_stocks()
+
+        if validation_result:
+            logger.info(f"✅ Strategy validation passed - ready for trading")
+        else:
+            logger.error(f"❌ Strategy validation failed - cannot operate reliably")
+
+        logger.info("="*60)
 
     def _detect_model_training_stocks(self) -> List[str]:
         """
@@ -111,18 +146,26 @@ class MLStrategy(BaseStrategy):
                     logger.debug(f"Loaded metadata from {metadata_path}")
                     logger.debug(f"Metadata keys: {list(metadata.keys())}")
 
-                    # Check different possible locations for symbols
-                    symbols = None
+                    # Priority 1: Check for actual_training_stocks (new field)
+                    if 'actual_training_stocks' in metadata:
+                        symbols = metadata['actual_training_stocks']
+                        if symbols and isinstance(symbols, list):
+                            logger.info(f"Using actual training stocks from metadata: {symbols}")
+                            return symbols
+                        elif symbols and isinstance(symbols, str):
+                            result = [s.strip() for s in symbols.split(',')]
+                            logger.info(f"Parsed actual training stocks from metadata: {result}")
+                            return result
 
-                    # Check in tags.symbols (from the metadata structure we saw)
+                    # Priority 2: Check in tags.symbols (from the metadata structure we saw)
                     if 'tags' in metadata and 'symbols' in metadata['tags']:
                         symbols = metadata['tags']['symbols']
 
-                    # Check in metadata directly
+                    # Priority 3: Check in metadata directly
                     elif 'symbols' in metadata:
                         symbols = metadata['symbols']
 
-                    # Check in model_metadata
+                    # Priority 4: Check in model_metadata
                     elif 'model_metadata' in metadata and 'tags' in metadata['model_metadata']:
                         symbols = metadata['model_metadata']['tags'].get('symbols')
 
@@ -166,6 +209,29 @@ class MLStrategy(BaseStrategy):
             logger.warning(f"Could not auto-detect model training stocks: {e}")
             return []
 
+    def _validate_minimum_stocks(self) -> bool:
+        """
+        Validate that the strategy has enough training stocks to operate properly.
+
+        Returns:
+            True if sufficient stocks are available, False otherwise
+        """
+        try:
+            available_count = len(self.model_training_stocks)
+            required_count = self.minimum_stocks
+
+            if available_count < required_count:
+                logger.error(f"[{self.name}] Insufficient training stocks: {available_count} < {required_count}")
+                logger.error(f"[{self.name}] Strategy cannot operate reliably with less than {required_count} stocks")
+                return False
+
+            logger.info(f"[{self.name}] ✅ Minimum stocks requirement met: {available_count} >= {required_count}")
+            return True
+
+        except Exception as e:
+            logger.error(f"[{self.name}] Failed to validate minimum stocks requirement: {e}")
+            return False
+
     def _fetch_additional_stock_data(self,
                                    price_data: Dict[str, pd.DataFrame],
                                    start_date: datetime,
@@ -185,7 +251,7 @@ class MLStrategy(BaseStrategy):
         enhanced_price_data = price_data.copy()
 
         # Find stocks that model needs but aren't provided
-        provided_stocks = set(price_data.keys())
+        provided_stocks = set(enhanced_price_data.keys())
         needed_stocks = set(self.model_training_stocks)
         missing_stocks = needed_stocks - provided_stocks
 
@@ -199,25 +265,21 @@ class MLStrategy(BaseStrategy):
         data_provider = YFinanceProvider()
 
         # Fetch data for missing stocks
-        for symbol in missing_stocks:
-            try:
-                stock_data = data_provider.get_historical_data(
-                    symbols=symbol,
-                    start_date=start_date,
-                    end_date=end_date
-                )
-                # get_historical_data returns a dict, get the DataFrame for this symbol
-                if isinstance(stock_data, dict) and symbol in stock_data:
-                    stock_data = stock_data[symbol]
+        if missing_stocks:
+            logger.info(f"[{self.name}] Attempting to fetch data for {len(missing_stocks)} missing stocks")
+            stock_data_dict = data_provider.get_historical_data(
+                symbols=list(missing_stocks),
+                start_date=start_date,
+                end_date=end_date
+            )
 
-                if not stock_data.empty:
-                    enhanced_price_data[symbol] = stock_data
-                    logger.info(f"[{self.name}] ✅ Fetched {len(stock_data)} rows for {symbol}")
+            # Add fetched data (Data Provider already handles failures internally)
+            for symbol, data in stock_data_dict.items():
+                if not data.empty:
+                    enhanced_price_data[symbol] = data
+                    logger.info(f"[{self.name}] ✅ Fetched {len(data)} rows for {symbol}")
                 else:
-                    logger.warning(f"[{self.name}] ⚠️ No data available for {symbol}")
-
-            except Exception as e:
-                logger.error(f"[{self.name}] ❌ Failed to fetch data for {symbol}: {e}")
+                    logger.warning(f"[{self.name}] ⚠️ Empty data for {symbol}")
 
         # Verify we got data for most training stocks
         final_stocks = set(enhanced_price_data.keys())

@@ -161,10 +161,11 @@ class ExperimentOrchestrator:
         factor_data_provider = None
         factor_data_config = self.full_config.get('factor_data_provider')
         if factor_data_config:
-            logger.info("Creating factor data provider...")
+            logger.info(f"🔧 DEBUG: Creating factor data provider from config: {factor_data_config}")
             factor_data_provider = _create_factor_data_provider(factor_data_config)
+            logger.info(f"🔧 DEBUG: Factor data provider created: {type(factor_data_provider)}")
         else:
-            logger.info("No factor data provider configured")
+            logger.warning("🔧 DEBUG: No factor data provider configured in experiment config")
 
         # Setup FeatureEngineering and Training Pipelines
         model_config = training_setup.get('model', {})
@@ -181,6 +182,9 @@ class ExperimentOrchestrator:
             model_config=model_config,  # Pass model-specific config for LSTM, etc.
             experiment_tracker=training_tracker
         )
+        logger.info(f"🔧 DEBUG: Configuring training pipeline with providers:")
+        logger.info(f"🔧 DEBUG:   data_provider: {type(data_provider)}")
+        logger.info(f"🔧 DEBUG:   factor_data_provider: {type(factor_data_provider) if factor_data_provider else None}")
         train_pipeline.configure_data(data_provider=data_provider, factor_data_provider=factor_data_provider)
         
         logger.info("Executing training pipeline...")
@@ -205,6 +209,9 @@ class ExperimentOrchestrator:
         }
         if factor_data_provider:
             providers['factor_data_provider'] = factor_data_provider
+            logger.info(f"🔧 DEBUG: Added factor_data_provider to backtest providers: {type(factor_data_provider)}")
+        else:
+            logger.warning("🔧 DEBUG: No factor_data_provider to add to backtest providers")
 
         # Load backtest and strategy configs using the factory
         backtest_configs = {
@@ -241,6 +248,24 @@ class ExperimentOrchestrator:
         
         training_symbols = training_params.get('symbols', [])
         if training_symbols:
+            # Phase 2: Check data availability before creating strategy
+            logger.info(f"Checking data availability for {len(training_symbols)} training symbols...")
+            available_data = data_provider.get_historical_data(
+                symbols=training_symbols,
+                start_date=training_params.get('start_date'),
+                end_date=training_params.get('end_date')
+            )
+
+            # Use actually available symbols
+            available_symbols = list(available_data.keys())
+            if len(available_symbols) < len(training_symbols):
+                logger.warning(f"Data availability check: {len(available_symbols)}/{len(training_symbols)} symbols available")
+                logger.info(f"Using available symbols for training: {len(available_symbols)} symbols")
+
+                # Update training_symbols to only include available symbols
+                training_symbols = available_symbols
+                logger.info(f"Updated training universe to {len(training_symbols)} available symbols")
+
             logger.info(f"Injecting training universe ({len(training_symbols)} symbols) into strategy config.")
             # Set universe as both attribute and in parameters dict for compatibility
             backtest_config_objects['strategy'].universe = training_symbols

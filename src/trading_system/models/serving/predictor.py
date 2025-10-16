@@ -246,9 +246,19 @@ class ModelPredictor:
                 
                 if model_dir.is_dir():
                     logger.info(f"Found model directory for '{effective_model_id}'. Loading model and artifacts...")
-                    model = self._load_model_with_artifacts(effective_model_id)
-                    if model is None:
+                    loaded = self.registry.load_model_with_artifacts(effective_model_id)
+                    if loaded is None:
                          raise ModelLoadError(f"Could not load model from ID: {effective_model_id}")
+
+                    model, artifacts = loaded
+                    # Attach feature pipeline if available
+                    if 'feature_pipeline' in artifacts:
+                        model.feature_pipeline = artifacts['feature_pipeline']
+                        # Mark the model as trained since it's loaded from the registry
+                        if hasattr(model, 'is_trained'):
+                            model.is_trained = True
+                        logger.info(f"Attached 'feature_pipeline' artifact to loaded model '{effective_model_id}'.")
+
                     model_id = effective_model_id
                 else:
                     logger.info(f"'{model_name}' not found as a model ID. Assuming it's a model type and creating new instance.")
@@ -267,30 +277,8 @@ class ModelPredictor:
                 logger.error(f"Failed to load or create model '{model_name}': {e}", exc_info=True)
                 raise ModelLoadError(f"Failed to load model {model_name}: {e}")
 
-    def _load_model_with_artifacts(self, model_id: str) -> Optional[BaseModel]:
-        """
-        Loads a model and its artifacts, attaching the feature pipeline to the model object.
-        """
-        loaded = self.registry.load_model_with_artifacts(model_id)
-        if loaded:
-            model, artifacts = loaded
-            if 'feature_pipeline' in artifacts:
-                model.feature_pipeline = artifacts['feature_pipeline']
-                # Mark the model as trained since it's loaded from the registry
-                if hasattr(model, 'is_trained'):
-                    model.is_trained = True
-                logger.info(f"Attached 'feature_pipeline' artifact to loaded model '{model_id}'.")
-            return model
-        logger.warning(f"Loading failed. No model or artifacts found for ID '{model_id}' in registry.")
-        return None
-
-    def _load_model_from_path(self, path: Path) -> BaseModel:
-        """
-        [DEPRECATED] This method is replaced by _load_model_with_artifacts.
-        """
-        logger.warning("Using deprecated _load_model_from_path. The new loader is now ID-based.")
-        return self._load_model_with_artifacts(path.name)
-        
+    
+            
     def get_current_model(self) -> Optional[BaseModel]:
         """
         Get the currently loaded model.

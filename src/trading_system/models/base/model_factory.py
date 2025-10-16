@@ -138,7 +138,7 @@ class ModelFactory:
         return model_type in cls._registry
 
 
-class ModelRegistry:
+class ModelTypeRegistry:
     """
     Registry for managing trained model instances and versions.
 
@@ -195,121 +195,5 @@ class ModelRegistry:
         logger.info(f"Saved model {model_id} to registry")
         return model_id
 
-    def load_model(self, model_id: str) -> BaseModel:
-        """
-        Load a model from the registry.
-
-        Args:
-            model_id: Model ID (name_version)
-
-        Returns:
-            Loaded model instance
-
-        Raises:
-            ValueError: If model is not found
-        """
-        model_path = self.base_path / model_id
-
-        if not model_path.exists():
-            raise ValueError(f"Model not found: {model_id}")
-
-        # Find the model type from metadata
-        metadata_path = model_path / "metadata.json"
-        if not metadata_path.exists():
-            raise ValueError(f"Model metadata not found: {model_id}")
-
-        import json
-        with open(metadata_path, 'r') as f:
-            metadata = json.load(f)
-
-        model_type = metadata['model_type']
-
-        # Get the registered model class
-        if not ModelFactory.is_registered(model_type):
-            raise ValueError(f"Model type {model_type} is not registered")
-
-        registration = ModelFactory._registry[model_type]
-
-        # Load using the model class's load method
-        model = registration.model_class.load(model_path)
-
-        logger.info(f"Loaded model {model_id} from registry")
-        return model
-
-    def list_models(self) -> Dict[str, Dict[str, Any]]:
-        """
-        List all models in the registry.
-
-        Returns:
-            Dictionary of model information
-        """
-        models = {}
-
-        for model_path in self.base_path.iterdir():
-            if model_path.is_dir():
-                model_id = model_path.name
-                metadata_path = model_path / "metadata.json"
-
-                if metadata_path.exists():
-                    try:
-                        with open(metadata_path, 'r') as f:
-                            metadata = json.load(f)
-                        models[model_id] = metadata
-                    except Exception as e:
-                        logger.warning(f"Could not read metadata for {model_id}: {e}")
-
-        return models
-
-    def delete_model(self, model_id: str) -> None:
-        """
-        Delete a model from the registry.
-
-        Args:
-            model_id: Model ID to delete
-
-        Raises:
-            ValueError: If model is not found
-        """
-        model_path = self.base_path / model_id
-
-        if not model_path.exists():
-            raise ValueError(f"Model not found: {model_id}")
-
-        # Remove all files in the model directory
-        import shutil
-        shutil.rmtree(model_path)
-
-        logger.info(f"Deleted model {model_id} from registry")
-
-    def get_latest_version(self, model_name: str) -> Optional[str]:
-        """
-        Get the latest version of a model.
-
-        Args:
-            model_name: Name of the model
-
-        Returns:
-            Latest version string, or None if not found
-        """
-        model_ids = [mid for mid in self.list_models().keys()
-                     if mid.startswith(f"{model_name}_v")]
-
-        if not model_ids:
-            return None
-
-        # Extract versions and find the latest
-        versions = []
-        for mid in model_ids:
-            try:
-                version = mid.split('_v', 1)[1]
-                # Simple version comparison (can be improved)
-                versions.append((version, mid))
-            except IndexError:
-                pass
-
-        if not versions:
-            return None
-
-        # Sort by version (simple string sort)
-        versions.sort()
-        return versions[-1][1]
+  
+    

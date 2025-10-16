@@ -5,7 +5,7 @@ YFinance data provider with retry logic and comprehensive error handling.
 import logging
 import time
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Union, Any
+from typing import Dict, List, Optional, Union, Any, Tuple
 
 import pandas as pd
 import yfinance as yf
@@ -104,7 +104,8 @@ class YFinanceProvider(PriceDataProvider):
             liquidity_config: Liquidity filtering configuration (overrides instance config)
 
         Returns:
-            Dictionary mapping symbols to DataFrames
+            Dictionary mapping successful symbols to their DataFrames
+            (Failed symbols are logged but not returned)
         """
         if end_date is None:
             end_date = datetime.now()
@@ -116,6 +117,7 @@ class YFinanceProvider(PriceDataProvider):
                    f"from {start_date} to {end_date}")
 
         results = {}
+        failed_symbols = []
 
         for symbol in symbols:
             logger.debug(f"Fetching data for {symbol}")
@@ -157,12 +159,51 @@ class YFinanceProvider(PriceDataProvider):
                     logger.info(f"Successfully fetched {len(data)} rows for {symbol}")
                 else:
                     logger.warning(f"No data returned for {symbol}")
+                    failed_symbols.append(symbol)
 
             except Exception as e:
-                logger.error(f"Failed to fetch data for {symbol}: {e}")
+                logger.warning(f"Data unavailable for {symbol}: {e}")
+                failed_symbols.append(symbol)
                 continue
 
-        return results
+        # Log summary of data availability with enhanced data quality reporting
+        success_count = len(results)
+        total_count = len(symbols)
+        success_rate = success_count / total_count if total_count > 0 else 0
+
+        logger.info("="*60)
+        logger.info("📊 DATA QUALITY REPORT")
+        logger.info("="*60)
+        logger.info(f"Total requested symbols: {total_count}")
+        logger.info(f"Successfully fetched: {success_count}")
+        logger.info(f"Failed symbols: {len(failed_symbols)}")
+        logger.info(f"Success rate: {success_rate:.1%}")
+
+        if success_count > 0:
+            logger.info(f"✅ Successfully fetched data for {success_count} symbols:")
+            for symbol in sorted(results.keys()):
+                data_points = len(results[symbol])
+                date_range = f"{results[symbol].index.min().date()} to {results[symbol].index.max().date()}"
+                logger.info(f"  • {symbol}: {data_points} data points ({date_range})")
+
+        if failed_symbols:
+            logger.warning(f"⚠️ Failed to fetch data for {len(failed_symbols)} symbols:")
+            for symbol in sorted(failed_symbols):
+                logger.warning(f"  • {symbol}")
+
+        logger.info("="*60)
+
+        # Provide context about data quality impact
+        if success_rate >= 0.9:
+            logger.info("✅ Excellent data quality - system should perform optimally")
+        elif success_rate >= 0.8:
+            logger.info("✅ Good data quality - system should perform well")
+        elif success_rate >= 0.7:
+            logger.warning("⚠️ Fair data quality - system performance may be impacted")
+        else:
+            logger.warning("⚠️ Poor data quality - system performance will be significantly impacted")
+
+        return results  # Only return successful data, interface stays clean
 
     def get_latest_price(self, symbols: Union[str, List[str]]) -> Dict[str, float]:
         """
@@ -358,7 +399,7 @@ class YFinanceProvider(PriceDataProvider):
     def get_data(self, start_date: Union[str, datetime] = None,
                  end_date: Union[str, datetime] = None,
                  symbols: Union[str, List[str]] = None,
-                 liquidity_config: Optional[Dict[str, Any]] = None) -> Dict[str, pd.DataFrame]:
+                 liquidity_config: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, pd.DataFrame], List[str]]:
         """
         Get historical data for symbols.
 
@@ -369,7 +410,7 @@ class YFinanceProvider(PriceDataProvider):
             liquidity_config: Liquidity filtering configuration (overrides instance config)
 
         Returns:
-            Dictionary mapping symbols to DataFrames
+            Tuple of (successful_data_dict, failed_symbols_list)
         """
         # Use defaults from constructor if not provided
         if symbols is None:
