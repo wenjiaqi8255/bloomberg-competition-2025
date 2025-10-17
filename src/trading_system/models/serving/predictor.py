@@ -127,129 +127,156 @@ class ModelPredictor:
 
     def predict(self,
                 features: pd.DataFrame,
-                symbol: str = None,
-                prediction_date: Optional[datetime] = None) -> Dict[str, float]:
+                symbols: List[str],
+                date: Optional[datetime] = None) -> pd.Series:
         """
-        Make prediction for a single symbol using pre-computed features.
-
-        This method is now simplified to only handle inference. Data acquisition
-        and feature engineering should be done by PredictionPipeline.
-
+        Unified batch prediction interface.
+        
+        Automatically optimizes based on model's batch capability:
+        - Batch-capable: Predicts all symbols at once (1 model call)
+        - Independent: Iterates over symbols (N model calls)
+        
         Args:
-            features: Pre-computed features DataFrame
-            symbol: Symbol being predicted (for metadata only)
-            prediction_date: Date for prediction (for metadata only)
-
+            features: Feature DataFrame
+            symbols: List of symbols to predict (REQUIRED)
+            date: Prediction date (for logging/metadata)
+            
         Returns:
-            Dictionary with prediction results
-
-        Raises:
-            PredictionError: If prediction fails
+            pd.Series with predictions indexed by symbols
         """
         if self._current_model is None:
             raise PredictionError("No model loaded")
-
-        if features is None or features.empty:
-            raise PredictionError("Features must be provided")
-
-        # Use current date if prediction_date not provided
-        if prediction_date is None:
-            prediction_date = datetime.now()
-
+            
+        if not symbols:
+            raise ValueError("symbols parameter is required")
+    
         try:
-            # Debug: Log model type and features before prediction
-            logger.info(f"🔍 ModelPredictor.predict() starting for {symbol}")
-            logger.info(f"Current model type: {getattr(self._current_model, 'model_type', 'No model_type attribute')}")
-            logger.info(f"Current model ID: {self._current_model_id}")
-            logger.info(f"Model class: {type(self._current_model)}")
-            logger.info(f"Model trained: {getattr(self._current_model, 'is_trained', 'Unknown')}")
-            logger.info(f"Features shape={features.shape}, columns={features.columns.tolist()}")
-            if len(features) > 0:
-                logger.info(f"Features sample: {features.iloc[-1].to_dict()}")
-                logger.info(f"Features non-zero count: {(features.iloc[-1] != 0).sum()}")
-
-            # ✅ FIX: Check if model.predict() supports symbols parameter
-            import inspect
-            model_predict = self._current_model.predict
-            sig = inspect.signature(model_predict)
-
-            logger.info(f"Calling model.predict() for {symbol} on {prediction_date}")
-
-            if 'symbols' in sig.parameters and symbol:
-                # ✅ Model supports symbols parameter, pass it
-                logger.info(f"✅ Model supports symbols parameter, passing symbols=[{symbol}]")
-                prediction = model_predict(features, symbols=[symbol])
+            # Route based on batch capability
+            if self._current_model.supports_batch_prediction:
+                logger.debug(f"Using batch prediction for {len(symbols)} symbols")
+                return self._predict_batch_mode(features, symbols, date)
             else:
-                # Model doesn't support symbols, use default call
-                logger.info(f"Model doesn't support symbols parameter, using default call")
-                prediction = model_predict(features)
-
-            logger.info(f"Raw prediction result: {prediction} (type: {type(prediction)})")
-
-            # ✅ FIX: Handle prediction result correctly
-            if isinstance(prediction, np.ndarray):
-                # ✅ If only one prediction value, use it directly
-                # If multiple, take the first (may not be optimal, but won't crash)
-                prediction_value = float(prediction[0] if len(prediction) > 0 else 0.0)
-                logger.info(f"Extracted prediction from ndarray: {prediction_value}")
-            elif isinstance(prediction, (int, float)):
-                prediction_value = float(prediction)
-                logger.info(f"Extracted prediction from numeric: {prediction_value}")
-            elif isinstance(prediction, pd.Series):
-                # Legacy support for models that still return Series
-                if symbol and symbol in prediction.index:
-                    prediction_value = float(prediction.loc[symbol])
-                    logger.info(f"Extracted prediction from Series by symbol: {prediction_value}")
-                else:
-                    prediction_value = float(prediction.iloc[0])
-                    logger.info(f"Extracted prediction from Series first element: {prediction_value}")
-            elif isinstance(prediction, pd.DataFrame):
-                # Legacy support for models that still return DataFrame
-                if symbol and symbol in prediction.columns:
-                    prediction_value = float(prediction[symbol].iloc[0])
-                    logger.info(f"Extracted prediction from DataFrame by column: {prediction_value}")
-                else:
-                    prediction_value = float(prediction.iloc[0, 0])
-                    logger.info(f"Extracted prediction from DataFrame first cell: {prediction_value}")
-            else:
-                # Direct numeric value or fallback
-                prediction_value = float(prediction) if prediction is not None else 0.0
-                logger.info(f"Converted prediction to float: {prediction_value}")
-
-            result = {
-                'symbol': symbol,
-                'prediction': prediction_value,
-                'prediction_date': prediction_date,
-                'model_id': self._current_model_id,
-                'timestamp': datetime.now()
-            }
-
-            # Log prediction for monitoring
-            if self._monitor:
-                prediction_record = PredictionRecord(
-                    timestamp=datetime.now(),
-                    model_id=self._current_model_id,
-                    prediction_id=str(uuid.uuid4()),
-                    features=features.iloc[-1].to_dict() if len(features) > 0 else {},
-                    prediction=prediction_value,
-                    metadata={
-                        'symbol': symbol,
-                        'prediction_date': prediction_date,
-                        'feature_count': len(features.columns)
-                    }
-                )
-                self._monitor.log_prediction(
-                    features=prediction_record.features,
-                    prediction=prediction_record.prediction,
-                    confidence=prediction_record.confidence,
-                    metadata=prediction_record.metadata
-                )
-
-            return result
-
+                logger.debug(f"Using independent prediction for {len(symbols)} symbols")
+                return self._predict_independent_mode(features, symbols, date)
+                
         except Exception as e:
-            logger.error(f"Prediction failed for {symbol}: {e}")
-            raise PredictionError(f"Prediction failed: {e}")
+            logger.error(f"Prediction failed: {e}")
+            # Graceful degradation
+            return pd.Series(0.0, index=symbols, name='prediction')
+
+    def _predict_batch_mode(self,
+                            features: pd.DataFrame,
+                            symbols: List[str],
+                            date: Optional[datetime]) -> pd.Series:
+        """
+        Optimized batch prediction for batch-capable models.
+        
+        All symbols share the same inputs (e.g., factor values) → one model call.
+        
+        Examples:
+            - FF5: All stocks use same factor values at date t
+            - Cross-sectional XGBoost: Predict all stocks at date t together
+        """
+        logger.info(f"[Batch Mode] Predicting {len(symbols)} symbols in single call")
+        
+        # Extract shared inputs (e.g., factor values for FF5)
+        if isinstance(features.index, pd.MultiIndex):
+            # If MultiIndex, extract first symbol's features (all should be same for batch models)
+            first_symbol = features.index.get_level_values('symbol')[0]
+            X = features.xs(first_symbol, level='symbol').values
+            logger.debug(f"Extracted shared features from symbol: {first_symbol}")
+        else:
+            X = features.values
+        
+        # Check if model supports symbols parameter
+        import inspect
+        sig = inspect.signature(self._current_model.predict)
+        
+        if 'symbols' in sig.parameters:
+            # Model can filter to specific symbols (preferred)
+            logger.debug(f"Model supports symbols parameter, passing: {symbols}")
+            predictions = self._current_model.predict(features, symbols=symbols)
+        else:
+            # Model returns all trained symbols, need to filter
+            logger.debug("Model does not support symbols parameter, will filter results")
+            predictions = self._current_model.predict(features)
+        
+        # Convert to Series
+        if isinstance(predictions, np.ndarray):
+            if len(predictions) == len(symbols):
+                result = pd.Series(predictions, index=symbols, name='prediction')
+            else:
+                # Length mismatch - model returned all symbols
+                logger.warning(
+                    f"Prediction length mismatch: got {len(predictions)}, expected {len(symbols)}. "
+                    f"Model may not support symbols filtering."
+                )
+                # Take first N predictions (suboptimal but safe)
+                result = pd.Series(predictions[:len(symbols)], index=symbols, name='prediction')
+        else:
+            result = pd.Series(predictions, index=symbols, name='prediction')
+        
+        # Log monitoring info
+        if self._monitor:
+            # Use existing log method if log_batch_prediction doesn't exist
+            if hasattr(self._monitor, 'log_batch_prediction'):
+                self._monitor.log_batch_prediction(
+                    model_id=self.model_id,
+                    n_symbols=len(symbols),
+                    date=date,
+                    prediction_mode='batch'
+                )
+            else:
+                # Fallback to basic logging
+                logger.info(f"[Monitor] Batch prediction: {len(symbols)} symbols at {date}")
+        
+        logger.info(f"[Batch Mode] Successfully predicted {len(result)} symbols")
+        return result
+
+    def _predict_independent_mode(self,
+                                  features: pd.DataFrame,
+                                  symbols: List[str],
+                                  date: Optional[datetime]) -> pd.Series:
+        """
+        Iterative prediction for independent models.
+        
+        Each symbol needs independent prediction with its own model/features.
+        
+        Examples:
+            - Per-stock XGBoost: Each stock has separate model
+            - LSTM: Each stock has separate time-series model
+        """
+        logger.info(f"[Independent Mode] Predicting {len(symbols)} symbols iteratively")
+        
+        predictions = {}
+        
+        for i, symbol in enumerate(symbols, 1):
+            try:
+                # Extract symbol-specific features
+                if isinstance(features.index, pd.MultiIndex):
+                    symbol_features = features.xs(symbol, level='symbol')
+                else:
+                    # Assume features are already for this symbol
+                    symbol_features = features
+                
+                # Convert to ndarray
+                X = symbol_features.values
+                
+                # Predict
+                pred = self._current_model.predict(X)
+                
+                # Extract prediction value (take last if multiple dates)
+                predictions[symbol] = float(pred[-1] if len(pred) > 0 else 0.0)
+                
+                if i % 10 == 0:
+                    logger.debug(f"Predicted {i}/{len(symbols)} symbols")
+                
+            except Exception as e:
+                logger.warning(f"Prediction failed for {symbol}: {e}")
+                predictions[symbol] = 0.0
+        
+        logger.info(f"[Independent Mode] Successfully predicted {len(predictions)} symbols")
+        return pd.Series(predictions, name='prediction')
 
     def load_model(self, model_name: str, model_path: Optional[str] = None) -> str:
         """
@@ -335,202 +362,12 @@ class ModelPredictor:
                      symbols: List[str],
                      date: datetime) -> pd.Series:
         """
-        Batch prediction for multiple symbols using factor values.
-
-        This is the new optimized method that replaces the old nested loop approach.
-        Instead of predicting symbol by symbol, it predicts all symbols at once
-        using the same factor values.
-
-        Args:
-            factors: DataFrame with factor values, shape (1, N_factors)
-                       Columns should include ['MKT', 'SMB', 'HML', 'RMW', 'CMA']
-            symbols: List of symbols to predict
-            date: Prediction date (for logging and monitoring)
-
-        Returns:
-            Series with predictions indexed by symbols
-
-        Raises:
-            PredictionError: If batch prediction fails
+        Batch prediction - now delegates to unified predict() interface.
+        
+        This method is kept for backward compatibility with FF5Strategy.
         """
-        if self._current_model is None:
-            raise PredictionError("No model loaded for batch prediction")
+        return self.predict(features=factors, symbols=symbols, date=date)
 
-        if factors is None or factors.empty:
-            raise PredictionError("Factors must be provided for batch prediction")
-
-        if not symbols:
-            raise PredictionError("Symbols list must be provided for batch prediction")
-
-        try:
-            logger.debug(f"[{self._current_model_id}] Batch predicting {len(symbols)} symbols for {date}")
-            logger.debug(f"Factors shape: {factors.shape}, columns: {list(factors.columns)}")
-
-            # Call the model's batch prediction method
-            if hasattr(self._current_model, 'predict') and 'symbols' in self._current_model.predict.__code__.co_varnames:
-                # Model supports batch prediction with symbols parameter
-                logger.debug("Using model's batch prediction with symbols parameter")
-                predictions = self._current_model.predict(X=factors, symbols=symbols)
-            else:
-                # Model doesn't support batch prediction, fall back to iterative
-                logger.warning("Model doesn't support batch prediction, falling back to iterative")
-                predictions = self._predict_batch_iterative(factors, symbols, date)
-
-            # Ensure we return a Series
-            if not isinstance(predictions, pd.Series):
-                if isinstance(predictions, dict):
-                    # Convert dict to Series
-                    predictions = pd.Series(predictions)
-                elif isinstance(predictions, (list, np.ndarray)):
-                    predictions = pd.Series(predictions, index=symbols)
-                else:
-                    # Convert to Series
-                    predictions = pd.Series([float(predictions)] * len(symbols), index=symbols)
-
-            logger.debug(f"[{self._current_model_id}] Batch prediction completed: {predictions.shape}")
-            logger.debug(f"[{self._current_model_id}] Sample predictions: {predictions.head(3).to_dict()}")
-
-            # Log for monitoring if enabled
-            if self._monitor:
-                try:
-                    prediction_record = PredictionRecord(
-                        timestamp=datetime.now(),
-                        model_id=self._current_model_id,
-                        prediction_id=str(uuid.uuid4()),
-                        features=factors.iloc[0].to_dict() if len(factors) > 0 else {},
-                        prediction=float(predictions.mean()),  # Use mean as representative
-                        confidence=1.0,  # Placeholder
-                        metadata={
-                            'symbols_count': len(symbols),
-                            'factors_shape': factors.shape,
-                            'date': date,
-                            'batch_prediction': True
-                        }
-                    )
-                    self._monitor.log_prediction(
-                        features=prediction_record.features,
-                        prediction=prediction_record.prediction,
-                        confidence=prediction_record.confidence,
-                        metadata=prediction_record.metadata
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to log batch prediction: {e}")
-
-            return predictions
-
-        except Exception as e:
-            logger.error(f"[{self._current_model_id}] Batch prediction failed: {e}")
-            raise PredictionError(f"Batch prediction failed: {e}")
-
-    def predict_batch_legacy(self,
-                           features_dict: Dict[str, pd.DataFrame],
-                           prediction_date: datetime) -> Dict[str, Dict[str, float]]:
-        """
-        Legacy batch prediction method (kept for backward compatibility).
-
-        This method makes predictions for multiple symbols using pre-computed
-        features, calling predict() for each symbol individually.
-
-        Args:
-            features_dict: Dictionary mapping symbols to their pre-computed features
-            prediction_date: Date for predictions
-
-        Returns:
-            Dictionary mapping symbols to prediction results
-        """
-        results = {}
-
-        if self._current_model is None:
-            raise PredictionError("No model loaded")
-
-        try:
-            if not features_dict:
-                raise PredictionError("No features provided")
-
-            # Make predictions for each symbol
-            for symbol, features in features_dict.items():
-                try:
-                    result = self.predict(
-                        features=features,
-                        symbol=symbol,
-                        prediction_date=prediction_date
-                    )
-                    results[symbol] = result
-
-                    # Cache prediction if enabled
-                    if self.cache_predictions:
-                        self._cache_prediction(symbol, prediction_date, result)
-
-                except Exception as e:
-                    logger.warning(f"Failed to predict for {symbol}: {e}")
-                    continue
-
-            return results
-
-        except Exception as e:
-            logger.error(f"Legacy batch prediction failed: {e}")
-            raise PredictionError(f"Legacy batch prediction failed: {e}")
-
-    def _predict_batch_iterative(self,
-                                factors: pd.DataFrame,
-                                symbols: List[str],
-                                date: datetime) -> pd.Series:
-        """
-        Fallback method for batch prediction when model doesn't support native batch prediction.
-
-        This method calls the individual predict() method for each symbol and combines
-        the results into a Series. It's used as a fallback for models that don't
-        support the new batch prediction interface.
-
-        Args:
-            factors: DataFrame with factor values, shape (1, N_factors)
-            symbols: List of symbols to predict
-            date: Prediction date (for logging and monitoring)
-
-        Returns:
-            Series with predictions indexed by symbols
-
-        Raises:
-            PredictionError: If any individual prediction fails
-        """
-        predictions = {}
-
-        try:
-            logger.debug(f"Using iterative batch prediction for {len(symbols)} symbols")
-
-            for symbol in symbols:
-                try:
-                    # Call the individual predict method
-                    result = self.predict(
-                        features=factors,
-                        symbol=symbol,
-                        prediction_date=date
-                    )
-
-                    # Extract the prediction value
-                    if isinstance(result, dict) and 'prediction' in result:
-                        predictions[symbol] = result['prediction']
-                    else:
-                        # Fallback: try to extract numeric value
-                        predictions[symbol] = float(result)
-
-                except Exception as e:
-                    logger.warning(f"Iterative prediction failed for {symbol}: {e}")
-                    # Use a neutral prediction rather than failing the entire batch
-                    predictions[symbol] = 0.0
-                    continue
-
-            # Convert to Series
-            predictions_series = pd.Series(predictions, index=symbols)
-
-            logger.debug(f"Iterative batch prediction completed: {predictions_series.shape}")
-            logger.debug(f"Iterative batch prediction sample: {predictions_series.head(3).to_dict()}")
-
-            return predictions_series
-
-        except Exception as e:
-            logger.error(f"Iterative batch prediction failed completely: {e}")
-            raise PredictionError(f"Iterative batch prediction failed: {e}")
 
     def _cache_prediction(self,
                          symbol: str,

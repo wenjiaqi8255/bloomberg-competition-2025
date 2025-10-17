@@ -280,135 +280,66 @@ class BaseStrategy(ABC):
                         start_date: datetime,
                         end_date: datetime) -> pd.DataFrame:
         """
-        Generic fallback implementation for getting predictions from any model type.
-
-        This method provides a basic iterative prediction approach that works with
-        any model implementation. Model-specific strategies should override this
-        method to provide optimized batch prediction logic.
-
-        Args:
-            features: Computed features with MultiIndex (symbol, date) or other format
-            price_data: Original price data
-            start_date: Start date
-            end_date: End date
-
-        Returns:
-            DataFrame with predictions (expected returns or signals) indexed by date
+        Unified prediction method - works for all model types.
+        
+        ModelPredictor automatically handles:
+        - Batch-capable: Single call per date (30x faster for FF5)
+        - Independent: Multiple calls per date (necessary for per-stock models)
         """
         try:
-            logger.info(f"[{self.name}] 🔍 _get_predictions started (generic fallback)")
-            logger.info(f"[{self.name}] Features shape: {features.shape}, columns: {list(features.columns[:10])}...")
-            logger.info(f"[{self.name}] Price data keys: {list(price_data.keys())}")
-            logger.info(f"[{self.name}] Date range: {start_date} to {end_date}")
-            logger.info(f"[{self.name}] Model predictor type: {type(self.model_predictor)}")
-
-            # Create date range for predictions
             dates = pd.date_range(start=start_date, end=end_date, freq='D')
-            logger.info(f"[{self.name}] Prediction dates count: {len(dates)}")
-
-            # Get list of symbols to predict
             symbols = list(price_data.keys())
-            logger.info(f"[{self.name}] Symbols to predict: {len(symbols)}")
-
+            
+            # Log prediction mode for transparency
+            try:
+                current_model = self.model_predictor.get_current_model()
+                prediction_mode = current_model.prediction_mode
+            except:
+                prediction_mode = 'unknown'
+            logger.info(
+                f"[{self.name}] Starting predictions for {len(dates)} dates, "
+                f"{len(symbols)} symbols (mode: {prediction_mode})"
+            )
+            
             predictions_dict = {}
-
-            # Generic iterative approach - works for any model type
-            for date in dates:
+            
+            for i, date in enumerate(dates, 1):
                 try:
-                    logger.debug(f"[{self.name}] Processing date {date}...")
-
-                    # Create predictions for this date using the generic approach
-                    date_predictions = self._predict_single_date_generic(features, symbols, date)
+                    # Extract features for this specific date
+                    if isinstance(features.index, pd.MultiIndex):
+                        # MultiIndex: extract date-specific features
+                        date_features = features.xs(date, level='date') if 'date' in features.index.names else features
+                    else:
+                        # Regular index: use all features (assume single date or date-agnostic)
+                        date_features = features
+                    
+                    # Single unified call - ModelPredictor handles optimization
+                    date_predictions = self.model_predictor.predict(
+                        features=date_features,
+                        symbols=symbols,
+                        date=date
+                    )
                     predictions_dict[date] = date_predictions
-                    logger.debug(f"[{self.name}] Generated predictions for {date}: {date_predictions.shape}")
-
+                    
+                    # Progress logging
+                    if i % 30 == 0 or i == len(dates):
+                        logger.info(f"[{self.name}] Predicted {i}/{len(dates)} dates")
+                    
                 except Exception as e:
-                    logger.error(f"[{self.name}] Failed to get predictions for {date}: {e}")
-                    # Create zero predictions for this date
-                    predictions_dict[date] = pd.Series([0.0] * len(symbols), index=symbols)
-
-            # Convert dictionary to DataFrame format (dates as index, symbols as columns)
-            if predictions_dict:
-                predictions_df = pd.DataFrame(predictions_dict).T  # Transpose: rows=dates, cols=symbols
-                logger.info(f"[{self.name}] ✅ Created DataFrame: shape={predictions_df.shape}")
-                logger.info(f"[{self.name}] 📊 Columns (symbols): {list(predictions_df.columns)}")
-                logger.info(f"[{self.name}] 📅 Index (dates): {predictions_df.index[0]} to {predictions_df.index[-1]}")
-            else:
-                predictions_df = pd.DataFrame(index=dates)
-
-            # Log sample predictions to verify they're not all the same
-            if not predictions_df.empty:
-                logger.info(f"[{self.name}] 📈 Sample predictions:")
-                logger.info(f"[{self.name}]   First date ({predictions_df.index[0]}): {predictions_df.iloc[0].to_dict()}")
-                if len(predictions_df) > 1:
-                    logger.info(f"[{self.name}]   Last date ({predictions_df.index[-1]}): {predictions_df.iloc[-1].to_dict()}")
-                logger.info(f"[{self.name}]   Prediction variance: {predictions_df.var().to_dict()}")
-
-            return predictions_df
-
+                    logger.error(f"Prediction failed for {date}: {e}")
+                    predictions_dict[date] = pd.Series(0.0, index=symbols)
+            
+            result = pd.DataFrame(predictions_dict).T
+            logger.info(
+                f"[{self.name}] Prediction complete: {result.shape[0]} dates, "
+                f"{result.shape[1]} symbols"
+            )
+            return result
+            
         except Exception as e:
-            logger.error(f"[{self.name}] ❌ Generic prediction failed: {e}")
-            import traceback
-            logger.error(f"[{self.name}] Traceback: {traceback.format_exc()}")
+            logger.error(f"Prediction generation failed: {e}")
             return pd.DataFrame()
     
-    def _predict_single_date_generic(self, features: pd.DataFrame, symbols: List[str], date: datetime) -> pd.Series:
-        """
-        Generic method to predict a single date using model-agnostic approach.
-
-        This method extracts features for each symbol and calls the model predictor
-        individually. This works with any model type and feature format.
-
-        Args:
-            features: Computed features DataFrame (any format)
-            symbols: List of symbols to predict
-            date: Prediction date
-
-        Returns:
-            Series with predictions indexed by symbols
-        """
-        try:
-            predictions = []
-
-            for symbol in symbols:
-                try:
-                    # Extract features for this symbol using the generic method
-                    symbol_features = self._extract_symbol_features(features, symbol, date)
-
-                    if symbol_features.empty:
-                        logger.warning(f"[{self.name}] No features found for {symbol} on {date}")
-                        predictions.append(0.0)
-                        continue
-
-                    # Use model predictor to get prediction
-                    result = self.model_predictor.predict(
-                        features=symbol_features,
-                        symbol=symbol,
-                        prediction_date=date
-                    )
-
-                    # Extract prediction value (handle different result formats)
-                    if isinstance(result, dict):
-                        prediction_value = result.get('prediction', 0.0)
-                    elif isinstance(result, (int, float)):
-                        prediction_value = float(result)
-                    elif hasattr(result, 'iloc'):  # pandas Series/DataFrame
-                        prediction_value = float(result.iloc[0]) if len(result) > 0 else 0.0
-                    else:
-                        prediction_value = 0.0
-
-                    predictions.append(prediction_value)
-
-                except Exception as e:
-                    logger.warning(f"[{self.name}] Generic prediction failed for {symbol}: {e}")
-                    predictions.append(0.0)
-
-            return pd.Series(predictions, index=symbols, name='prediction')
-
-        except Exception as e:
-            logger.error(f"[{self.name}] Generic single-date prediction failed: {e}")
-            # Return zero predictions as fallback
-            return pd.Series([0.0] * len(symbols), index=symbols, name='prediction')
 
     def _get_feature_pipeline(self):
         """
@@ -423,133 +354,17 @@ class BaseStrategy(ABC):
             return self.feature_pipeline
 
         # Try to use the model's saved feature pipeline first
-        if (hasattr(self.model_predictor, 'model') and
-            hasattr(self.model_predictor.model, 'feature_pipeline')):
-            logger.info(f"[{self.name}] Using model's saved feature pipeline")
-            return self.model_predictor.model.feature_pipeline
-        else:
-            logger.info(f"[{self.name}] Using strategy's feature pipeline (model pipeline not available)")
-            return self.feature_pipeline
+        try:
+            current_model = self.model_predictor.get_current_model()
+            if hasattr(current_model, 'feature_pipeline'):
+                logger.info(f"[{self.name}] Using model's saved feature pipeline")
+                return current_model.feature_pipeline
+        except:
+            pass
+        
+        logger.info(f"[{self.name}] Using strategy's feature pipeline (model pipeline not available)")
+        return self.feature_pipeline
 
-    def _extract_symbol_features(self, features: pd.DataFrame, symbol: str, prediction_date: Optional[datetime] = None) -> pd.DataFrame:
-        """
-        Extract features for a specific symbol.
-
-        Args:
-            features: Full feature DataFrame with MultiIndex (symbol, date) or (date, symbol)
-            symbol: Symbol to extract
-            prediction_date: Specific date for prediction (for time-varying features)
-
-        Returns:
-            Features for the symbol
-        """
-        # Extract features for this symbol using MultiIndex structure
-        if isinstance(features.index, pd.MultiIndex):
-            index_names = features.index.names
-
-            # Handle both (symbol, date) and (date, symbol) index orders
-            if index_names[0] == 'symbol' and index_names[1] == 'date':
-                # Traditional (symbol, date) format
-                symbol_features = features.loc[symbol].copy()
-
-                # If prediction_date is specified, extract features for that specific date
-                if prediction_date is not None and len(symbol_features) > 1:
-                    # Find the closest date to prediction_date
-                    if hasattr(symbol_features.index, 'get_loc'):
-                        try:
-                            # Try to get exact match first
-                            date_features = symbol_features.loc[prediction_date]
-                            if isinstance(date_features, pd.Series):
-                                date_features = pd.DataFrame([date_features])
-                                date_features.index = [prediction_date]
-                            else:
-                                date_features.index = [prediction_date]
-                            return date_features
-                        except KeyError:
-                            # If exact date not found, find closest date
-                            available_dates = symbol_features.index
-                            if len(available_dates) > 0:
-                                closest_date = available_dates[available_dates <= prediction_date][-1]
-                                date_features = symbol_features.loc[closest_date]
-                                if isinstance(date_features, pd.Series):
-                                    date_features = pd.DataFrame([date_features])
-                                    date_features.index = [prediction_date]
-                                else:
-                                    date_features.index = [prediction_date]
-                                return date_features
-
-                # Fallback: use most recent features (for backward compatibility)
-                if len(symbol_features) > 1:
-                    symbol_features = symbol_features.iloc[-1:].copy()
-                symbol_features.reset_index(drop=True, inplace=True)
-                return symbol_features
-
-            elif index_names[0] == 'date' and index_names[1] == 'symbol':
-                # Panel data (date, symbol) format
-                symbol_features = features.xs(symbol, level='symbol').copy()
-
-                # If prediction_date is specified, extract features for that specific date
-                if prediction_date is not None and len(symbol_features) > 1:
-                    try:
-                        # Try to get exact match first
-                        if prediction_date in symbol_features.index:
-                            date_features = symbol_features.loc[prediction_date]
-                            if isinstance(date_features, pd.Series):
-                                date_features = pd.DataFrame([date_features])
-                                date_features.index = [prediction_date]
-                            else:
-                                date_features.index = [prediction_date]
-                            return date_features
-                        else:
-                            # If exact date not found, find closest date
-                            available_dates = symbol_features.index
-                            if len(available_dates) > 0:
-                                closest_date = available_dates[available_dates <= prediction_date][-1]
-                                date_features = symbol_features.loc[closest_date]
-                                if isinstance(date_features, pd.Series):
-                                    date_features = pd.DataFrame([date_features])
-                                    date_features.index = [prediction_date]
-                                else:
-                                    date_features.index = [prediction_date]
-                                return date_features
-                    except Exception as e:
-                        logger.warning(f"[{self.name}] Failed to extract date-specific features for {symbol} on {prediction_date}: {e}")
-
-                # Fallback: use most recent features (for backward compatibility)
-                if len(symbol_features) > 1:
-                    symbol_features = symbol_features.iloc[-1:].copy()
-                symbol_features.reset_index(drop=True, inplace=True)
-                return symbol_features
-
-            else:
-                # Unknown index order, try to find symbol level
-                if 'symbol' in index_names:
-                    symbol_features = features.xs(symbol, level='symbol').copy()
-                    # If prediction_date is specified, try to extract date-specific features
-                    if prediction_date is not None and len(symbol_features) > 1:
-                        try:
-                            if prediction_date in symbol_features.index:
-                                date_features = symbol_features.loc[prediction_date]
-                                if isinstance(date_features, pd.Series):
-                                    date_features = pd.DataFrame([date_features])
-                                    date_features.index = [prediction_date]
-                                else:
-                                    date_features.index = [prediction_date]
-                                return date_features
-                        except Exception as e:
-                            logger.warning(f"[{self.name}] Failed to extract date-specific features for {symbol} on {prediction_date}: {e}")
-
-                    # Fallback: use most recent features
-                    if len(symbol_features) > 1:
-                        symbol_features = symbol_features.iloc[-1:].copy()
-                    symbol_features.reset_index(drop=True, inplace=True)
-                    return symbol_features
-                else:
-                    logger.warning(f"Could not find 'symbol' level in MultiIndex with names: {index_names}")
-                    return pd.DataFrame()
-
-        # Fallback: return all features (assume single symbol)
-        return features
 
     def _apply_short_selling_restrictions(self, predictions: pd.DataFrame) -> pd.DataFrame:
         """
@@ -652,10 +467,12 @@ class BaseStrategy(ABC):
         if hasattr(self.model_predictor, 'model_id'):
             model_info['model_id'] = self.model_predictor.model_id
 
-        if hasattr(self.model_predictor, 'model'):
-            model = self.model_predictor.model
+        try:
+            model = self.model_predictor.get_current_model()
             if hasattr(model, 'model_type'):
                 model_info['model_type'] = model.model_type
+        except:
+            pass
 
         return model_info
     

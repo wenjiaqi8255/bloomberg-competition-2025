@@ -139,27 +139,68 @@ class BaseModel(ABC):
         """
         pass
 
+    @property
+    def supports_batch_prediction(self) -> bool:
+        """
+        Whether the model can predict multiple symbols in a single call.
+        
+        Returns:
+            True: Model can predict all symbols at once using shared parameters
+                  Examples: FF5 (shared factors), Cross-sectional XGBoost (shared model)
+            
+            False: Model must predict each symbol independently
+                   Examples: Per-stock XGBoost, LSTM (independent models per symbol)
+        
+        Key distinction:
+            - FF5: Trained via time-series regression for each stock → gets betas
+                   BUT predicts via batch: all_returns = betas @ shared_factors
+                   → supports_batch_prediction = True
+            
+            - Per-stock XGBoost: Each stock has independent model
+                   → must call model_AAPL.predict(), model_GOOGL.predict(), ...
+                   → supports_batch_prediction = False
+            
+            - Cross-sectional XGBoost: Single model trained on all stocks
+                   → can predict all stocks in one call
+                   → supports_batch_prediction = True
+        """
+        return False  # Default: assume independent models
+
+    @property
+    def prediction_mode(self) -> str:
+        """
+        Human-readable description of prediction mode (for logging).
+        
+        Returns:
+            'batch': Batch prediction (shared parameters/inputs)
+            'independent': Independent prediction per symbol
+        """
+        return 'batch' if self.supports_batch_prediction else 'independent'
+
     @abstractmethod
     def predict(self, X: pd.DataFrame) -> np.ndarray:
         """
         Make predictions on new data.
 
-        CONTRACT: This method MUST return a numpy ndarray with shape (n_samples,).
-        All model implementations MUST follow this contract for consistency.
-
+        CONTRACT: Must return numpy ndarray with shape (n_samples,)
+        
+        Prediction modes by batch capability:
+        
+        Batch-capable models (supports_batch_prediction = True):
+            - Input: Features for ALL symbols at ONE date
+            - Output: Predictions for all symbols (shape: n_symbols,)
+            - Example: FF5 with X = factors at date t → returns [r_AAPL, r_GOOGL, ...]
+        
+        Independent models (supports_batch_prediction = False):
+            - Input: Features for ONE symbol across dates/samples
+            - Output: Predictions for that symbol (shape: n_samples,)
+            - Example: Per-stock XGBoost with X = AAPL history → returns AAPL predictions
+        
         Args:
-            X: Feature DataFrame with same columns as training data
-
+            X: Feature DataFrame (structure depends on model type)
+            
         Returns:
-            np.ndarray: Array of predictions with shape (n_samples,)
-
-        Raises:
-            ValueError: If model is not trained or data is invalid
-
-        Note:
-            This is the core prediction interface that all model implementations must follow.
-            Models can provide convenience methods that return other formats (Series, DataFrame, etc.),
-            but the predict() method must always return np.ndarray.
+            np.ndarray with shape (n_samples,)
         """
         pass
 

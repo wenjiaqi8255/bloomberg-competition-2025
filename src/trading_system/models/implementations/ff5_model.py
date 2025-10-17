@@ -88,6 +88,26 @@ class FF5RegressionModel(BaseModel):
         logger.info(f"Initialized FF5 regression model with {self.regularization} regularization")
         logger.info("Model will compute betas for each individual stock")
 
+    @property
+    def supports_batch_prediction(self) -> bool:
+        """
+        FF5 supports batch prediction.
+        
+        Why: Although trained via time-series regression (each stock gets betas),
+             prediction uses shared factor values at each date.
+             
+             Prediction: returns = betas @ factors
+             - betas: (n_stocks, n_factors) - different per stock
+             - factors: (n_factors,) - SHARED across all stocks
+             - returns: (n_stocks,) - all stocks predicted at once
+        """
+        return True
+
+    @property  
+    def prediction_mode(self) -> str:
+        """FF5 uses batch prediction with shared factors."""
+        return 'batch'
+
     def fit(self, X: pd.DataFrame, y: pd.Series) -> 'FF5RegressionModel':
         """
         Fit the factor model to estimate betas for each stock.
@@ -274,21 +294,6 @@ class FF5RegressionModel(BaseModel):
                 logger.error(f"❌ Expected columns: {self._expected_features}")
                 raise ValueError(f"Missing required factor columns: {missing_factors}")
 
-            # Backward compatibility: Handle MultiIndex input
-            if isinstance(X.index, pd.MultiIndex) and symbols is None:
-                logger.warning("Detected MultiIndex input. Consider using symbols parameter for clarity.")
-                # Extract symbols from MultiIndex for backward compatibility
-                if 'symbol' in X.index.names:
-                    symbols = X.index.get_level_values('symbol').unique().tolist()
-                else:
-                    raise ValueError("MultiIndex must have 'symbol' level")
-
-                # Use original MultiIndex logic for backward compatibility, then convert to ndarray
-                result = self._predict_multiindex(X, symbols)
-                if isinstance(result, pd.Series):
-                    return result.values
-                else:
-                    return result.values.flatten()
 
             # New batch prediction logic, then convert to ndarray
             result = self._predict_batch(X, symbols)
@@ -304,111 +309,6 @@ class FF5RegressionModel(BaseModel):
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
             raise
-
-    def predict_series(self,
-                      X: pd.DataFrame,
-                      symbols: Optional[List[str]] = None) -> Union[pd.Series, pd.DataFrame]:
-        """
-        Convenience method that returns Series/DataFrame format for backward compatibility.
-
-        Args:
-            X: Factor returns DataFrame
-            symbols: Optional list of symbols to predict
-
-        Returns:
-            Series or DataFrame in the original format
-        """
-        # Backward compatibility: Handle MultiIndex input
-        if isinstance(X.index, pd.MultiIndex) and symbols is None:
-            logger.warning("Detected MultiIndex input. Consider using symbols parameter for clarity.")
-            # Extract symbols from MultiIndex for backward compatibility
-            if 'symbol' in X.index.names:
-                symbols = X.index.get_level_values('symbol').unique().tolist()
-            else:
-                raise ValueError("MultiIndex must have 'symbol' level")
-
-            # Use original MultiIndex logic for backward compatibility
-            return self._predict_multiindex(X, symbols)
-
-        # New batch prediction logic
-        return self._predict_batch(X, symbols)
-
-    def _predict_multiindex(self, X: pd.DataFrame, symbols: List[str]) -> pd.Series:
-        """
-        Backward compatibility: Original MultiIndex prediction logic.
-
-        Args:
-            X: MultiIndex DataFrame with (symbol, date) levels
-            symbols: List of symbols to predict
-
-        Returns:
-            Series with MultiIndex (symbol, date)
-        """
-        logger.info("Using backward compatibility MultiIndex prediction")
-
-        # Use only expected factor columns in correct order
-        X_pred = X[self._expected_features].copy()
-        logger.info(f"Using factor columns: {list(X_pred.columns)}")
-
-        predictions = []
-
-        # Make predictions for each symbol using its stored betas
-        for symbol in symbols:
-            if symbol not in self.betas:
-                logger.warning(f"No fitted betas for {symbol}, skipping")
-                continue
-
-            try:
-                # Extract factor data for this symbol
-                symbol_X = X_pred.xs(symbol, level='symbol')
-
-                # Get stored betas and alpha for this symbol
-                symbol_betas = self.betas[symbol]  # shape: (5,)
-                symbol_alpha = self.alphas[symbol]  # scalar
-
-                # Compute predictions: y = alpha + beta @ X
-                symbol_predictions = (
-                    symbol_alpha +
-                    symbol_X.values @ symbol_betas  # Matrix multiplication
-                )
-
-                # Create Series with correct index
-                pred_series = pd.Series(
-                    symbol_predictions,
-                    index=symbol_X.index,
-                    name='ff5_prediction'
-                )
-
-                predictions.append(pred_series)
-                logger.debug(f"Generated {len(symbol_predictions)} predictions for {symbol}")
-
-            except Exception as e:
-                logger.error(f"Failed to predict for {symbol}: {e}")
-                continue
-
-        if not predictions:
-            raise ValueError("No predictions could be generated")
-
-        # Combine all predictions and restore MultiIndex
-        all_predictions = pd.concat(predictions)
-
-        # Create proper MultiIndex
-        if 'symbol' in X.index.names and 'date' in X.index.names:
-            # Create MultiIndex tuples
-            index_tuples = []
-            for symbol in symbols:
-                if symbol in self.betas:
-                    symbol_dates = X.xs(symbol, level='symbol').index
-                    for date in symbol_dates:
-                        index_tuples.append((symbol, date))
-
-            all_predictions.index = pd.MultiIndex.from_tuples(
-                index_tuples,
-                names=['symbol', 'date']
-            )
-
-        logger.info(f"Generated {len(all_predictions)} predictions total (MultiIndex)")
-        return all_predictions
 
     def _predict_batch(self, X: pd.DataFrame, symbols: Optional[List[str]]) -> Union[pd.Series, pd.DataFrame]:
         """
