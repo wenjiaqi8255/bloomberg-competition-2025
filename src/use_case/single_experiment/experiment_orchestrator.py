@@ -68,7 +68,6 @@ from ...trading_system.config.system import SystemConfig
 from ...trading_system.data.base_data_provider import BaseDataProvider
 from ...trading_system.experiment_tracking.wandb_adapter import WandBExperimentTracker
 from ...trading_system.experiment_tracking.interface import ExperimentTrackerInterface
-from ...use_case.portfolio_generation.system_orchestrator import SystemOrchestrator
 
 logger = logging.getLogger(__name__)
 

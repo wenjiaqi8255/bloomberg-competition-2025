@@ -144,14 +144,22 @@ class BaseModel(ABC):
         """
         Make predictions on new data.
 
+        CONTRACT: This method MUST return a numpy ndarray with shape (n_samples,).
+        All model implementations MUST follow this contract for consistency.
+
         Args:
             X: Feature DataFrame with same columns as training data
 
         Returns:
-            Array of predictions
+            np.ndarray: Array of predictions with shape (n_samples,)
 
         Raises:
             ValueError: If model is not trained or data is invalid
+
+        Note:
+            This is the core prediction interface that all model implementations must follow.
+            Models can provide convenience methods that return other formats (Series, DataFrame, etc.),
+            but the predict() method must always return np.ndarray.
         """
         pass
 

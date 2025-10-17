@@ -169,8 +169,9 @@ class StrategyRunner:
             self.configs = {}
 
         # Initialize components
-        self.data_provider = providers.get('data_provider') if providers else None
         self.providers = providers or {}
+        self.data_provider = self.providers.get('data_provider')
+        self.factor_data_provider = self.providers.get('factor_data_provider')  # ✅ 添加factor_data_provider
         self.strategy = None
         self.backtest_engine = None
         self.experiment_tracker = experiment_tracker
@@ -468,11 +469,14 @@ class StrategyRunner:
             data_stats = self._calculate_data_statistics(price_data)
             self.experiment_tracker.log_dataset_info(data_stats)
 
-            # Step 3: Generate strategy signals
+            # Step 3: Prepare complete pipeline data (including factor data if available)
+            pipeline_data = self._prepare_pipeline_data(price_data, backtest_config.start_date, backtest_config.end_date)
+
+            # Step 4: Generate strategy signals with complete pipeline data
             strategy_signals = self.strategy.generate_signals(
-                price_data,
-                backtest_config.start_date,
-                backtest_config.end_date
+                pipeline_data=pipeline_data,
+                start_date=backtest_config.start_date,
+                end_date=backtest_config.end_date
             )
 
             # Step 3.5: Apply portfolio construction if configured
@@ -704,6 +708,70 @@ class StrategyRunner:
 
         logger.info(f"Successfully fetched data for {len(price_data)} symbols")
         return price_data, benchmark_data
+
+    def _prepare_pipeline_data(self, price_data: Dict[str, pd.DataFrame], start_date: datetime, end_date: datetime) -> Dict[str, Any]:
+        """
+        Prepare complete pipeline data including factor data if available.
+
+        This method implements the elegant architectural solution where StrategyRunner
+        prepares all necessary data (price_data + factor_data) for strategies,
+        following SOLID, KISS, YAGNI, DRY principles.
+
+        Args:
+            price_data: Dictionary mapping symbols to OHLCV DataFrames
+            start_date: Start date for data preparation
+            end_date: End date for data preparation
+
+        Returns:
+            Complete pipeline data dictionary with price_data and optionally factor_data
+        """
+        try:
+            logger.info(f"[StrategyRunner] Preparing complete pipeline data...")
+
+            # Start with basic structure
+            pipeline_data = {
+                'price_data': price_data
+            }
+
+            # ✅ REFACTORED: Use StrategyRunner's own factor_data_provider
+            # StrategyRunner prepares complete data, strategies don't hold providers
+            if self.factor_data_provider is not None:
+                logger.info(f"[StrategyRunner] Factor data provider found, fetching factor data...")
+
+                try:
+                    # Get symbols from price data
+                    symbols = list(price_data.keys())
+                    logger.info(f"[StrategyRunner] Fetching factor data for {len(symbols)} symbols...")
+
+                    # Fetch factor data for the same period
+                    factor_data = self.factor_data_provider.get_data(
+                        start_date=start_date,
+                        end_date=end_date
+                    )
+
+                    if factor_data is not None and not factor_data.empty:
+                        pipeline_data['factor_data'] = factor_data
+                        logger.info(f"[StrategyRunner] ✅ Factor data added: {factor_data.shape}")
+                        logger.info(f"[StrategyRunner] Factor data columns: {list(factor_data.columns)}")
+                    else:
+                        logger.warning(f"[StrategyRunner] Factor data provider returned empty data")
+
+                except Exception as e:
+                    logger.error(f"[StrategyRunner] Failed to fetch factor data: {e}")
+                    logger.info(f"[StrategyRunner] Continuing without factor data...")
+            else:
+                logger.info(f"[StrategyRunner] No factor data provider available, using price data only")
+
+            logger.info(f"[StrategyRunner] Pipeline data prepared with keys: {list(pipeline_data.keys())}")
+            return pipeline_data
+
+        except Exception as e:
+            logger.error(f"[StrategyRunner] ❌ Failed to prepare pipeline data: {e}")
+            logger.error(f"[StrategyRunner] Exception type: {type(e).__name__}")
+            import traceback
+            logger.error(f"[StrategyRunner] Traceback: {traceback.format_exc()}")
+            # Fallback to just price data
+            return {'price_data': price_data}
 
     def _calculate_data_statistics(self, price_data: Dict[str, Any]) -> Dict[str, Any]:
         """Calculate data statistics for logging."""

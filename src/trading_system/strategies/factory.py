@@ -23,7 +23,6 @@ from pathlib import Path
 
 from .base_strategy import BaseStrategy
 from .ml_strategy import MLStrategy
-from .dual_momentum import DualMomentumStrategy
 from .fama_french_5 import FamaFrench5Strategy
 
 from ..feature_engineering.pipeline import FeatureEngineeringPipeline
@@ -54,7 +53,6 @@ class StrategyFactory:
     # Strategy class registry
     _strategy_registry = {
         'ml': MLStrategy,  # Use multi-stock version for better compatibility
-        'dual_momentum': DualMomentumStrategy,
         'fama_macbeth': MLStrategy,  # Fama-MacBeth uses ML strategy with custom features
         'fama_french_5': FamaFrench5Strategy,
         'ff5_regression': FamaFrench5Strategy,  # Map ff5_regression model to FF5 strategy
@@ -64,19 +62,19 @@ class StrategyFactory:
     def create_from_config(cls, config: Dict[str, Any], **kwargs) -> BaseStrategy:
         """
         Create a strategy from configuration with automatic component creation.
-        
+
         Args:
             config: Strategy configuration with:
-                - type: Strategy type ('ml', 'dual_momentum', 'fama_french_5', 'ff5_regression')
+                - type: Strategy type ('ml', 'dual_momentum', 'fama_french_5', 'ff5_regression', 'meta')
                 - name: Strategy name
-                - model_id: Model identifier (e.g., 'random_forest_v1')
+                - model_id: Model identifier (e.g., 'random_forest_v1') - NOT required for 'meta'
                 - feature_config: Optional feature pipeline config
                 - position_sizing: Position sizer configuration
                 - Additional strategy-specific parameters
-        
+
         Returns:
             Configured strategy instance
-        
+
         Example:
             config = {
                 'type': 'dual_momentum',
@@ -88,23 +86,29 @@ class StrategyFactory:
                     'max_position_weight': 0.10
                 }
             }
-            
+
             strategy = UnifiedStrategyFactory.create_from_config(config)
         """
         strategy_type = config.get('type')
         if not strategy_type:
             raise ValueError("Configuration must include 'type' field")
-        
+
+        name = config.get('name', f'{strategy_type}_strategy')
+
+        # ✅ Special handling for MetaStrategy
+        if strategy_type == 'meta':
+            return cls._create_meta_strategy(config, **kwargs)
+
+        # Standard strategy validation
         if strategy_type not in cls._strategy_registry:
             raise ValueError(f"Unknown strategy type: {strategy_type}. "
                            f"Available: {list(cls._strategy_registry.keys())}")
-        
-        name = config.get('name', f'{strategy_type}_strategy')
+
         model_id = config.get('model_id')
-        
+
         if not model_id:
             raise ValueError("Configuration must include 'model_id' field")
-        
+
         logger.info(f"Creating {strategy_type} strategy '{name}' with model '{model_id}'")
         
         # Step 1: Get or Create FeatureEngineeringPipeline
@@ -257,15 +261,7 @@ class StrategyFactory:
                 min_significance=0.1
             )
 
-        elif strategy_type == 'dual_momentum':
-            # Dual momentum: only momentum features
-            lookback = config.get('lookback_period', 252)
-            feature_config = FeatureConfig(
-                enabled_features=['momentum'],
-                momentum_periods=[21, 63, lookback],
-                include_technical=False
-            )
-
+        
         elif strategy_type == 'fama_macbeth':
             # Fama-MacBeth: cross-sectional features only
             feature_config = FeatureConfig(
@@ -481,9 +477,7 @@ class StrategyFactory:
         if strategy_type == 'ml':
             params['min_signal_strength'] = config.get('min_signal_strength', 0.1)
             
-        elif strategy_type == 'dual_momentum':
-            params['lookback_period'] = config.get('lookback_period', 252)
-            
+                    
         elif strategy_type in ['fama_french_5', 'ff5_regression']:
             params['lookback_days'] = config.get('lookback_days', 252)
             params['risk_free_rate'] = config.get('risk_free_rate', 0.02)
@@ -535,6 +529,75 @@ class StrategyFactory:
         except Exception as e:
             logger.error(f"❌ Failed to load fitted pipeline from model '{model_id}': {e}")
             return None
+
+    @classmethod
+    def _create_meta_strategy(cls, config: Dict[str, Any], **kwargs) -> 'MetaStrategy':
+        """
+        Create MetaStrategy from configuration.
+
+        Args:
+            config: Meta strategy configuration with:
+                - type: 'meta'
+                - name: Strategy name
+                - base_model_ids: List of base model IDs
+                - meta_weights: Dictionary mapping model IDs to weights
+                - model_registry_path: Path to model registry
+            **kwargs: Additional parameters (providers)
+
+        Returns:
+            MetaStrategy instance
+        """
+        from .meta_strategy import MetaStrategy
+
+        # Extract meta strategy configuration
+        base_model_ids = config.get('base_model_ids', [])
+        meta_weights = config.get('meta_weights', {})
+
+        # Validate required fields
+        if not base_model_ids:
+            raise ValueError("MetaStrategy configuration requires 'base_model_ids'")
+        if not meta_weights:
+            raise ValueError("MetaStrategy configuration requires 'meta_weights'")
+
+        # Get providers from kwargs
+        providers = kwargs.get('providers', {})
+        data_provider = providers.get('data_provider')
+        factor_data_provider = providers.get('factor_data_provider')
+
+        # Validate providers
+        if data_provider is None:
+            raise ValueError("MetaStrategy requires 'data_provider' in providers")
+
+        logger.info(f"Creating MetaStrategy '{config.get('name', 'MetaStrategy')}'")
+        logger.info(f"  Base models: {base_model_ids}")
+        logger.info(f"  Meta weights: {meta_weights}")
+        logger.info(f"  Data provider: {type(data_provider).__name__}")
+        logger.info(f"  Factor data provider: {type(factor_data_provider).__name__ if factor_data_provider else 'None'}")
+
+        # Create PositionSizer (optional for MetaStrategy)
+        position_sizer = cls._create_position_sizer(config)
+
+        # Get universe from config
+        universe = config.get('universe', [])
+
+        # Create MetaStrategy
+        strategy = MetaStrategy(
+            name=config.get('name', 'MetaStrategy'),
+            base_model_ids=base_model_ids,
+            meta_weights=meta_weights,
+            # MetaStrategy doesn't need its own feature pipeline or model predictor
+            feature_pipeline=None,
+            model_predictor=None,
+            position_sizer=position_sizer,
+            universe=universe,
+            # Critical: pass providers to base strategies
+            data_provider=data_provider,
+            factor_data_provider=factor_data_provider,
+            model_registry_path=config.get('model_registry_path', './models/')
+        )
+
+        logger.info(f"✅ Created MetaStrategy '{config.get('name', 'MetaStrategy')}' with {len(base_model_ids)} base models")
+        return strategy
 
 
 # TODO: REQUIRED FOR FULL FUNCTIONALITY

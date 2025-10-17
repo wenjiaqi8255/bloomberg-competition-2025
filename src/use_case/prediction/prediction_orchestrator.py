@@ -197,6 +197,11 @@ class PredictionOrchestrator:
                 # Use config as-is if model_id is already at top level
                 flattened_config = strategy_config
 
+            # Add universe to flattened config for MetaStrategy
+            if strategy_config.get('type') == 'meta':
+                universe = self._get_universe()
+                flattened_config['universe'] = universe
+
             # Create providers dict with data providers
             providers = {
                 'data_provider': self.data_provider,
@@ -221,7 +226,10 @@ class PredictionOrchestrator:
     
     def _generate_signals(self, strategy, universe: List[str], prediction_date: datetime) -> pd.DataFrame:
         """
-        Generate signals via strategy (strategy handles everything internally).
+        Generate signals via unified orchestrator data preparation.
+
+        ✅ REFACTORED: Following "Data preparation responsibility moves up to orchestrator" pattern.
+        The orchestrator prepares ALL data, strategies only consume it.
 
         Args:
             strategy: Loaded strategy instance
@@ -232,18 +240,18 @@ class PredictionOrchestrator:
             DataFrame with signals (dates × symbols)
         """
         # Calculate lookback period for data
-        lookback_days = self.config.get('strategy', {}).get('parameters', {}).get('lookback_days', 252)
+        lookback_days = self.config.get('strategy', {}).get('lookback_days', 252)
         start_date = prediction_date - timedelta(days=lookback_days)
 
         logger.info("="*60)
         logger.info("DETAILED PREDICTION FLOW DIAGNOSIS")
         logger.info("="*60)
         logger.info(f"Strategy type: {self.config['strategy']['type']}")
-        logger.info(f"Model ID: {self.config['strategy']['parameters'].get('model_id', 'N/A')}")
+        logger.info(f"Model ID: {self.config['strategy'].get('parameters', {}).get('model_id', 'N/A')}")
         logger.info(f"Universe: {universe}")
         logger.info(f"Date range: {start_date} to {prediction_date}")
 
-        # Step 1: Get price data
+        # Step 1: Get price data (orchestrator responsibility)
         logger.info("STEP 1: FETCHING PRICE DATA")
         try:
             price_data = self.data_provider.get_historical_data(
@@ -260,46 +268,20 @@ class PredictionOrchestrator:
             logger.error(f"❌ Failed to fetch price data: {e}")
             raise
 
-        # Step 2: Check strategy before signal generation
-        logger.info("STEP 2: CHECKING STRATEGY STATE")
-        logger.info(f"Strategy class: {strategy.__class__.__name__}")
-        logger.info(f"Strategy has model_predictor: {hasattr(strategy, 'model_predictor')}")
-        if hasattr(strategy, 'model_predictor'):
-            logger.info(f"Model predictor type: {type(strategy.model_predictor)}")
-            if hasattr(strategy.model_predictor, 'model'):
-                logger.info(f"Model loaded: {strategy.model_predictor.model is not None}")
-                if hasattr(strategy.model_predictor.model, 'coef_'):
-                    logger.info(f"Model coefficients (first 5): {strategy.model_predictor.model.coef_[:5] if hasattr(strategy.model_predictor.model, 'coef_') and len(strategy.model_predictor.model.coef_) > 0 else 'N/A'}")
+        # Step 2: Prepare complete pipeline data (orchestrator responsibility)
+        logger.info("STEP 2: PREPARING COMPLETE PIPELINE DATA")
+        pipeline_data = self._prepare_pipeline_data(price_data, start_date, prediction_date, strategy)
 
-        # Step 3: Check factor data provider for FF5
-        if self.config['strategy']['type'] == 'fama_french_5':
-            logger.info("STEP 2.5: CHECKING FACTOR DATA PROVIDER")
-            logger.info(f"Strategy has factor_data_provider: {hasattr(strategy, 'factor_data_provider')}")
-            logger.info(f"Strategy has providers dict: {hasattr(strategy, 'providers')}")
-
-            if hasattr(self, 'factor_data_provider') and self.factor_data_provider:
-                logger.info(f"Orchestrator factor_data_provider: {type(self.factor_data_provider)}")
-                try:
-                    factor_data = self.factor_data_provider.get_data(start_date, prediction_date)
-                    logger.info(f"✅ Factor data retrieved: {factor_data.shape if factor_data is not None else None}")
-                    if factor_data is not None and not factor_data.empty:
-                        logger.info(f"Factor columns: {list(factor_data.columns)}")
-                        logger.info(f"Factor data sample:\n{factor_data.head()}")
-                except Exception as e:
-                    logger.error(f"❌ Failed to get factor data: {e}")
-            else:
-                logger.warning("⚠️ No factor_data_provider found")
-
-        # Step 4: Generate signals via strategy with detailed logging
+        # Step 3: Generate signals via strategy (only passing pipeline_data)
         logger.info("STEP 3: GENERATING SIGNALS VIA STRATEGY")
         logger.info(f"Calling strategy.generate_signals with:")
-        logger.info(f"  - Price data keys: {list(price_data.keys())}")
+        logger.info(f"  - Pipeline data keys: {list(pipeline_data.keys())}")
         logger.info(f"  - Start date: {prediction_date}")
         logger.info(f"  - End date: {prediction_date}")
 
         try:
             signals = strategy.generate_signals(
-                price_data=price_data,
+                pipeline_data=pipeline_data,  # ✅ Only pass pipeline_data
                 start_date=prediction_date,
                 end_date=prediction_date
             )
@@ -335,7 +317,74 @@ class PredictionOrchestrator:
             raise
 
         return signals
-    
+
+    def _prepare_pipeline_data(self, price_data: Dict[str, pd.DataFrame], start_date: datetime, end_date: datetime, strategy) -> Dict[str, Any]:
+        """
+        Prepare complete pipeline data including factor data if available.
+
+        This method implements the elegant architectural pattern where the orchestrator
+        prepares all necessary data (price_data + factor_data) for strategies,
+        following SOLID, KISS, YAGNI, DRY principles.
+
+        Args:
+            price_data: Dictionary mapping symbols to OHLCV DataFrames
+            start_date: Start date for data preparation
+            end_date: End date for data preparation
+            strategy: Strategy instance to check for factor data provider
+
+        Returns:
+            Complete pipeline data dictionary with price_data and optionally factor_data
+        """
+        try:
+            logger.info(f"[PredictionOrchestrator] Preparing complete pipeline data...")
+
+            # Start with basic structure
+            pipeline_data = {
+                'price_data': price_data
+            }
+
+            # ✅ REFACTORED: Use orchestrator's own factor_data_provider
+            # Orchestrator prepares complete data, strategies don't hold providers
+            if self.factor_data_provider is not None:
+                logger.info(f"[PredictionOrchestrator] Using orchestrator's factor data provider: {type(self.factor_data_provider).__name__}")
+                logger.info(f"[PredictionOrchestrator] Fetching factor data...")
+
+                try:
+                    # Get symbols from price data
+                    symbols = list(price_data.keys())
+                    logger.info(f"[PredictionOrchestrator] Fetching factor data for {len(symbols)} symbols...")
+
+                    # ✅ UNIFIED INTERFACE: Use standard get_data method
+                    logger.info(f"[PredictionOrchestrator] Using unified get_data interface for {type(self.factor_data_provider).__name__}")
+                    factor_data = self.factor_data_provider.get_data(
+                        start_date=start_date,
+                        end_date=end_date
+                    )
+
+                    if factor_data is not None and not factor_data.empty:
+                        pipeline_data['factor_data'] = factor_data
+                        logger.info(f"[PredictionOrchestrator] ✅ Factor data added: {factor_data.shape}")
+                        logger.info(f"[PredictionOrchestrator] Factor data columns: {list(factor_data.columns)}")
+                        logger.info(f"[PredictionOrchestrator] Factor data sample: {factor_data.head(2).to_dict()}")
+                    else:
+                        logger.warning(f"[PredictionOrchestrator] Factor data provider returned empty data")
+
+                except Exception as e:
+                    logger.error(f"[PredictionOrchestrator] Failed to fetch factor data: {e}")
+                    logger.info(f"[PredictionOrchestrator] Continuing without factor data...")
+            else:
+                logger.info(f"[PredictionOrchestrator] No factor data provider available in orchestrator")
+
+            # ✅ Cleaned up redundant backup logic since we now use orchestrator's provider directly
+
+            logger.info(f"[PredictionOrchestrator] Pipeline data prepared with keys: {list(pipeline_data.keys())}")
+            return pipeline_data
+
+        except Exception as e:
+            logger.error(f"[PredictionOrchestrator] Failed to prepare pipeline data: {e}")
+            # Fallback to just price data
+            return {'price_data': price_data}
+
     def _construct_portfolio(self, signals: pd.DataFrame, universe: List[str], prediction_date: datetime):
         """
         Construct portfolio using factory pattern.
@@ -511,6 +560,8 @@ class PredictionOrchestrator:
     
     def _get_model_weights(self, strategy) -> Optional[Dict[str, float]]:
         """Get model weights for meta strategies."""
-        if hasattr(strategy, 'model_weights'):
+        if hasattr(strategy, 'meta_weights'):
+            return strategy.meta_weights
+        elif hasattr(strategy, 'model_weights'):
             return strategy.model_weights
         return None

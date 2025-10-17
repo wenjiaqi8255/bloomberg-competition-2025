@@ -64,26 +64,22 @@ class BaseStrategy(ABC):
     
     def __init__(self,
                  name: str,
-                 feature_pipeline: FeatureEngineeringPipeline,
-                 model_predictor: ModelPredictor,
+                 feature_pipeline: Optional[FeatureEngineeringPipeline] = None,
+                 model_predictor: Optional[ModelPredictor] = None,
                  **kwargs):
         """
         Initialize unified strategy.
 
         Args:
             name: Strategy identifier
-            feature_pipeline: Fitted FeatureEngineeringPipeline
-            model_predictor: ModelPredictor with loaded model
+            feature_pipeline: Fitted FeatureEngineeringPipeline (can be None for MetaStrategy)
+            model_predictor: ModelPredictor with loaded model (can be None for MetaStrategy)
             **kwargs: Additional strategy-specific parameters
         """
         self.name = name
         self.feature_pipeline = feature_pipeline
         self.model_predictor = model_predictor
         self.parameters = kwargs
-
-        # Data providers (if provided)
-        self.data_provider = kwargs.get('data_provider')
-        self.factor_data_provider = kwargs.get('factor_data_provider')
 
         # Short selling control (default to long-only for safety)
         self.enable_short_selling = kwargs.get('enable_short_selling', False)
@@ -99,61 +95,85 @@ class BaseStrategy(ABC):
         self._last_position_metrics = None
         self._signal_generation_count = 0
 
-        # Validate components
+        # Validate components (only if provided)
         self._validate_components()
 
         logger.info(f"Initialized {self.__class__.__name__} '{name}' with unified architecture")
         logger.info(f"Strategy '{name}' short selling: {'enabled' if self.enable_short_selling else 'disabled'}")
+        if feature_pipeline is None:
+            logger.info(f"Strategy '{name}' feature_pipeline: None (MetaStrategy mode)")
+        if model_predictor is None:
+            logger.info(f"Strategy '{name}' model_predictor: None (MetaStrategy mode)")
     
     def _validate_components(self):
-        """Validate that all required components are provided."""
-        if not isinstance(self.feature_pipeline, FeatureEngineeringPipeline):
-            raise TypeError("feature_pipeline must be FeatureEngineeringPipeline instance")
-        if not isinstance(self.model_predictor, ModelPredictor):
-            raise TypeError("model_predictor must be ModelPredictor instance")
+        """Validate that all provided components are correct type."""
+        # Only validate if components are provided (MetaStrategy can have None)
+        if self.feature_pipeline is not None:
+            if not isinstance(self.feature_pipeline, FeatureEngineeringPipeline):
+                raise TypeError("feature_pipeline must be FeatureEngineeringPipeline instance or None")
+
+        if self.model_predictor is not None:
+            if not isinstance(self.model_predictor, ModelPredictor):
+                raise TypeError("model_predictor must be ModelPredictor instance or None")
+
+        # Log validation results
+        if self.feature_pipeline is None and self.model_predictor is None:
+            logger.info(f"[{self.name}] Both feature_pipeline and model_predictor are None (MetaStrategy mode)")
+        elif self.feature_pipeline is None:
+            logger.info(f"[{self.name}] feature_pipeline is None (will use model's pipeline)")
+        elif self.model_predictor is None:
+            logger.info(f"[{self.name}] model_predictor is None (MetaStrategy mode)")
+        else:
+            logger.info(f"[{self.name}] Both feature_pipeline and model_predictor are provided")
     
     def generate_signals(self,
-                        price_data: Dict[str, pd.DataFrame],
+                        pipeline_data: Dict[str, Any],
                         start_date: datetime,
                         end_date: datetime) -> pd.DataFrame:
         """
-        Generate trading signals using the unified pipeline.
+        Generate trading signals using complete pipeline data.
 
-        This method implements the standard flow:
-        1. Filter available symbols with valid price data
-        2. Compute features using FeaturePipeline
-        3. Get predictions from Model
+        ✅ REFACTORED: Following "Data preparation responsibility moves up to orchestrator" pattern.
+        This strategy only consumes data, doesn't prepare it.
 
         Args:
-            price_data: Dictionary mapping symbols to OHLCV DataFrames
+            pipeline_data: Complete data prepared by orchestrator
+                - 'price_data': Dict[str, DataFrame] (required) - OHLCV price data
+                - 'factor_data': DataFrame (optional) - Factor data for FF5 models
             start_date: Start date for signal generation
             end_date: End date for signal generation
 
         Returns:
             DataFrame with expected returns or raw model predictions.
         """
-        if not price_data:
-            logger.warning("Empty price data provided")
+        if not pipeline_data or 'price_data' not in pipeline_data:
+            logger.error("Pipeline data missing or invalid")
             return pd.DataFrame()
 
         try:
             logger.info(f"[{self.name}] Generating signals from {start_date} to {end_date}")
+            logger.info(f"[{self.name}] Pipeline data keys: {list(pipeline_data.keys())}")
 
-            # Step 0: Filter symbols with valid price data
-            logger.debug(f"[{self.name}] Step 0: Filtering available symbols...")
+            # Step 0: Extract and filter valid price data from pipeline_data
+            logger.debug(f"[{self.name}] Step 0: Extracting and filtering price data...")
+            price_data = pipeline_data['price_data']
             valid_price_data = self._filter_valid_price_data(price_data)
 
             if not valid_price_data:
                 logger.error(f"[{self.name}] No valid price data found after filtering")
                 return pd.DataFrame()
 
+            # Update pipeline_data with filtered price data
+            pipeline_data_filtered = pipeline_data.copy()
+            pipeline_data_filtered['price_data'] = valid_price_data
+
             removed_symbols = set(price_data.keys()) - set(valid_price_data.keys())
             if removed_symbols:
                 logger.info(f"[{self.name}] Excluded {len(removed_symbols)} symbols with invalid data: {sorted(removed_symbols)}")
 
-            # Step 1: Compute features using pipeline
+            # Step 1: Compute features using pipeline (direct consumption)
             logger.debug(f"[{self.name}] Step 1: Computing features...")
-            features = self._compute_features(valid_price_data)
+            features = self._compute_features(pipeline_data_filtered)
 
             if features.empty:
                 logger.warning(f"[{self.name}] Feature computation returned empty DataFrame")
@@ -221,23 +241,23 @@ class BaseStrategy(ABC):
 
         return valid_data
     
-    def _compute_features(self, price_data: Dict[str, pd.DataFrame]) -> pd.DataFrame:
+    def _compute_features(self, pipeline_data: Dict[str, Any]) -> pd.DataFrame:
         """
         Compute features using the feature pipeline.
-        
+
         Args:
-            price_data: Dictionary of price DataFrames
-        
+            pipeline_data: Dictionary containing price_data and optionally factor_data
+
         Returns:
             DataFrame with computed features
         """
         try:
-            # Prepare data in format expected by pipeline
-            pipeline_data = {'price_data': price_data}
-
             logger.info(f"[{self.name}] 🔧 Feature pipeline transform starting...")
             logger.info(f"[{self.name}] Pipeline data keys: {list(pipeline_data.keys())}")
-            logger.info(f"[{self.name}] Price data symbols: {list(price_data.keys())}")
+            if 'price_data' in pipeline_data:
+                logger.info(f"[{self.name}] Price data symbols: {list(pipeline_data['price_data'].keys())}")
+            if 'factor_data' in pipeline_data:
+                logger.info(f"[{self.name}] Factor data available: {type(pipeline_data['factor_data'])}")
             logger.info(f"[{self.name}] Feature pipeline fitted: {getattr(self.feature_pipeline, '_is_fitted', 'Unknown')}")
 
             # Use model's feature pipeline if available, otherwise use strategy's pipeline
@@ -397,6 +417,11 @@ class BaseStrategy(ABC):
         Returns:
             Feature pipeline to use for transforming features
         """
+        # For MetaStrategy, use the strategy's pipeline (should be None, handled by subclass)
+        if self.model_predictor is None:
+            logger.info(f"[{self.name}] No model_predictor (MetaStrategy mode), using strategy's feature pipeline")
+            return self.feature_pipeline
+
         # Try to use the model's saved feature pipeline first
         if (hasattr(self.model_predictor, 'model') and
             hasattr(self.model_predictor.model, 'feature_pipeline')):
@@ -610,23 +635,28 @@ class BaseStrategy(ABC):
     def _get_component_info(self) -> Dict[str, str]:
         """Get information about the strategy's components."""
         components = {
-            'feature_pipeline': str(type(self.feature_pipeline).__name__),
-            'model_predictor': str(type(self.model_predictor).__name__),
+            'feature_pipeline': str(type(self.feature_pipeline).__name__) if self.feature_pipeline is not None else 'None',
+            'model_predictor': str(type(self.model_predictor).__name__) if self.model_predictor is not None else 'None',
         }
         return components
 
     def _get_model_info(self) -> Dict:
         """Get information about the model."""
         model_info = {}
-        
+
+        if self.model_predictor is None:
+            model_info['model_id'] = 'None (MetaStrategy mode)'
+            model_info['model_type'] = 'None (MetaStrategy mode)'
+            return model_info
+
         if hasattr(self.model_predictor, 'model_id'):
             model_info['model_id'] = self.model_predictor.model_id
-        
+
         if hasattr(self.model_predictor, 'model'):
             model = self.model_predictor.model
             if hasattr(model, 'model_type'):
                 model_info['model_type'] = model.model_type
-        
+
         return model_info
     
     # ============================================================================
@@ -840,5 +870,7 @@ class BaseStrategy(ABC):
         return f"{self.__class__.__name__}(name='{self.name}')"
     
     def __repr__(self):
-        return f"{self.__class__.__name__}(name='{self.name}', pipeline={type(self.feature_pipeline).__name__}, model={type(self.model_predictor).__name__})"
+        pipeline_name = type(self.feature_pipeline).__name__ if self.feature_pipeline else 'None'
+        model_name = type(self.model_predictor).__name__ if self.model_predictor else 'None'
+        return f"{self.__class__.__name__}(name='{self.name}', pipeline={pipeline_name}, model={model_name})"
 

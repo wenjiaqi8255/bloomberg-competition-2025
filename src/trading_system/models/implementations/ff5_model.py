@@ -231,13 +231,11 @@ class FF5RegressionModel(BaseModel):
             logger.error(f"Failed to fit FF5 regression model: {e}")
             raise
 
-    def predict(self,
-                X: pd.DataFrame,
-                symbols: Optional[List[str]] = None) -> Union[pd.Series, pd.DataFrame]:
+    def predict(self, X: pd.DataFrame, symbols: Optional[List[str]] = None) -> np.ndarray:
         """
         Predict factor-implied returns using stored betas.
 
-        This method supports both batch prediction (new) and MultiIndex prediction (backward compatibility).
+        This method follows the BaseModel contract and returns np.ndarray.
 
         Args:
             X: Factor returns DataFrame with required factor columns ['MKT', 'SMB', 'HML', 'RMW', 'CMA']
@@ -249,9 +247,7 @@ class FF5RegressionModel(BaseModel):
                     - For MultiIndex input: extracts symbols from index
 
         Returns:
-            - pd.Series: For single-day predictions (len(X) == 1) with symbols as index
-            - pd.DataFrame: For multi-day predictions with dates as index, symbols as columns
-            - pd.Series with MultiIndex: For backward compatibility with MultiIndex input
+            np.ndarray: Array of predictions flattened to 1D
 
         Raises:
             ValueError: If model is not trained or data is invalid
@@ -287,17 +283,55 @@ class FF5RegressionModel(BaseModel):
                 else:
                     raise ValueError("MultiIndex must have 'symbol' level")
 
-                # Use original MultiIndex logic for backward compatibility
-                return self._predict_multiindex(X, symbols)
+                # Use original MultiIndex logic for backward compatibility, then convert to ndarray
+                result = self._predict_multiindex(X, symbols)
+                if isinstance(result, pd.Series):
+                    return result.values
+                else:
+                    return result.values.flatten()
 
-            # New batch prediction logic
-            return self._predict_batch(X, symbols)
+            # New batch prediction logic, then convert to ndarray
+            result = self._predict_batch(X, symbols)
+            if isinstance(result, pd.Series):
+                return result.values
+            elif isinstance(result, pd.DataFrame):
+                return result.values.flatten()
+            else:
+                return result
 
         except Exception as e:
             logger.error(f"Failed to make predictions: {e}")
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
             raise
+
+    def predict_series(self,
+                      X: pd.DataFrame,
+                      symbols: Optional[List[str]] = None) -> Union[pd.Series, pd.DataFrame]:
+        """
+        Convenience method that returns Series/DataFrame format for backward compatibility.
+
+        Args:
+            X: Factor returns DataFrame
+            symbols: Optional list of symbols to predict
+
+        Returns:
+            Series or DataFrame in the original format
+        """
+        # Backward compatibility: Handle MultiIndex input
+        if isinstance(X.index, pd.MultiIndex) and symbols is None:
+            logger.warning("Detected MultiIndex input. Consider using symbols parameter for clarity.")
+            # Extract symbols from MultiIndex for backward compatibility
+            if 'symbol' in X.index.names:
+                symbols = X.index.get_level_values('symbol').unique().tolist()
+            else:
+                raise ValueError("MultiIndex must have 'symbol' level")
+
+            # Use original MultiIndex logic for backward compatibility
+            return self._predict_multiindex(X, symbols)
+
+        # New batch prediction logic
+        return self._predict_batch(X, symbols)
 
     def _predict_multiindex(self, X: pd.DataFrame, symbols: List[str]) -> pd.Series:
         """
@@ -397,10 +431,22 @@ class FF5RegressionModel(BaseModel):
 
         # Filter to only symbols that have fitted betas
         valid_symbols = [s for s in symbols if s in self.betas]
+        missing_symbols = [s for s in symbols if s not in self.betas]
+
         if not valid_symbols:
             raise ValueError(f"No valid symbols found. Available symbols: {list(self.betas.keys())}")
 
-        logger.info(f"Predicting for {len(valid_symbols)} symbols: {valid_symbols}")
+        # CRITICAL FIX: Log missing symbols that will cause zero predictions
+        if missing_symbols:
+            logger.warning(f"⚠️  SYMBOL MISMATCH: {len(missing_symbols)} symbols not found in trained FF5 model:")
+            logger.warning(f"   Missing symbols: {missing_symbols}")
+            logger.warning(f"   Available symbols: {list(self.betas.keys())}")
+            logger.warning(f"   This will cause zero predictions for missing symbols!")
+            logger.warning(f"   Consider retraining the model with these symbols or using mean betas fallback.")
+
+        logger.info(f"Predicting for {len(valid_symbols)} trained symbols: {valid_symbols}")
+        if missing_symbols:
+            logger.info(f"Will skip {len(missing_symbols)} untrained symbols: {missing_symbols}")
 
         # Extract factor values (shared by all symbols)
         factor_values = X[self._expected_features].values  # shape: (T, 5)
@@ -428,22 +474,50 @@ class FF5RegressionModel(BaseModel):
         if not predictions:
             raise ValueError("No predictions could be generated")
 
-        # Convert to appropriate output format
+        # CRITICAL FIX: Handle missing symbols by adding zero predictions
+        # This ensures the output contains all requested symbols in the correct order
+        if missing_symbols:
+            logger.warning(f"Adding zero predictions for {len(missing_symbols)} missing symbols")
+            # Note: Using conservative zero predictions for missing symbols
+            # Future enhancement could use mean betas as fallback
+
+            for symbol in missing_symbols:
+                # Use zero prediction for missing symbols (conservative approach)
+                if len(X) == 1:
+                    # Single day - single zero value
+                    predictions[symbol] = np.array([0.0])
+                else:
+                    # Multiple days - zero values for each date
+                    predictions[symbol] = np.zeros(len(X))
+
+                logger.debug(f"Added zero prediction for missing symbol {symbol}")
+
+        # Convert to appropriate output format with ALL requested symbols
         if len(X) == 1:
             # Single day: return Series with symbols as index
-            result = pd.Series(
-                {symbol: predictions[symbol][0] for symbol in predictions},
-                name='ff5_prediction'
-            )
-            logger.info(f"Generated single-day predictions for {len(result)} symbols")
+            # CRITICAL FIX: Ensure all requested symbols are included in correct order
+            all_predictions = {}
+            for symbol in symbols:
+                if symbol in predictions:
+                    all_predictions[symbol] = predictions[symbol][0]
+                else:
+                    all_predictions[symbol] = 0.0  # Fallback
+
+            result = pd.Series(all_predictions, name='ff5_prediction')
+            logger.info(f"Generated single-day predictions for {len(result)} symbols (including {len(missing_symbols)} zero predictions)")
             return result
         else:
             # Multiple days: return DataFrame with dates as index, symbols as columns
-            result = pd.DataFrame(
-                {symbol: predictions[symbol] for symbol in predictions},
-                index=X.index
-            )
-            logger.info(f"Generated multi-day predictions: {result.shape}")
+            # CRITICAL FIX: Ensure all requested symbols are included in correct order
+            all_predictions = {}
+            for symbol in symbols:
+                if symbol in predictions:
+                    all_predictions[symbol] = predictions[symbol]
+                else:
+                    all_predictions[symbol] = np.zeros(len(X))  # Fallback
+
+            result = pd.DataFrame(all_predictions, index=X.index)
+            logger.info(f"Generated multi-day predictions: {result.shape} (including {len(missing_symbols)} zero columns)")
             return result
 
     def get_feature_importance(self) -> Dict[str, float]:

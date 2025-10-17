@@ -180,6 +180,12 @@ def _apply_quick_test_modifications(orchestrator):
         requirements['min_win_rate'] = 0.35
         logging.info("Relaxed system requirements for quick test")
 
+    # Relax validation requirements
+    if 'advanced' in config and 'validation' in config['advanced']:
+        validation = config['advanced']['validation']
+        validation['min_absolute_stocks'] = 3  # Allow fewer stocks for quick test
+        logging.info("Relaxed validation requirements for quick test")
+
 
 def _display_results(results):
     """Display experiment results in a readable format."""

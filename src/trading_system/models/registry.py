@@ -7,9 +7,7 @@ Import this module to ensure all models are available for creation.
 
 from .base.model_factory import ModelFactory
 from .implementations.ff5_model import FF5RegressionModel
-from .implementations.momentum_model import MomentumRankingModel
 from .implementations.fama_macbeth_model import FamaMacBethModel
-from .implementations.ensemble_model import EnsembleModel
 
 # Try to import ML models (optional dependencies)
 try:
@@ -40,20 +38,7 @@ def register_all_models():
         }
     )
 
-    # Register Momentum Ranking Model
-    ModelFactory.register(
-        model_type="momentum_ranking",
-        model_class=MomentumRankingModel,
-        description="Momentum ranking model for dual momentum strategies",
-        default_config={
-            "mode": "rule_based",
-            "top_n": 5,
-            "min_momentum": 0.0,
-            "momentum_weights": [0.3, 0.3, 0.4],  # 21d, 63d, 252d
-            "momentum_periods": [21, 63, 252]
-        }
-    )
-
+    
     # Register Fama-MacBeth Model
     ModelFactory.register(
         model_type="fama_macbeth",
@@ -103,18 +88,6 @@ def register_all_models():
             }
         )
 
-    # Register Ensemble Model
-    ModelFactory.register(
-        model_type="ensemble",
-        model_class=EnsembleModel,
-        description="Ensemble model combining multiple base models with metamodel weights",
-        default_config={
-            "base_model_ids": [],
-            "model_weights": {},
-            "model_registry_path": "./models/"
-        }
-    )
-
 # Auto-register models when this module is imported
 register_all_models()
 
@@ -123,9 +96,6 @@ def create_ff5_model(config=None):
     """Convenience function to create FF5 model."""
     return ModelFactory.create("ff5_regression", config)
 
-def create_momentum_model(config=None):
-    """Convenience function to create Momentum Ranking model."""
-    return ModelFactory.create("momentum_ranking", config)
 
 def create_xgboost_model(config=None):
     """Convenience function to create XGBoost model."""

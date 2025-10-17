@@ -168,22 +168,53 @@ class ModelPredictor:
                 logger.info(f"Features sample: {features.iloc[-1].to_dict()}")
                 logger.info(f"Features non-zero count: {(features.iloc[-1] != 0).sum()}")
 
-            # Make prediction
+            # ✅ FIX: Check if model.predict() supports symbols parameter
+            import inspect
+            model_predict = self._current_model.predict
+            sig = inspect.signature(model_predict)
+
             logger.info(f"Calling model.predict() for {symbol} on {prediction_date}")
-            prediction = self._current_model.predict(features)
+
+            if 'symbols' in sig.parameters and symbol:
+                # ✅ Model supports symbols parameter, pass it
+                logger.info(f"✅ Model supports symbols parameter, passing symbols=[{symbol}]")
+                prediction = model_predict(features, symbols=[symbol])
+            else:
+                # Model doesn't support symbols, use default call
+                logger.info(f"Model doesn't support symbols parameter, using default call")
+                prediction = model_predict(features)
+
             logger.info(f"Raw prediction result: {prediction} (type: {type(prediction)})")
 
-            # Handle different prediction formats
+            # ✅ FIX: Handle prediction result correctly
             if isinstance(prediction, np.ndarray):
-                if prediction.ndim == 0:
-                    prediction_value = float(prediction)
-                elif len(prediction) == 1:
-                    prediction_value = float(prediction[0])
-                else:
-                    # For multi-output, take the first one
-                    prediction_value = float(prediction[0])
-            else:
+                # ✅ If only one prediction value, use it directly
+                # If multiple, take the first (may not be optimal, but won't crash)
+                prediction_value = float(prediction[0] if len(prediction) > 0 else 0.0)
+                logger.info(f"Extracted prediction from ndarray: {prediction_value}")
+            elif isinstance(prediction, (int, float)):
                 prediction_value = float(prediction)
+                logger.info(f"Extracted prediction from numeric: {prediction_value}")
+            elif isinstance(prediction, pd.Series):
+                # Legacy support for models that still return Series
+                if symbol and symbol in prediction.index:
+                    prediction_value = float(prediction.loc[symbol])
+                    logger.info(f"Extracted prediction from Series by symbol: {prediction_value}")
+                else:
+                    prediction_value = float(prediction.iloc[0])
+                    logger.info(f"Extracted prediction from Series first element: {prediction_value}")
+            elif isinstance(prediction, pd.DataFrame):
+                # Legacy support for models that still return DataFrame
+                if symbol and symbol in prediction.columns:
+                    prediction_value = float(prediction[symbol].iloc[0])
+                    logger.info(f"Extracted prediction from DataFrame by column: {prediction_value}")
+                else:
+                    prediction_value = float(prediction.iloc[0, 0])
+                    logger.info(f"Extracted prediction from DataFrame first cell: {prediction_value}")
+            else:
+                # Direct numeric value or fallback
+                prediction_value = float(prediction) if prediction is not None else 0.0
+                logger.info(f"Converted prediction to float: {prediction_value}")
 
             result = {
                 'symbol': symbol,

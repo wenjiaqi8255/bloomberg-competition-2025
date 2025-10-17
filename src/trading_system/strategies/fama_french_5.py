@@ -43,7 +43,7 @@ Key Insight:
 
 import logging
 from datetime import datetime
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Any
 import pandas as pd
 import numpy as np
 
@@ -138,83 +138,47 @@ class FamaFrench5Strategy(BaseStrategy):
                    f"lookback={lookback_days}d, rf_rate={risk_free_rate}")
         logger.info(f"[{name}] Following SOLID principles - strategy as pure delegate")
 
-    def _compute_features(self, price_data: Dict[str, pd.DataFrame]) -> pd.DataFrame:
+    def _compute_features(self, pipeline_data: Dict[str, Any]) -> pd.DataFrame:
         """
-        Compute features for FF5 strategy following SOLID principles.
+        Compute features for FF5 strategy following the new architecture.
 
-        KISS + DRY Principle: Strategy is a pure delegate that coordinates components
-        without reimplementing existing functionality.
-
-        The strategy trusts:
-        - FeatureEngineeringPipeline to handle technical indicators and factor data merging
-        - FF5RegressionModel to handle beta estimation and prediction
-        - BaseStrategy framework to handle the signal generation workflow
+        ✅ REFACTORED: Following "Data preparation responsibility moves up to orchestrator" pattern.
+        FF5 strategy only uses pipeline_data provided by orchestrator, doesn't access providers.
 
         Args:
-            price_data: Dictionary mapping symbols to their price data
+            pipeline_data: Complete data prepared by orchestrator
+                - 'price_data': Dict[str, DataFrame] - OHLCV price data
+                - 'factor_data': DataFrame - FF5 factor data (MKT, SMB, HML, RMW, CMA, RF)
 
         Returns:
             DataFrame with features computed by the FeatureEngineeringPipeline
         """
-        logger.info(f"[{self.name}] 🔄 Computing features via FeatureEngineeringPipeline (delegate pattern)")
+        logger.info(f"[{self.name}] 🔄 Computing features from pipeline data (new architecture)")
+        logger.info(f"[{self.name}] Pipeline data keys: {list(pipeline_data.keys())}")
 
-        # CRITICAL FIX: FF5 strategy needs both price_data AND factor_data!
-        # The factor_data should be provided by the strategy runner or orchestrator
-        pipeline_input = {'price_data': price_data}
+        # Extract price_data and factor_data from pipeline_data
+        price_data = pipeline_data.get('price_data', {})
+        factor_data = pipeline_data.get('factor_data')
 
-        # Try to get factor data from various sources
-        factor_data = None
+        # Validate required data
+        if not price_data:
+            logger.error(f"[{self.name}] ❌ No price_data in pipeline_data")
+            return pd.DataFrame()
 
-        # Method 1: Check if strategy has access to factor_data_provider
-        if hasattr(self, 'factor_data_provider') and self.factor_data_provider:
-            logger.info(f"[{self.name}] 📊 Getting factor data from factor_data_provider")
-            try:
-                # Get date range from price data
-                all_dates = []
-                for symbol_data in price_data.values():
-                    if not symbol_data.empty:
-                        all_dates.extend(symbol_data.index.tolist())
+        if factor_data is None:
+            logger.error(f"[{self.name}] ❌ No factor_data in pipeline_data - FF5 strategy requires factor data!")
+            return pd.DataFrame()
 
-                if all_dates:
-                    start_date = min(all_dates)
-                    end_date = max(all_dates)
-                    factor_data = self.factor_data_provider.get_data(start_date, end_date)
-                    logger.info(f"[{self.name}] ✅ Factor data retrieved: {factor_data.shape if factor_data is not None else None}")
-                else:
-                    logger.warning(f"[{self.name}] No dates found in price data")
-            except Exception as e:
-                logger.error(f"[{self.name}] Failed to get factor data: {e}")
+        # Log data info
+        symbols_count = len(price_data)
+        factor_shape = factor_data.shape if hasattr(factor_data, 'shape') else 'N/A'
+        logger.info(f"[{self.name}] Processing {symbols_count} symbols with factor data shape: {factor_shape}")
 
-        # Method 2: Check if factor_data is stored as instance attribute
-        elif hasattr(self, 'factor_data') and self.factor_data is not None:
-            logger.info(f"[{self.name}] 📊 Using stored factor data: {self.factor_data.shape}")
-            factor_data = self.factor_data
-
-        # Method 3: Check providers dictionary
-        elif hasattr(self, 'providers') and self.providers and 'factor_data_provider' in self.providers:
-            logger.info(f"[{self.name}] 📊 Getting factor data from providers dictionary")
-            try:
-                factor_provider = self.providers['factor_data_provider']
-                # Get date range from price data
-                all_dates = []
-                for symbol_data in price_data.values():
-                    if not symbol_data.empty:
-                        all_dates.extend(symbol_data.index.tolist())
-
-                if all_dates:
-                    start_date = min(all_dates)
-                    end_date = max(all_dates)
-                    factor_data = factor_provider.get_data(start_date, end_date)
-                    logger.info(f"[{self.name}] ✅ Factor data retrieved from providers: {factor_data.shape if factor_data is not None else None}")
-            except Exception as e:
-                logger.error(f"[{self.name}] Failed to get factor data from providers: {e}")
-
-        # Add factor_data to pipeline input if available
-        if factor_data is not None and not factor_data.empty:
-            pipeline_input['factor_data'] = factor_data
-            logger.info(f"[{self.name}] 📊 Added factor data to pipeline input: {list(factor_data.columns)}")
-        else:
-            logger.warning(f"[{self.name}] ⚠️ No factor data available - FF5 model will fail!")
+        # Prepare pipeline input
+        pipeline_input = {
+            'price_data': price_data,
+            'factor_data': factor_data
+        }
 
         try:
             # Delegate to the existing feature pipeline (DRY principle)

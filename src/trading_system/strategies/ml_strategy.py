@@ -491,17 +491,19 @@ class MLStrategy(BaseStrategy):
     # SOLID Principle: Each layer has clear responsibility for normalization
 
     def generate_signals(self,
-                        price_data: Dict[str, pd.DataFrame],
+                        pipeline_data: Dict[str, Any],
                         start_date: datetime,
                         end_date: datetime) -> pd.DataFrame:
         """
         Generate expected returns using multi-stock enhanced approach.
 
-        SOLID Principle: Strategy is a pure delegate that provides expected returns.
-        Portfolio optimization and weight adjustment are handled by separate layers.
+        ✅ REFACTORED: Following "Data preparation responsibility moves up to orchestrator" pattern.
+        ML strategy only uses pipeline_data provided by orchestrator, doesn't fetch its own data.
 
         Args:
-            price_data: Original price data (may only contain trading universe)
+            pipeline_data: Complete data prepared by orchestrator
+                - 'price_data': Dict[str, DataFrame] - OHLCV price data for trading universe
+                - 'factor_data': DataFrame - Factor data if needed
             start_date: Start date for signal generation
             end_date: End date for signal generation
 
@@ -509,26 +511,39 @@ class MLStrategy(BaseStrategy):
             DataFrame with expected returns for the trading universe only
         """
         try:
-            logger.info(f"[{self.name}] 🔄 Generating expected returns (delegate pattern)...")
+            logger.info(f"[{self.name}] 🔄 Generating expected returns from pipeline data (new architecture)")
+            logger.info(f"[{self.name}] Pipeline data keys: {list(pipeline_data.keys())}")
 
-            # Step 1: Ensure we have data for all model training stocks
+            # Step 1: Extract price_data from pipeline_data
+            price_data = pipeline_data.get('price_data', {})
+            if not price_data:
+                logger.error(f"[{self.name}] ❌ No price_data in pipeline_data")
+                return pd.DataFrame()
+
+            logger.info(f"[{self.name}] Processing {len(price_data)} symbols from trading universe")
+
+            # Step 2: Ensure we have data for all model training stocks
             enhanced_price_data = self._fetch_additional_stock_data(price_data, start_date, end_date)
 
-            # Step 2: Compute features for all stocks (this is what the model expects)
-            features = self._compute_features(enhanced_price_data)
+            # Step 3: Compute features for all stocks (this is what the model expects)
+            # Update pipeline_data with enhanced price data for feature computation
+            enhanced_pipeline_data = pipeline_data.copy()
+            enhanced_pipeline_data['price_data'] = enhanced_price_data
+
+            features = self._compute_features(enhanced_pipeline_data)
 
             if features.empty:
                 logger.error(f"[{self.name}] Feature computation failed")
                 return pd.DataFrame()
 
-            # Step 3: Get predictions from model (model sees all training stocks)
+            # Step 4: Get predictions from model (model sees all training stocks)
             predictions = self._get_predictions(features, enhanced_price_data, start_date, end_date)
 
             if predictions.empty:
                 logger.error(f"[{self.name}] No predictions generated")
                 return pd.DataFrame()
 
-            # Step 4: Filter predictions to only include our trading universe
+            # Step 5: Filter predictions to only include our trading universe
             if self.universe:
                 available_universe = [s for s in self.universe if s in predictions.columns]
                 if not available_universe:
@@ -540,7 +555,7 @@ class MLStrategy(BaseStrategy):
             else:
                 expected_returns = predictions
 
-            # Step 5: Apply minimal signal strength filtering (keep most information for optimizer)
+            # Step 6: Apply minimal signal strength filtering (keep most information for optimizer)
             if hasattr(self, 'min_signal_strength') and self.min_signal_strength > 0:
                 # Use higher threshold to avoid removing valuable information for optimizer
                 threshold = min(self.min_signal_strength, 0.001)
@@ -549,7 +564,7 @@ class MLStrategy(BaseStrategy):
                 expected_returns[weak_signals] = 0.0
                 logger.debug(f"[{self.name}] Applied minimal filtering (threshold={threshold})")
 
-            # Step 6: Validate expected returns diversity (for debugging)
+            # Step 7: Validate expected returns diversity (for debugging)
             if not expected_returns.empty:
                 self._log_expected_returns_validation(expected_returns)
 

@@ -101,8 +101,12 @@ class MultiModelOrchestrator:
             # Step 4: Generate comprehensive report
             logger.info("STEP 4: Generating comprehensive report")
             self._generate_comprehensive_report()
-            
-            # Step 4: Save results
+
+            # Step 5: Save meta configuration for prediction use
+            logger.info("STEP 5: Saving meta configuration for prediction use")
+            self._save_meta_config()
+
+            # Step 6: Save results
             self._save_results()
             
             end_time = datetime.now()
@@ -640,6 +644,126 @@ class MultiModelOrchestrator:
         }
         
         return config
+
+    def _save_meta_config(self):
+        """
+        Save meta configuration for prediction use.
+
+        This method extracts the base_model_ids and meta_weights from the metamodel result
+        and creates a prediction_meta_config.yaml file that can be used by the
+        PredictionOrchestrator for ensemble predictions.
+
+        The generated configuration follows the format:
+        - strategy type: 'ml' (not 'meta' to follow existing patterns)
+        - model_id: 'ensemble'
+        - base_model_ids: list of trained base model IDs
+        - meta_weights: weights learned by the metamodel
+        - Other configuration parameters compatible with PredictionOrchestrator
+        """
+        if not self.metamodel_result:
+            raise ValueError("No metamodel result available for configuration saving")
+
+        logger.info("Saving meta configuration for prediction use...")
+
+        try:
+            # Extract base models and weights from metamodel result
+            base_model_ids = self.metamodel_result['base_models']
+            meta_weights = self.metamodel_result['weights']
+
+            logger.info(f"Base models: {base_model_ids}")
+            logger.info(f"Meta weights: {meta_weights}")
+
+            # Create prediction configuration following the existing pattern
+            # Use 'ml' strategy type with 'ensemble' model_id (like MultiModelOrchestrator)
+            prediction_config = {
+                'experiment': {
+                    'name': f"meta_prediction_{self.config['experiment']['name']}",
+                    'description': f"Ensemble prediction using metamodel weights from {self.config['experiment']['name']}",
+                    'output_dir': str(self.output_dir / 'prediction')
+                },
+
+                'universe': self.config.get('universe', []),
+
+                'data_provider': self.config.get('data_provider', {}),
+                'factor_data_provider': self.config.get('factor_data_provider', {}),
+
+                # Strategy configuration - use 'ml' type with ensemble model
+                'strategy': {
+                    'type': 'ml',  # Use existing 'ml' type, not 'meta'
+                    'name': 'EnsembleStrategy',
+                    'model_id': 'ensemble',  # Use 'ensemble' as model_id
+                    'min_signal_strength': 0.00001,
+                    'enable_normalization': True,
+                    'normalization_method': 'minmax',
+                    'enable_short_selling': False,
+                    'parameters': {
+                        # Ensemble-specific parameters for StrategyFactory
+                        'base_model_ids': base_model_ids,
+                        'model_weights': meta_weights,
+                        'model_registry_path': './models/',
+                        'combination_method': 'weighted_average'
+                    }
+                },
+
+                # Portfolio construction configuration
+                'portfolio_construction': {
+                    'method': 'box',
+                    'box_weights': {
+                        'method': 'equal',  # Use equal weighting to avoid configuration issues
+                        'num_boxes': 5
+                    },
+                    'rebalance_frequency': 'daily'
+                },
+
+                # Risk management
+                'risk_management': {
+                    'position_size_method': 'equal_weight',
+                    'max_position_weight': 0.2,
+                    'volatility_target': 0.15,
+                    'max_drawdown_threshold': 0.15
+                },
+
+                # Output configuration
+                'output': {
+                    'save_predictions': True,
+                    'save_portfolio_weights': True,
+                    'output_dir': str(self.output_dir / 'prediction' / 'results')
+                }
+            }
+
+            # Save to configs directory for PredictionOrchestrator to use
+            configs_dir = Path('./configs')
+            configs_dir.mkdir(exist_ok=True)
+
+            output_config_path = configs_dir / 'prediction_meta_config.yaml'
+
+            with open(output_config_path, 'w') as f:
+                yaml.dump(prediction_config, f, default_flow_style=False)
+
+            logger.info(f"✓ Meta configuration saved to: {output_config_path}")
+            logger.info(f"  Configuration contains {len(base_model_ids)} base models")
+            logger.info(f"  Total weight: {sum(meta_weights.values()):.4f}")
+
+            # Also save a copy in the experiment output directory
+            experiment_config_path = self.output_dir / 'prediction_meta_config.yaml'
+            with open(experiment_config_path, 'w') as f:
+                yaml.dump(prediction_config, f, default_flow_style=False)
+
+            logger.info(f"✓ Meta configuration also saved to: {experiment_config_path}")
+
+            # Store configuration path in results for reference
+            self.final_results['meta_config_path'] = str(output_config_path)
+            self.final_results['meta_config_summary'] = {
+                'base_models_count': len(base_model_ids),
+                'base_models': base_model_ids,
+                'weights_sum': sum(meta_weights.values()),
+                'config_path': str(output_config_path)
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to save meta configuration: {e}")
+            # Don't raise - this is not critical for the experiment success
+            logger.warning("Continuing without saving meta configuration")
 
     def _compare_meta_vs_base_performance(self):
         """Compare meta strategy performance against base strategies."""
