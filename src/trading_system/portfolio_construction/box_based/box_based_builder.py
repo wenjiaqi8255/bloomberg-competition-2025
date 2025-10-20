@@ -116,6 +116,9 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
 
         # Box selector (can be overridden via config)
         self.box_selector = SignalBasedBoxSelector()
+        
+        # Centralized constraints
+        self.constraints = self.config.get('constraints', {})
 
     def _validate_configuration(self) -> None:
         """Validate builder configuration."""
@@ -180,20 +183,25 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
             normalized_weights = self._normalize_weights(final_weights)
             construction_log.append(f"Final portfolio: {len(normalized_weights)} positions")
 
+            # Step 5: Apply constraints
+            logger.info("[Step 5/5] Applying constraints...")
+            constrained_weights = self._apply_constraints(normalized_weights)
+            construction_log.append(f"Applied constraints: max_position_weight={self.constraints.get('max_position_weight', 'None')}, max_leverage={self.constraints.get('max_leverage', 'None')}")
+
             # Log final portfolio summary
             logger.info("🎯 FINAL PORTFOLIO SUMMARY:")
-            logger.info(f"   📊 Total positions: {len(normalized_weights)}")
-            logger.info(f"   💰 Total weight: {sum(normalized_weights.values()):.4f}")
+            logger.info(f"   📊 Total positions: {len(constrained_weights)}")
+            logger.info(f"   💰 Total weight: {sum(constrained_weights.values()):.4f}")
             
             # Log top positions
-            sorted_positions = sorted(normalized_weights.items(), key=lambda x: x[1], reverse=True)
+            sorted_positions = sorted(constrained_weights.items(), key=lambda x: x[1], reverse=True)
             top_positions = sorted_positions[:10]  # Top 10 positions
             logger.info("   🏆 Top positions:")
             for stock, weight in top_positions:
                 logger.info(f"      {stock}: {weight:.4f} ({weight*100:.2f}%)")
 
-            logger.info(f"✅ Box-Based portfolio construction completed: {len(normalized_weights)} positions")
-            return pd.Series(normalized_weights)
+            logger.info(f"✅ Box-Based portfolio construction completed: {len(constrained_weights)} positions")
+            return pd.Series(constrained_weights)
 
         except Exception as e:
             logger.error(f"Box-Based portfolio construction failed: {e}")
@@ -409,6 +417,59 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
             logger.warning(f"Weight normalization result: {normalized_total:.8f} (expected 1.0)")
 
         return normalized
+
+    def _apply_constraints(self, weights: Dict[str, float]) -> Dict[str, float]:
+        """
+        Apply constraints to portfolio weights.
+        
+        Args:
+            weights: Dictionary of stock weights
+            
+        Returns:
+            Constrained weights dictionary
+        """
+        if not weights:
+            return weights
+            
+        max_w = self.constraints.get('max_position_weight')
+        max_leverage = self.constraints.get('max_leverage', 1.0)
+        min_w = self.constraints.get('min_position_weight', 0.0)
+
+        # Apply per-asset cap
+        if max_w is not None:
+            weights = {k: min(v, max_w) for k, v in weights.items()}
+            logger.debug(f"Applied max_position_weight constraint: {max_w}")
+
+        # Apply minimum weight threshold (zero out small positions)
+        if min_w > 0:
+            weights = {k: v if v >= min_w else 0.0 for k, v in weights.items()}
+            logger.debug(f"Applied min_position_weight constraint: {min_w}")
+
+        # Remove zero weights
+        weights = {k: v for k, v in weights.items() if v > 0}
+
+        if not weights:
+            logger.warning("All weights were zeroed out by constraints")
+            return {}
+
+        total = sum(weights.values())
+        if total <= 0:
+            logger.warning("Total weight is non-positive after constraints")
+            return {}
+
+        # Apply leverage cap: if total weight > max_leverage, scale down
+        if max_leverage is not None and total > max_leverage:
+            scale = max_leverage / total
+            weights = {k: v * scale for k, v in weights.items()}
+            total = sum(weights.values())
+            logger.debug(f"Applied max_leverage constraint: {max_leverage}, scaled by {scale:.4f}")
+
+        # Normalize to sum to 1.0
+        if total > 0:
+            weights = {k: v / total for k, v in weights.items()}
+
+        logger.debug(f"Final constrained weights sum: {sum(weights.values()):.6f}")
+        return weights
 
     def get_method_name(self) -> str:
         """Get the method name."""

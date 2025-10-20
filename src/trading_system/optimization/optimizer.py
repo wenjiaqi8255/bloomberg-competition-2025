@@ -52,6 +52,7 @@ class PortfolioOptimizer:
         self.risk_aversion = config.get('risk_aversion', 2.0)
         self.top_n = config.get('top_n', 10)
         self.enable_short_selling = config.get('enable_short_selling', False)
+        self.max_position_weight = config.get('max_position_weight', None)
 
         # Validate method
         valid_methods = ['mean_variance', 'equal_weight', 'top_n']
@@ -114,15 +115,17 @@ class PortfolioOptimizer:
         # Build constraints for the solver
         scipy_constraints = self._build_scipy_constraints(constraints, num_assets, expected_returns.index)
 
-        # Bounds for each weight based on short selling configuration
+        # Bounds for each weight based on short selling configuration and max position weight
         if self.enable_short_selling:
-            # Allow short positions: -1 <= w_i <= 1
-            bounds = Bounds(-1, 1)
-            logger.debug("Using short selling bounds: [-1, 1]")
+            # Allow short positions: -max_w <= w_i <= max_w
+            upper = self.max_position_weight if self.max_position_weight is not None else 1
+            bounds = Bounds(-upper, upper)
+            logger.debug(f"Using short selling bounds: [-{upper}, {upper}]")
         else:
-            # Long-only: 0 <= w_i <= 1
-            bounds = Bounds(0, 1)
-            logger.debug("Using long-only bounds: [0, 1]")
+            # Long-only: 0 <= w_i <= max_w
+            upper = self.max_position_weight if self.max_position_weight is not None else 1
+            bounds = Bounds(0, upper)
+            logger.debug(f"Using long-only bounds: [0, {upper}]")
 
         # Perform optimization
         result = minimize(
@@ -140,8 +143,9 @@ class PortfolioOptimizer:
             return optimal_weights / optimal_weights.sum()
         else:
             logger.error(f"Mean-variance optimization failed: {result.message}")
-            # Fallback to equal weight if optimization fails
-            return pd.Series(initial_weights, index=expected_returns.index)
+            # Fallback to equal weight if optimization fails, but apply constraints
+            fallback_weights = pd.Series(initial_weights, index=expected_returns.index)
+            return self._cap_weights_by_asset_limit(fallback_weights)
     
     def _optimize_equal_weight(self,
                                expected_returns: pd.Series,
@@ -165,6 +169,9 @@ class PortfolioOptimizer:
 
         # Apply box constraints if any (e.g., sector limits)
         weights = self._apply_constraints_to_weights(weights, constraints)
+        
+        # Apply per-asset weight cap
+        weights = self._cap_weights_by_asset_limit(weights)
 
         short_selling_info = " (short selling enabled)" if self.enable_short_selling else " (long-only)"
         logger.info(f"Equal weight optimization{short_selling_info}: {num_assets} assets, weight={1/num_assets:.4f} each")
@@ -173,7 +180,7 @@ class PortfolioOptimizer:
         if self.enable_short_selling:
             logger.warning("Equal weight method produces only positive weights. Use mean_variance for short positions.")
 
-        return weights / weights.sum()
+        return weights
     
     def _optimize_top_n(self,
                        expected_returns: pd.Series,
@@ -214,6 +221,9 @@ class PortfolioOptimizer:
 
         # Apply box constraints if any
         weights = self._apply_constraints_to_weights(weights, constraints)
+        
+        # Apply per-asset weight cap
+        weights = self._cap_weights_by_asset_limit(weights)
 
         # If short selling is enabled and any selected assets have negative expected returns,
         # we could potentially assign negative weights, but for simplicity keep positive weights
@@ -224,7 +234,7 @@ class PortfolioOptimizer:
             f"Top-{n} optimization: Selected {n} assets from {len(expected_returns)}, "
             f"weight={1/n:.4f} each"
         )
-        return weights / weights.sum()
+        return weights
     
     def _apply_constraints_to_weights(self,
                                      weights: pd.Series,
@@ -273,6 +283,34 @@ class PortfolioOptimizer:
                     )
         
         return adjusted_weights
+    
+    def _cap_weights_by_asset_limit(self, weights: pd.Series) -> pd.Series:
+        """Cap individual asset weights by max_position_weight constraint."""
+        if self.max_position_weight is None:
+            return weights
+        
+        # Cap weights to max_position_weight
+        capped = weights.clip(upper=self.max_position_weight)
+        
+        # If any weights were capped, we need to redistribute the excess
+        excess = weights.sum() - capped.sum()
+        if excess > 0:
+            # Find assets that weren't capped
+            uncapped_mask = weights <= self.max_position_weight
+            if uncapped_mask.any():
+                # Redistribute excess proportionally to uncapped assets
+                uncapped_weights = capped[uncapped_mask]
+                if uncapped_weights.sum() > 0:
+                    redistribution = excess * (uncapped_weights / uncapped_weights.sum())
+                    capped[uncapped_mask] += redistribution
+                else:
+                    # If all assets were capped, keep them at the cap (don't normalize)
+                    pass
+            else:
+                # All assets were capped, keep them at the cap (don't normalize)
+                pass
+        
+        return capped
             
     def _build_scipy_constraints(self, custom_constraints: List, num_assets: int, asset_names: pd.Index) -> List:
         """

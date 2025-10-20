@@ -26,7 +26,6 @@ from ..base.base_model import BaseModel
 from ...validation.time_series_cv import TimeSeriesCV
 from ..utils.performance_evaluator import PerformanceEvaluator as PerformanceEvaluator
 from .types import TrainingConfig, TrainingResult
-# ExperimentLogger已删除 - 简化版本不需要
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +45,6 @@ class ModelTrainer:
     def __init__(self,
                  config: Optional[TrainingConfig] = None,
                  cv: Optional[TimeSeriesCV] = None,
-                 experiment_logger: Optional[Any] = None,  # 简化版本，不再依赖ExperimentLogger
                  performance_evaluator: Optional[PerformanceEvaluator] = None):
         """
         Initialize the trainer.
@@ -54,7 +52,6 @@ class ModelTrainer:
         Args:
             config: Training configuration
             cv: Cross-validation instance (created if None)
-            logger: Logger for experiment tracking (created if None)
             performance_evaluator: Evaluator for model performance (created if None)
         """
         self.config = config or TrainingConfig()
@@ -65,8 +62,6 @@ class ModelTrainer:
             embargo_period=self.config.embargo_period
         )
         self.evaluator = performance_evaluator or PerformanceEvaluator()
-        # 简化版本 - 不再使用ExperimentLogger
-        self.experiment_logger = None
         
         # Log CV configuration
         logger.info(f"Cross-validation configured: method={self.config.cv_method}, "
@@ -103,59 +98,11 @@ class ModelTrainer:
         training_time = time.time() - start_time
         result.training_time = training_time
 
-        # 简化版本 - 不再使用ExperimentLogger
-        # 实验跟踪功能已移除，专注于核心训练逻辑
+        # 专注于核心训练逻辑
 
         logger.info(f"Training completed in {result.training_time:.2f} seconds")
         return result
 
-    def train_with_tracking(self,
-                           model: BaseModel,
-                           X: pd.DataFrame,
-                           y: pd.Series,
-                           experiment_config: Optional[Dict[str, Any]] = None,
-                           X_test: Optional[pd.DataFrame] = None,
-                           y_test: Optional[pd.Series] = None) -> TrainingResult:
-        """
-        Train a model with comprehensive experiment tracking.
-
-        Args:
-            model: Model to train
-            X: Training features
-            y: Training targets
-            experiment_config: Configuration for the experiment
-            X_test: Optional test features
-            y_test: Optional test targets
-
-        Returns:
-            TrainingResult with comprehensive information
-        """
-        logger.info(f"Starting tracked training for {model.model_type}")
-        total_start_time = time.time()
-
-        self.logger.init_run(model, X, self.config, experiment_config)
-
-        try:
-            self.logger.log_data_statistics(X, y)
-
-            result = self._perform_training(model, X, y, X_test, y_test, track_cv=True)
-
-            total_training_time = time.time() - total_start_time
-            result.training_time = total_training_time
-
-            self.logger.log_metrics(result.validation_metrics, split_name="training")
-            if result.test_metrics:
-                self.logger.log_metrics(result.test_metrics, split_name="test")
-
-            self.logger.log_model_information(model)
-            self.logger.finish_run(total_training_time)
-
-            logger.info(f"Tracked training completed in {total_training_time:.2f} seconds")
-            return result
-
-        except Exception as e:
-            self.logger.log_failure(model, e)
-            raise RuntimeError(f"Training failed: {e}")
 
     def _perform_training(self,
                           model: BaseModel,
@@ -212,50 +159,6 @@ class ModelTrainer:
             training_history=training_history
         )
 
-    def _log_data_statistics(self, X: pd.DataFrame, y: pd.Series) -> None:
-        """Log data statistics to experiment tracker."""
-        self.logger.log_data_statistics(X, y)
-
-    def _cross_validate_with_tracking(self,
-                                     model: BaseModel,
-                                     X: pd.DataFrame,
-                                     y: pd.Series) -> Dict[str, Any]:
-        """
-        Perform cross-validation with experiment tracking for each fold.
-        """
-        cv_scores = []
-        fold_results = []
-        
-        for fold_idx, (train_idx, val_idx) in enumerate(self.cv.split(X)):
-            X_train_fold, X_val_fold = X.iloc[train_idx], X.iloc[val_idx]
-            y_train_fold, y_val_fold = y.iloc[train_idx], y.iloc[val_idx]
-
-            fold_model = self._create_model_copy(model)
-            fold_model.fit(X_train_fold, y_train_fold)
-
-            fold_metrics = self._calculate_metrics(
-                fold_model, X_val_fold, y_val_fold, split_name=f"fold_{fold_idx}"
-            )
-            fold_results.append(fold_metrics)
-            cv_scores.append(fold_metrics.get('r2', 0.0))
-
-            self.logger.log_cv_fold(fold_idx, fold_metrics)
-
-        cv_result = {
-            'mean_r2': np.mean(cv_scores) if cv_scores else 0.0,
-            'std_r2': np.std(cv_scores) if cv_scores else 0.0,
-            'fold_results': fold_results,
-            'cv_scores': cv_scores
-        }
-
-        self.logger.log_cv_summary(cv_result)
-
-        logger.info(f"Cross-validation R²: {cv_result['mean_r2']:.4f} ± {cv_result['std_r2']:.4f}")
-        return cv_result
-
-    def _log_model_information(self, model: BaseModel) -> None:
-        """Log model-specific information to experiment tracker."""
-        self.logger.log_model_information(model)
 
     def _validate_training_data(self, X: pd.DataFrame, y: pd.Series) -> None:
         """
@@ -372,29 +275,9 @@ class ModelTrainer:
         """
         try:
             logger.info(f"Calculating metrics for {split_name} split...")
-            logger.info(f"DEBUG: Metrics calculation - X shape: {X.shape}, y shape: {y.shape}")
-            logger.info(f"DEBUG: Metrics calculation - X has NaN: {X.isnull().any().any()}, y has NaN: {y.isnull().any()}")
-            logger.info(f"DEBUG: Metrics calculation - y stats: mean={y.mean():.6f}, std={y.std():.6f}, min={y.min():.6f}, max={y.max():.6f}")
-
-            # Make predictions first to debug them
-            predictions = model.predict(X)
-            logger.info(f"DEBUG: Predictions shape: {predictions.shape}, predictions have NaN: {np.isnan(predictions).any()}")
-            logger.info(f"DEBUG: Prediction stats: mean={np.mean(predictions):.6f}, std={np.std(predictions):.6f}, min={np.min(predictions):.6f}, max={np.max(predictions):.6f}")
-            logger.info(f"DEBUG: Sample predictions (first 10): {predictions[:10]}")
-            logger.info(f"DEBUG: Sample y_true (first 10): {y.values[:10]}")
-
-            # Calculate correlation to understand relationship
-            if len(y) > 1:
-                correlation = np.corrcoef(y, predictions)[0, 1]
-                logger.info(f"DEBUG: Correlation between y_true and predictions: {correlation:.6f}")
-
-            # Note: evaluate_model returns more metrics than before.
-            # We can filter them here if needed, or just return all of them.
-            # For now, returning all seems fine.
+            
+            # Calculate metrics using the evaluator
             metrics = self.evaluator.evaluate(model, X, y)
-
-            # Filter to only include metrics relevant to the old implementation if necessary
-            # For example: metrics = {k: v for k, v in metrics.items() if k in ['r2', 'mse', 'mae', 'rmse', 'ic']}
 
             logger.info(f"{split_name} metrics: {metrics}")
             return metrics

@@ -1,0 +1,752 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Base Trading System Configuration Schemas",
+  "description": "Common schemas used across all configuration types",
+  "definitions": {
+    "data_provider": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["YFinanceProvider"]
+        },
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "max_retries": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10,
+              "default": 3
+            },
+            "retry_delay": {
+              "type": "number",
+              "minimum": 0.1,
+              "maximum": 10.0,
+              "default": 1.0
+            },
+            "request_timeout": {
+              "type": "integer",
+              "minimum": 10,
+              "maximum": 300,
+              "default": 30
+            },
+            "cache_enabled": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        }
+      }
+    },
+    "factor_data_provider": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["FF5DataProvider", "CountryRiskProvider"]
+        },
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "data_frequency": {
+              "type": "string",
+              "enum": ["daily", "weekly", "monthly"],
+              "default": "daily"
+            },
+            "cache_enabled": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        }
+      }
+    },
+    "model_config": {
+      "type": "object",
+      "required": ["model_type"],
+      "properties": {
+        "model_type": {
+          "type": "string",
+          "enum": ["ff5_regression", "fama_macbeth", "xgboost", "lstm", "ridge", "lasso"]
+        },
+        "config": {
+          "type": "object",
+          "properties": {
+            "regularization": {
+              "type": "string",
+              "enum": ["none", "ridge", "lasso"],
+              "default": "none"
+            },
+            "alpha": {
+              "type": "number",
+              "minimum": 0.01,
+              "maximum": 10.0,
+              "default": 1.0
+            },
+            "standardize": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        }
+      }
+    },
+    "feature_engineering": {
+      "type": "object",
+      "properties": {
+        "include_technical": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether to include technical analysis indicators"
+        },
+        "include_cross_sectional": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether to include cross-sectional features for Fama-MacBeth models"
+        },
+        "include_theoretical": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether to include theoretical/academic features"
+        },
+        "enabled_features": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["momentum", "volatility", "technical", "volume", "trend", "fama_french_factors"]
+          },
+          "default": ["momentum", "volatility", "technical", "volume"],
+          "description": "List of feature types to enable"
+        },
+        "normalize_features": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to normalize features before model training"
+        },
+        "normalization_method": {
+          "type": "string",
+          "enum": ["minmax", "zscore", "robust"],
+          "default": "robust",
+          "description": "Method for feature normalization"
+        },
+        "handle_missing": {
+          "type": "string",
+          "enum": ["forward_fill", "backward_fill", "drop", "interpolate", "median_fill", "mean_fill"],
+          "default": "interpolate",
+          "description": "Strategy for handling missing values"
+        },
+        "min_ic_threshold": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.03,
+          "description": "Minimum Information Coefficient threshold for feature selection"
+        },
+        "min_significance": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.05,
+          "description": "Minimum significance level for feature validation"
+        },
+        "feature_lag": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10,
+          "default": 1,
+          "description": "Number of periods to lag features to avoid look-ahead bias"
+        },
+        "max_features": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 50,
+          "description": "Maximum number of features to select"
+        },
+        "feature_importance_threshold": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.01,
+          "description": "Minimum feature importance threshold for selection"
+        },
+        "momentum_periods": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "default": [21, 63, 126, 252],
+          "description": "Lookback periods for momentum indicators (trading days)"
+        },
+        "volatility_windows": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "default": [20, 60],
+          "description": "Rolling windows for volatility calculations"
+        },
+        "lookback_periods": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "default": [20, 50, 200],
+          "description": "General lookback periods for feature engineering"
+        },
+        "return_periods": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "default": [1, 5, 10, 20],
+          "description": "Periods for return calculations"
+        },
+        "trend_periods": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "default": [10, 20, 50],
+          "description": "Periods for trend indicators"
+        },
+        "volume_periods": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "default": [5, 10, 20],
+          "description": "Periods for volume indicators"
+        },
+        "return_methods": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["simple", "log"]
+          },
+          "default": ["simple", "log"],
+          "description": "Methods for return calculations"
+        },
+        "momentum_methods": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["simple", "exponential"]
+          },
+          "default": ["simple", "exponential"],
+          "description": "Methods for momentum calculations"
+        },
+        "trend_methods": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["sma", "ema", "dema"]
+          },
+          "default": ["sma", "ema", "dema"],
+          "description": "Methods for trend calculations"
+        },
+        "volatility_methods": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["std", "parkinson", "garman_klass", "rogers_satchell"]
+          },
+          "default": ["std", "parkinson", "garman_klass"],
+          "description": "Methods for volatility calculations"
+        },
+        "volume_ratios": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to calculate volume ratios"
+        },
+        "volume_indicators": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["obv", "vwap", "ad_line"]
+          },
+          "default": ["obv", "vwap", "ad_line"],
+          "description": "Volume-based indicators to calculate"
+        },
+        "technical_indicators": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": ["rsi", "macd", "bollinger_bands", "stochastic", "williams_r"],
+          "description": "Technical indicators to calculate"
+        },
+        "technical_patterns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": ["rsi", "macd", "bollinger_position", "stochastic"],
+          "description": "Technical patterns to identify"
+        },
+        "missing_value_threshold": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.1,
+          "description": "Threshold for missing value warnings (10% default)"
+        },
+        "enable_missing_value_monitoring": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to enable missing value monitoring"
+        },
+        "missing_value_report_path": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Path to save missing value reports"
+        },
+        "warmup_tolerance_multiplier": {
+          "type": "number",
+          "minimum": 1.0,
+          "default": 1.5,
+          "description": "Multiplier for warmup period tolerance"
+        },
+        "cross_sectional_features": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": ["market_cap", "book_to_market", "size", "value", "momentum", "volatility"],
+          "description": "Cross-sectional features to compute"
+        },
+        "cross_sectional_lookback": {
+          "type": "object",
+          "properties": {
+            "momentum": {
+              "type": "integer",
+              "default": 252,
+              "description": "Lookback period for momentum (trading days)"
+            },
+            "volatility": {
+              "type": "integer",
+              "default": 60,
+              "description": "Lookback period for volatility (trading days)"
+            },
+            "ma_long": {
+              "type": "integer",
+              "default": 200,
+              "description": "Long moving average period (trading days)"
+            },
+            "ma_short": {
+              "type": "integer",
+              "default": 50,
+              "description": "Short moving average period (trading days)"
+            }
+          },
+          "default": {
+            "momentum": 252,
+            "volatility": 60,
+            "ma_long": 200,
+            "ma_short": 50
+          },
+          "description": "Lookback periods for cross-sectional features"
+        },
+        "winsorize_percentile": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 0.5,
+          "default": 0.01,
+          "description": "Percentile for winsorization (outlier handling)"
+        },
+        "box_features": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "Whether to enable box classification features"
+            },
+            "size_categories": {
+              "type": "boolean",
+              "default": true,
+              "description": "Whether to include size category features"
+            },
+            "style_categories": {
+              "type": "boolean",
+              "default": true,
+              "description": "Whether to include style category features"
+            },
+            "region_categories": {
+              "type": "boolean",
+              "default": true,
+              "description": "Whether to include region category features"
+            },
+            "sector_categories": {
+              "type": "boolean",
+              "default": true,
+              "description": "Whether to include sector category features"
+            },
+            "encoding_method": {
+              "type": "string",
+              "enum": ["one_hot", "target_encoding"],
+              "default": "one_hot",
+              "description": "Method for encoding categorical features"
+            },
+            "handle_unknown": {
+              "type": "string",
+              "enum": ["ignore", "fallback"],
+              "default": "ignore",
+              "description": "How to handle unknown categories"
+            }
+          },
+          "description": "Configuration for box classification features"
+        },
+        "data_format_index_order": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": ["date", "symbol"],
+          "description": "Expected order of index levels in panel data"
+        },
+        "validate_data_format": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to validate data format consistency"
+        },
+        "auto_fix_data_format": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to automatically fix data format issues"
+        },
+        "standardize_panel_output": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to standardize panel data output format"
+        },
+        "factors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": ["MKT", "SMB", "HML", "RMW", "CMA"],
+          "description": "Factor names for factor models (FF5)"
+        },
+        "factor_timing": {
+          "type": "object",
+          "default": {},
+          "description": "Timing configuration for factor models"
+        },
+        "risk_metrics": {
+          "type": "object",
+          "default": {},
+          "description": "Risk metrics configuration"
+        },
+        "sequence_features": {
+          "type": "object",
+          "default": {},
+          "description": "Configuration for sequence features (LSTM models)"
+        }
+      }
+    },
+    "portfolio_construction": {
+      "type": "object",
+      "required": ["method"],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": ["quantitative", "box_based"]
+        },
+        "stocks_per_box": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20,
+          "default": 3
+        },
+        "min_stocks_per_box": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10,
+          "default": 1
+        },
+        "allocation_method": {
+          "type": "string",
+          "enum": ["equal", "signal_proportional"],
+          "default": "equal"
+        },
+        "box_weights": {
+          "type": "object",
+          "required": ["method"],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": ["equal", "config"]
+            },
+            "dimensions": {
+              "type": "object",
+              "properties": {
+                "size": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": ["large", "mid", "small"]
+                  }
+                },
+                "style": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": ["growth", "value"]
+                  }
+                },
+                "region": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": ["developed", "emerging"]
+                  }
+                },
+                "sector": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "classifier": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": ["four_factor", "simple"],
+              "default": "four_factor"
+            },
+            "cache_enabled": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        },
+        "box_selector": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["signal_based", "random"],
+              "default": "signal_based"
+            }
+          }
+        },
+        "constraints": {
+          "type": "object",
+          "properties": {
+            "max_position_weight": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 0.10
+            },
+            "min_position_weight": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 0.02
+            },
+            "max_leverage": {
+              "type": "number",
+              "minimum": 0,
+              "default": 1.0
+            },
+            "volatility_target": {
+              "type": "number",
+              "minimum": 0,
+              "default": 0.15
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    "strategy_config": {
+      "type": "object",
+      "required": ["type", "name"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["ml", "fama_macbeth", "fama_french_5", "ff5_regression", "meta"]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "model_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "lookback_days": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 252
+            },
+            "risk_free_rate": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 0.5,
+              "default": 0.02
+            },
+            "portfolio_construction": {
+              "$ref": "#/definitions/portfolio_construction"
+            },
+            "enable_short_selling": {
+              "type": "boolean",
+              "default": false
+            },
+            "max_position_weight": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0,
+              "default": 0.08
+            }
+          }
+        },
+        "enable_normalization": {
+          "type": "boolean",
+          "default": true
+        },
+        "normalization_method": {
+          "type": "string",
+          "enum": ["minmax", "zscore", "robust"],
+          "default": "minmax"
+        },
+        "min_signal_strength": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.00001
+        }
+      }
+    },
+    "backtest_config": {
+      "type": "object",
+      "required": ["start_date", "end_date", "initial_capital"],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "start_date": {
+          "type": "string",
+          "format": "date"
+        },
+        "end_date": {
+          "type": "string",
+          "format": "date"
+        },
+        "initial_capital": {
+          "type": "number",
+          "minimum": 1000,
+          "maximum": 1000000000,
+          "default": 1000000
+        },
+        "benchmark_symbol": {
+          "type": "string",
+          "default": "SPY"
+        },
+        "commission_rate": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 0.01,
+          "default": 0.001
+        },
+        "slippage_rate": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 0.01,
+          "default": 0.0005
+        },
+        "rebalance_frequency": {
+          "type": "string",
+          "enum": ["daily", "weekly", "monthly"],
+          "default": "weekly"
+        },
+        "position_limit": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.08
+        },
+        "rebalance_threshold": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 0.1,
+          "default": 0.001
+        }
+      }
+    },
+    "hyperparameter_optimization": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "optimization_method": {
+          "type": "string",
+          "enum": ["optuna", "grid_search", "random_search"],
+          "default": "optuna"
+        },
+        "n_trials": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 20
+        },
+        "cv_folds": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 10,
+          "default": 3
+        },
+        "objective": {
+          "type": "string",
+          "enum": ["r2", "mse", "mae", "sharpe_ratio", "sortino_ratio"],
+          "default": "r2"
+        },
+        "search_space_preset": {
+          "type": "string",
+          "enum": ["ff5_default", "xgboost_default", "lstm_default", "fama_macbeth_default"],
+          "default": "ff5_default"
+        },
+        "sampler_type": {
+          "type": "string",
+          "enum": ["tpe", "random", "cmaes"],
+          "default": "tpe"
+        },
+        "pruner_type": {
+          "type": "string",
+          "enum": ["median", "hyperband", "successional_halving"],
+          "default": "median"
+        },
+        "log_to_wandb": {
+          "type": "boolean",
+          "default": true
+        },
+        "log_all_trials": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    }
+  }
+}

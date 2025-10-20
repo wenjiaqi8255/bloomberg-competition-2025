@@ -1,0 +1,245 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Single Experiment Configuration Schema",
+  "description": "Schema for single model experiment configurations",
+  "type": "object",
+  "required": ["data_provider", "training_setup", "strategy", "backtest"],
+  "properties": {
+    "data_provider": {
+      "$ref": "base_schemas.json#/definitions/data_provider"
+    },
+    "factor_data_provider": {
+      "$ref": "base_schemas.json#/definitions/factor_data_provider"
+    },
+    "training_setup": {
+      "type": "object",
+      "required": ["model", "feature_engineering", "parameters"],
+      "properties": {
+        "model": {
+          "$ref": "base_schemas.json#/definitions/model_config"
+        },
+        "feature_engineering": {
+          "$ref": "base_schemas.json#/definitions/feature_engineering"
+        },
+        "parameters": {
+          "type": "object",
+          "required": ["start_date", "end_date", "symbols"],
+          "properties": {
+            "start_date": {
+              "type": "string",
+              "format": "date"
+            },
+            "end_date": {
+              "type": "string",
+              "format": "date"
+            },
+            "symbols": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            "universe": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "enum": ["csv", "inline"]
+                },
+                "csv_path": {
+                  "type": "string"
+                },
+                "filters": {
+                  "type": "object",
+                  "properties": {
+                    "min_market_cap": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "max_stocks": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "exclude_sectors": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "hyperparameter_optimization": {
+          "$ref": "base_schemas.json#/definitions/hyperparameter_optimization"
+        }
+      }
+    },
+    "strategy": {
+      "$ref": "base_schemas.json#/definitions/strategy_config"
+    },
+    "backtest": {
+      "$ref": "base_schemas.json#/definitions/backtest_config"
+    },
+    "universe": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "experiment": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "log_to_wandb": {
+          "type": "boolean",
+          "default": true
+        },
+        "wandb_project": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "system_integration": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "modern_orchestrator": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "portfolio_construction_method": {
+              "type": "string",
+              "enum": ["box_based", "quantitative"]
+            }
+          }
+        }
+      }
+    },
+    "reporting": {
+      "type": "object",
+      "properties": {
+        "generate_report": {
+          "type": "boolean",
+          "default": true
+        },
+        "output_directory": {
+          "type": "string"
+        },
+        "box_analysis": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "track_box_coverage": {
+              "type": "boolean",
+              "default": true
+            },
+            "track_box_performance": {
+              "type": "boolean",
+              "default": true
+            },
+            "generate_box_charts": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        }
+      }
+    },
+    "risk_management": {
+      "type": "object",
+      "properties": {
+        "box_risk_limits": {
+          "type": "object",
+          "properties": {
+            "max_box_weight": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0,
+              "default": 0.15
+            },
+            "min_box_coverage": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0,
+              "default": 0.6
+            },
+            "max_sector_concentration": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0,
+              "default": 0.25
+            }
+          }
+        },
+        "position_limits": {
+          "type": "object",
+          "properties": {
+            "max_single_position": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0,
+              "default": 0.08
+            },
+            "min_position": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0,
+              "default": 0.01
+            },
+            "max_turnover": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0,
+              "default": 0.5
+            }
+          }
+        }
+      }
+    },
+    "benchmarks": {
+      "type": "object",
+      "properties": {
+        "primary": {
+          "type": "string",
+          "default": "SPY"
+        },
+        "secondary": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "factor_benchmarks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

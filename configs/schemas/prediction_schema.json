@@ -1,0 +1,258 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Prediction Configuration Schema",
+  "description": "Schema for prediction configurations",
+  "type": "object",
+  "required": ["prediction", "strategy", "data_provider", "universe"],
+  "properties": {
+    "prediction": {
+      "type": "object",
+      "required": ["prediction_date"],
+      "properties": {
+        "prediction_date": {
+          "type": "string",
+          "format": "date"
+        }
+      }
+    },
+    "strategy": {
+      "type": "object",
+      "required": ["type", "name"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["meta", "ml", "fama_french_5", "ff5_regression"]
+        },
+        "name": {
+          "type": "string"
+        },
+        "base_model_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "meta_weights": {
+          "type": "object",
+          "patternProperties": {
+            "^.*$": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0
+            }
+          }
+        },
+        "min_signal_strength": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.00001
+        },
+        "enable_normalization": {
+          "type": "boolean",
+          "default": true
+        },
+        "normalization_method": {
+          "type": "string",
+          "enum": ["minmax", "zscore", "robust"],
+          "default": "minmax"
+        },
+        "enable_short_selling": {
+          "type": "boolean",
+          "default": false
+        },
+        "model_registry_path": {
+          "type": "string",
+          "default": "./models/"
+        }
+      }
+    },
+    "data_provider": {
+      "$ref": "base_schemas.json#/definitions/data_provider"
+    },
+    "factor_data_provider": {
+      "$ref": "base_schemas.json#/definitions/factor_data_provider"
+    },
+    "universe": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "portfolio_construction": {
+      "type": "object",
+      "required": ["method"],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": ["box_based", "quantitative"]
+        },
+        "stocks_per_box": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20,
+          "default": 3
+        },
+        "min_stocks_per_box": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10,
+          "default": 1
+        },
+        "allocation_method": {
+          "type": "string",
+          "enum": ["equal", "signal_proportional"],
+          "default": "equal"
+        },
+        "allocation_config": {
+          "type": "object"
+        },
+        "box_weights": {
+          "type": "object",
+          "required": ["method"],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": ["equal", "config"]
+            },
+            "dimensions": {
+              "type": "object",
+              "properties": {
+                "size": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": ["large", "mid", "small"]
+                  }
+                },
+                "style": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": ["growth", "value"]
+                  }
+                },
+                "region": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": ["developed", "emerging"]
+                  }
+                },
+                "sector": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "classifier": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": ["four_factor", "simple"],
+              "default": "four_factor"
+            },
+            "size_breakpoints": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              }
+            },
+            "style_method": {
+              "type": "string",
+              "enum": ["pb_ratio", "pe_ratio", "book_to_market"],
+              "default": "pb_ratio"
+            },
+            "cache_enabled": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        },
+        "box_selector": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["signal_based", "random"],
+              "default": "signal_based"
+            }
+          }
+        }
+      }
+    },
+    "constraints": {
+      "type": "object",
+      "properties": {
+        "max_position_weight": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.15
+        },
+        "min_position_weight": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.02
+        },
+        "max_leverage": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 10.0,
+          "default": 1.0
+        },
+        "max_portfolio_risk": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.20
+        },
+        "sector_diversification": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "type": "string",
+          "enum": ["simple", "detailed"],
+          "default": "detailed"
+        },
+        "include_risk_analysis": {
+          "type": "boolean",
+          "default": true
+        },
+        "include_sector_analysis": {
+          "type": "boolean",
+          "default": true
+        },
+        "include_box_analysis": {
+          "type": "boolean",
+          "default": true
+        },
+        "include_meta_analysis": {
+          "type": "boolean",
+          "default": true
+        },
+        "save_results": {
+          "type": "boolean",
+          "default": true
+        },
+        "output_path": {
+          "type": "string",
+          "default": "./prediction_results/"
+        }
+      }
+    }
+  }
+}

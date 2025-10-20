@@ -61,8 +61,11 @@ class QuantitativePortfolioBuilder(IPortfolioBuilder):
         self.universe_size = self.config.get('universe_size', 100)
         self.enable_short_selling = self.config.get('enable_short_selling', False)
 
-        # Portfolio optimizer
-        optimizer_config = self.config.get('optimizer', {})
+        # Portfolio optimizer - pass constraints
+        optimizer_config = self.config.get('optimizer', {}).copy()
+        max_position_weight = self.config.get('constraints', {}).get('max_position_weight')
+        if max_position_weight is not None:
+            optimizer_config['max_position_weight'] = max_position_weight
         self.optimizer = PortfolioOptimizer(optimizer_config)
 
         # Covariance estimator
@@ -88,6 +91,9 @@ class QuantitativePortfolioBuilder(IPortfolioBuilder):
 
         # Liquidity filtering
         self.min_history_days = self.config.get('min_history_days', 252)
+        
+        # Centralized constraints
+        self.constraints = self.config.get('constraints', {})
 
     def _validate_configuration(self) -> None:
         """Validate builder configuration."""

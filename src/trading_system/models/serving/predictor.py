@@ -169,56 +169,129 @@ class ModelPredictor:
                             symbols: List[str],
                             date: Optional[datetime]) -> pd.Series:
         """
-        Optimized batch prediction for batch-capable models.
+        优化的批量预测模式（用于batch-capable模型如FF5）
         
-        All symbols share the same inputs (e.g., factor values) → one model call.
-        
-        Examples:
-            - FF5: All stocks use same factor values at date t
-            - Cross-sectional XGBoost: Predict all stocks at date t together
+        关键：确保只传递**单日、横截面**的因子数据给模型
         """
-        logger.info(f"[Batch Mode] Predicting {len(symbols)} symbols in single call")
+        logger.info(f"[Batch Mode] Predicting {len(symbols)} symbols for date: {date}")
         
-        # Extract shared inputs (e.g., factor values for FF5)
+        # ============================================================
+        # 步骤1：提取单日特征数据
+        # ============================================================
         if isinstance(features.index, pd.MultiIndex):
-            # If MultiIndex, extract first symbol's features (all should be same for batch models)
-            first_symbol = features.index.get_level_values('symbol')[0]
-            X = features.xs(first_symbol, level='symbol').values
-            logger.debug(f"Extracted shared features from symbol: {first_symbol}")
-        else:
-            X = features.values
+            logger.debug(f"MultiIndex detected: {features.index.names}")
+            
+            # 情况A：有 'date' 和 'symbol' 两层索引
+            if 'date' in features.index.names and 'symbol' in features.index.names:
+                if date is None:
+                    # 如果没有指定日期，取最后一个日期
+                    last_date = features.index.get_level_values('date')[-1]
+                    logger.warning(f"No date specified, using last date: {last_date}")
+                    date = last_date
+                
+                try:
+                    # 提取指定日期的所有股票数据
+                    date_features = features.xs(date, level='date')
+                    logger.debug(f"Extracted date features: {date_features.shape}")
+                    
+                    # 验证：所有股票的因子值应该相同（FF5的特性）
+                    # 取第一个股票的因子值
+                    if isinstance(date_features.index, pd.Index):
+                        # 单层索引，包含多个股票
+                        first_symbol = date_features.index[0]
+                        single_date_factors = date_features.loc[first_symbol:first_symbol]  # 取单行
+                    else:
+                        single_date_factors = date_features.iloc[[0]]  # 取第一行
+                    
+                    logger.debug(f"Single date factors shape: {single_date_factors.shape}")
+                    
+                except KeyError:
+                    logger.error(f"Date {date} not found in features index")
+                    # 降级：取第一行
+                    single_date_factors = features.iloc[[0]]
+            
+            # 情况B：只有 'symbol' 索引（可能是单日数据）
+            elif 'symbol' in features.index.names:
+                logger.debug("Only 'symbol' index found, assuming single date")
+                # 取第一个股票的数据（假设所有股票共享因子）
+                first_symbol = features.index.get_level_values('symbol')[0]
+                single_date_factors = features.xs(first_symbol, level='symbol')
+                
+                # 确保是单行
+                if len(single_date_factors.shape) == 1:
+                    # Series → DataFrame
+                    single_date_factors = single_date_factors.to_frame().T
+                elif single_date_factors.shape[0] > 1:
+                    logger.warning(f"Multiple rows found, taking first: {single_date_factors.shape}")
+                    single_date_factors = single_date_factors.iloc[[0]]
+            
+            else:
+                logger.error(f"Unexpected MultiIndex structure: {features.index.names}")
+                single_date_factors = features.iloc[[0]]
         
-        # Check if model supports symbols parameter
+        else:
+            # 普通索引：假设已经是单日数据
+            logger.debug(f"Regular index, features shape: {features.shape}")
+            
+            if features.shape[0] == 1:
+                # 已经是单行
+                single_date_factors = features
+            elif features.shape[0] > 1:
+                # 多行：需要根据 date 过滤
+                if date is not None and isinstance(features.index, pd.DatetimeIndex):
+                    try:
+                        single_date_factors = features.loc[[date]]
+                    except KeyError:
+                        logger.warning(f"Date {date} not found, using first row")
+                        single_date_factors = features.iloc[[0]]
+                else:
+                    logger.warning(f"Multiple rows without date filter, using first row")
+                    single_date_factors = features.iloc[[0]]
+            else:
+                single_date_factors = features
+        
+        # ============================================================
+        # 步骤2：最终验证
+        # ============================================================
+        logger.info(f"Prepared single-date factors: shape={single_date_factors.shape}")
+        
+        if single_date_factors.shape[0] != 1:
+            logger.error(f"❌ CRITICAL: Expected 1 row, got {single_date_factors.shape[0]}")
+            logger.error(f"   This will cause incorrect predictions!")
+            # 强制取第一行
+            single_date_factors = single_date_factors.iloc[[0]]
+        
+        # ============================================================
+        # 步骤3：调用模型预测
+        # ============================================================
         import inspect
         sig = inspect.signature(self._current_model.predict)
         
         if 'symbols' in sig.parameters:
-            # Model can filter to specific symbols (preferred)
-            logger.debug(f"Model supports symbols parameter, passing: {symbols}")
-            predictions = self._current_model.predict(features, symbols=symbols)
+            logger.debug(f"Model supports symbols parameter")
+            predictions = self._current_model.predict(single_date_factors, symbols=symbols)
         else:
-            # Model returns all trained symbols, need to filter
-            logger.debug("Model does not support symbols parameter, will filter results")
-            predictions = self._current_model.predict(features)
+            logger.debug("Model does not support symbols parameter")
+            predictions = self._current_model.predict(single_date_factors)
         
-        # Convert to Series
+        # ============================================================
+        # 步骤4：转换为 Series
+        # ============================================================
         if isinstance(predictions, np.ndarray):
             if len(predictions) == len(symbols):
                 result = pd.Series(predictions, index=symbols, name='prediction')
             else:
-                # Length mismatch - model returned all symbols
                 logger.warning(
-                    f"Prediction length mismatch: got {len(predictions)}, expected {len(symbols)}. "
-                    f"Model may not support symbols filtering."
+                    f"Prediction length mismatch: got {len(predictions)}, expected {len(symbols)}"
                 )
-                # Take first N predictions (suboptimal but safe)
                 result = pd.Series(predictions[:len(symbols)], index=symbols, name='prediction')
         else:
             result = pd.Series(predictions, index=symbols, name='prediction')
         
-        # Log monitoring info
+        # ============================================================
+        # 步骤5：监控日志
+        # ============================================================
         if self._monitor:
-            # Use existing log method if log_batch_prediction doesn't exist
             if hasattr(self._monitor, 'log_batch_prediction'):
                 self._monitor.log_batch_prediction(
                     model_id=self.model_id,
@@ -227,7 +300,6 @@ class ModelPredictor:
                     prediction_mode='batch'
                 )
             else:
-                # Fallback to basic logging
                 logger.info(f"[Monitor] Batch prediction: {len(symbols)} symbols at {date}")
         
         logger.info(f"[Batch Mode] Successfully predicted {len(result)} symbols")

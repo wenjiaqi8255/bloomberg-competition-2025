@@ -214,42 +214,7 @@ class PortfolioSnapshot:
         }
 
 
-@dataclass
-class Portfolio:
-    """
-    Current portfolio state.
-
-    This represents the live portfolio that can be updated with new positions
-    and trades, as opposed to PortfolioSnapshot which is immutable.
-    """
-    total_value: float
-    cash_balance: float
-    positions: Dict[str, Position]
-    last_updated: datetime
-
-    def __post_init__(self):
-        """Validate portfolio parameters."""
-        if self.total_value < 0:
-            raise ValueError(f"Total value cannot be negative, got {self.total_value}")
-
-        if self.cash_balance < 0:
-            raise ValueError(f"Cash balance cannot be negative, got {self.cash_balance}")
-
-    @property
-    def equity_value(self) -> float:
-        """Calculate total equity value."""
-        return sum(pos.market_value for pos in self.positions.values())
-
-    @property
-    def positions_count(self) -> int:
-        """Get number of non-empty positions."""
-        return len([pos for pos in self.positions.values() if pos.quantity != 0])
-
-
 # Type aliases for backward compatibility
 PositionList = List[Position]
 TradeList = List[Trade]
 PortfolioHistory = List[PortfolioSnapshot]
-
-# Legacy aliases for gradual migration
-PortfolioPosition = Position  # @deprecated: Use Position instead

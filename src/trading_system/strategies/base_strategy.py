@@ -4,7 +4,7 @@ Unified Base Strategy - All Strategies Follow the Same Architecture
 This is the new base class that enforces a consistent architecture across
 all trading strategies:
 
-    FeatureEngineeringPipeline → ModelPredictor → PositionSizer
+    FeatureEngineeringPipeline → ModelPredictor
 
 Key Design Principles:
 ----------------------
@@ -12,7 +12,6 @@ Key Design Principles:
 2. **Separation of Concerns**: 
    - Pipeline: Feature computation
    - Model: Prediction/ranking logic
-   - PositionSizer: Risk management
 3. **Trainability**: All strategies can be "trained" (even rule-based ones)
 4. **Composability**: Easy to swap components
 
@@ -280,22 +279,23 @@ class BaseStrategy(ABC):
                         start_date: datetime,
                         end_date: datetime) -> pd.DataFrame:
         """
-        Unified prediction method - works for all model types.
+        统一预测方法 - 适用于所有模型类型
         
-        ModelPredictor automatically handles:
-        - Batch-capable: Single call per date (30x faster for FF5)
-        - Independent: Multiple calls per date (necessary for per-stock models)
+        ModelPredictor 自动处理：
+        - Batch-capable: 单次调用预测所有股票（FF5快30倍）
+        - Independent: 逐股票调用（per-stock模型必需）
         """
         try:
             dates = pd.date_range(start=start_date, end=end_date, freq='D')
             symbols = list(price_data.keys())
             
-            # Log prediction mode for transparency
+            # 获取预测模式（用于日志）
             try:
                 current_model = self.model_predictor.get_current_model()
                 prediction_mode = current_model.prediction_mode
             except:
                 prediction_mode = 'unknown'
+            
             logger.info(
                 f"[{self.name}] Starting predictions for {len(dates)} dates, "
                 f"{len(symbols)} symbols (mode: {prediction_mode})"
@@ -305,15 +305,41 @@ class BaseStrategy(ABC):
             
             for i, date in enumerate(dates, 1):
                 try:
-                    # Extract features for this specific date
+                    # ====================================================
+                    # 关键修复：提取当前日期的特征
+                    # ====================================================
                     if isinstance(features.index, pd.MultiIndex):
-                        # MultiIndex: extract date-specific features
-                        date_features = features.xs(date, level='date') if 'date' in features.index.names else features
+                        logger.debug(f"Date {date}: MultiIndex features, extracting date-specific data")
+                        
+                        if 'date' in features.index.names:
+                            # 有日期索引：提取当前日期的数据
+                            try:
+                                date_features = features.xs(date, level='date')
+                                logger.debug(f"  Extracted {len(date_features)} rows for date {date}")
+                            except KeyError:
+                                logger.warning(f"  Date {date} not found in features, skipping")
+                                predictions_dict[date] = pd.Series(0.0, index=symbols)
+                                continue
+                        else:
+                            # 没有日期索引：使用全部特征（假设是单日）
+                            logger.debug(f"  No 'date' level in MultiIndex, using all features")
+                            date_features = features
                     else:
-                        # Regular index: use all features (assume single date or date-agnostic)
+                        # 普通索引：假设特征已经按日期准备好
+                        logger.debug(f"Date {date}: Regular index features")
                         date_features = features
                     
-                    # Single unified call - ModelPredictor handles optimization
+                    # 额外检查：如果是普通索引但有DatetimeIndex，过滤到当前日期
+                    if isinstance(date_features.index, pd.DatetimeIndex):
+                        if date in date_features.index:
+                            date_features = date_features.loc[[date]]
+                            logger.debug(f"  Filtered to single date: {date_features.shape}")
+                    
+                    logger.debug(f"Date {date}: final features shape = {date_features.shape}")
+                    
+                    # ====================================================
+                    # 单次统一调用 - ModelPredictor 自动优化
+                    # ====================================================
                     date_predictions = self.model_predictor.predict(
                         features=date_features,
                         symbols=symbols,
@@ -321,12 +347,14 @@ class BaseStrategy(ABC):
                     )
                     predictions_dict[date] = date_predictions
                     
-                    # Progress logging
+                    # 进度日志
                     if i % 30 == 0 or i == len(dates):
                         logger.info(f"[{self.name}] Predicted {i}/{len(dates)} dates")
                     
                 except Exception as e:
                     logger.error(f"Prediction failed for {date}: {e}")
+                    import traceback
+                    logger.debug(traceback.format_exc())
                     predictions_dict[date] = pd.Series(0.0, index=symbols)
             
             result = pd.DataFrame(predictions_dict).T
@@ -338,6 +366,8 @@ class BaseStrategy(ABC):
             
         except Exception as e:
             logger.error(f"Prediction generation failed: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return pd.DataFrame()
     
 

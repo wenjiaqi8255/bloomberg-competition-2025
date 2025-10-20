@@ -1,0 +1,329 @@
+# Configuration Registry - Single Source of Truth
+# ===============================================
+# This file serves as the central registry for all configuration files
+# in the trading system. It provides a complete overview of available
+# configurations, their purposes, and current status.
+
+version: "1.0"
+last_updated: "2024-01-15"
+description: "Central registry for all trading system configurations"
+
+# Available Options
+# ================
+# Complete list of all available options for each configuration type
+available_options:
+  strategy_types:
+    - ml                # ML策略（XGBoost, LSTM等）
+    - fama_macbeth      # Fama-MacBeth横截面模型
+    - fama_french_5     # FF5因子模型
+    - ff5_regression    # FF5回归（别名）
+    - meta              # 元策略（组合多个模型）
+  
+  portfolio_methods:
+    - quantitative      # 传统量化优化
+    - box_based        # Box-First方法
+  
+  allocation_methods:
+    - equal            # 等权重
+    - signal_proportional  # 信号比例权重
+  
+  optimizer_methods:
+    - mean_variance    # 均值-方差优化
+    - equal_weight     # 等权重
+    - top_n           # Top-N选择
+    - risk_parity     # 风险平价
+  
+  data_providers:
+    - YFinanceProvider # Yahoo Finance数据
+  
+  factor_providers:
+    - FF5DataProvider       # Fama-French 5因子
+    - CountryRiskProvider   # 国家风险因子
+  
+  model_types:
+    - ff5_regression   # Fama-French 5因子回归
+    - fama_macbeth     # Fama-MacBeth横截面回归
+    - xgboost         # XGBoost机器学习模型
+    - lstm            # LSTM神经网络模型
+    - ridge           # Ridge回归
+    - lasso           # Lasso回归
+  
+  feature_types:
+    - technical       # 技术指标特征
+    - cross_sectional # 横截面特征
+    - theoretical     # 理论特征
+    - box_features    # Box分类特征
+
+# Active Configurations
+# ====================
+# Currently active and maintained configuration files
+active_configs:
+  single_experiment:
+    ff5_box_based:
+      file: "active/single_experiment/ff5_box_based_experiment.yaml"
+      description: "FF5因子模型 + Box-First投资组合构建"
+      use_case: "ExperimentOrchestrator"
+      strategy_type: "fama_french_5"
+      portfolio_method: "box_based"
+      status: "active"
+      tested: "2024-01-15"
+      entry_point: "src/use_case/single_experiment/run_experiment.py"
+      tags: ["ff5", "box_based", "factor_model"]
+    
+    fama_macbeth_box_based:
+      file: "active/single_experiment/fama_macbeth_box_based_config.yaml"
+      description: "Fama-MacBeth横截面模型 + Box-First投资组合"
+      use_case: "ExperimentOrchestrator"
+      strategy_type: "ml"
+      portfolio_method: "box_based"
+      status: "active"
+      tested: "2024-01-10"
+      entry_point: "src/use_case/single_experiment/run_experiment.py"
+      tags: ["fama_macbeth", "box_based", "cross_sectional"]
+    
+    ff5_quantitative:
+      file: "active/single_experiment/e2e_ff5_experiment.yaml"
+      description: "FF5因子模型 + 传统量化优化"
+      use_case: "ExperimentOrchestrator"
+      strategy_type: "fama_french_5"
+      portfolio_method: "quantitative"
+      status: "active"
+      tested: "2024-01-12"
+      entry_point: "src/use_case/single_experiment/run_experiment.py"
+      tags: ["ff5", "quantitative", "factor_model"]
+    
+    ml_xgboost_box_based:
+      file: "active/single_experiment/ml_strategy_config_new.yaml"
+      description: "XGBoost机器学习模型 + Box-First投资组合"
+      use_case: "ExperimentOrchestrator"
+      strategy_type: "ml"
+      portfolio_method: "box_based"
+      status: "active"
+      tested: "2024-01-08"
+      entry_point: "src/use_case/single_experiment/run_experiment.py"
+      tags: ["xgboost", "box_based", "machine_learning"]
+    
+    lstm_strategy:
+      file: "active/single_experiment/lstm_strategy_config.yaml"
+      description: "LSTM神经网络模型策略"
+      use_case: "ExperimentOrchestrator"
+      strategy_type: "ml"
+      portfolio_method: "quantitative"
+      status: "active"
+      tested: "2024-01-05"
+      entry_point: "src/use_case/single_experiment/run_experiment.py"
+      tags: ["lstm", "neural_network", "time_series"]
+  
+  multi_model:
+    ensemble_experiment:
+      file: "active/multi_model/multi_model_experiment.yaml"
+      description: "多模型集成实验（FF5 + XGBoost + MetaModel）"
+      use_case: "MultiModelOrchestrator"
+      base_strategies: ["ff5_regression", "xgboost"]
+      portfolio_method: "box_based"
+      status: "active"
+      tested: "2024-01-12"
+      entry_point: "src/use_case/multi_model_experiment/run_multi_model_experiment.py"
+      tags: ["ensemble", "multi_model", "metamodel"]
+    
+    quick_test:
+      file: "active/multi_model/multi_model_quick_test.yaml"
+      description: "多模型快速测试配置"
+      use_case: "MultiModelOrchestrator"
+      base_strategies: ["ff5_regression", "xgboost"]
+      portfolio_method: "box_based"
+      status: "active"
+      tested: "2024-01-14"
+      entry_point: "src/use_case/multi_model_experiment/run_multi_model_experiment.py"
+      tags: ["quick_test", "multi_model", "testing"]
+  
+  prediction:
+    meta_strategy:
+      file: "active/prediction/prediction_meta_config.yaml"
+      description: "元策略预测（组合多个模型）"
+      use_case: "PredictionOrchestrator"
+      strategy_type: "meta"
+      portfolio_method: "box_based"
+      status: "active"
+      tested: "2024-01-14"
+      entry_point: "src/use_case/prediction/run_prediction.py"
+      tags: ["prediction", "meta_strategy", "ensemble"]
+    
+    ff5_single_model:
+      file: "active/prediction/prediction_config.yaml"
+      description: "单模型FF5预测"
+      use_case: "PredictionOrchestrator"
+      strategy_type: "fama_french_5"
+      portfolio_method: "quantitative"
+      status: "active"
+      tested: "2024-01-13"
+      entry_point: "src/use_case/prediction/run_prediction.py"
+      tags: ["prediction", "ff5", "single_model"]
+    
+    quantitative_portfolio:
+      file: "active/prediction/prediction_quantitative_config.yaml"
+      description: "量化投资组合预测"
+      use_case: "PredictionOrchestrator"
+      strategy_type: "ml"
+      portfolio_method: "quantitative"
+      status: "active"
+      tested: "2024-01-11"
+      entry_point: "src/use_case/prediction/run_prediction.py"
+      tags: ["prediction", "quantitative", "portfolio"]
+  
+  system:
+    optimal_system:
+      file: "active/system/optimal_system_config.yaml"
+      description: "最优系统配置"
+      use_case: "SystemOrchestrator"
+      strategy_type: "multi"
+      portfolio_method: "box_based"
+      status: "active"
+      tested: "2024-01-09"
+      entry_point: "src/use_case/system/run_optimal_system.py"
+      tags: ["system", "optimal", "production"]
+    
+    portfolio_construction:
+      file: "active/system/portfolio_construction_config.yaml"
+      description: "投资组合构建配置"
+      use_case: "PortfolioOrchestrator"
+      strategy_type: "none"
+      portfolio_method: "box_based"
+      status: "active"
+      tested: "2024-01-07"
+      entry_point: "src/use_case/portfolio_generation/run_portfolio.py"
+      tags: ["portfolio", "construction", "box_based"]
+
+# Template Configurations
+# ======================
+# Template files for creating new configurations
+template_configs:
+  single_experiment_template:
+    file: "templates/ff5_strategy_template.yaml"
+    description: "FF5策略模板"
+    use_case: "ExperimentOrchestrator"
+    strategy_type: "fama_french_5"
+    portfolio_method: "box_based"
+    status: "template"
+    tags: ["template", "ff5", "single_experiment"]
+  
+  multi_model_template:
+    file: "templates/metamodel_template.yaml"
+    description: "多模型实验模板"
+    use_case: "MultiModelOrchestrator"
+    strategy_type: "meta"
+    portfolio_method: "box_based"
+    status: "template"
+    tags: ["template", "multi_model", "metamodel"]
+  
+  prediction_template:
+    file: "templates/prediction_template.yaml"
+    description: "预测配置模板"
+    use_case: "PredictionOrchestrator"
+    strategy_type: "meta"
+    portfolio_method: "box_based"
+    status: "template"
+    tags: ["template", "prediction", "meta"]
+
+# Legacy Configurations (Archived)
+# ================================
+# Configuration files that are no longer actively maintained
+# but kept for reference and potential migration
+archived_configs:
+  - file: "archive/fama_macbeth_strategy_config.yaml"
+    reason: "被 active/single_experiment/fama_macbeth_box_based_config.yaml 替代"
+    archived_date: "2024-01-15"
+    replacement: "active/single_experiment/fama_macbeth_box_based_config.yaml"
+    migration_notes: "主要变化：添加了box_based投资组合构建"
+  
+  - file: "archive/fama_macbeth_with_country_risk.yaml"
+    reason: "功能已整合到主配置中"
+    archived_date: "2024-01-15"
+    replacement: "active/single_experiment/fama_macbeth_box_based_config.yaml"
+    migration_notes: "国家风险功能已作为可选配置项添加"
+  
+  - file: "archive/fama_macbeth_country_risk_simple.yaml"
+    reason: "简化版本已整合到主配置中"
+    archived_date: "2024-01-15"
+    replacement: "active/single_experiment/fama_macbeth_box_based_config.yaml"
+    migration_notes: "简化版本的国家风险配置已整合"
+  
+  - file: "archive/system_config.yaml"
+    reason: "被 active/system/optimal_system_config.yaml 替代"
+    archived_date: "2024-01-15"
+    replacement: "active/system/optimal_system_config.yaml"
+    migration_notes: "更完整的系统配置选项"
+  
+  - file: "archive/system_backtest_config.yaml"
+    reason: "功能已整合到各实验配置中"
+    archived_date: "2024-01-15"
+    replacement: "各实验配置的backtest部分"
+    migration_notes: "回测配置现在是每个实验配置的一部分"
+  
+  - file: "archive/metamodel_experiment_config.yaml"
+    reason: "被 active/multi_model/multi_model_experiment.yaml 替代"
+    archived_date: "2024-01-15"
+    replacement: "active/multi_model/multi_model_experiment.yaml"
+    migration_notes: "重命名并重新结构化以提高清晰度"
+  
+  - file: "archive/e2e_refactoring_test.yaml"
+    reason: "测试配置被生产配置替代"
+    archived_date: "2024-01-15"
+    replacement: "active/single_experiment/e2e_ff5_experiment.yaml"
+    migration_notes: "测试配置被生产端到端FF5实验配置替代"
+  
+  - file: "archive/country_risk_config.yaml"
+    reason: "功能已整合到因子数据提供者配置中"
+    archived_date: "2024-01-15"
+    replacement: "factor_data_provider配置中的CountryRiskProvider"
+    migration_notes: "国家风险现在作为因子数据提供者处理"
+
+# Configuration Usage Guide
+# ========================
+usage_guide:
+  how_to_choose:
+    single_experiment: "用于训练单个模型并进行回测"
+    multi_model: "用于训练多个模型并学习最优组合权重"
+    prediction: "用于使用已训练模型进行预测"
+    system: "用于完整的系统级配置"
+  
+  common_workflows:
+    new_experiment: "从templates/选择合适模板，复制到active/，修改参数"
+    model_comparison: "使用multi_model配置训练多个模型"
+    production_prediction: "使用prediction配置进行实时预测"
+    system_optimization: "使用system配置进行端到端优化"
+  
+  validation:
+    schema_validation: "所有配置都支持JSON Schema验证"
+    business_logic_validation: "配置验证器检查业务逻辑一致性"
+    data_validation: "数据提供者验证确保数据质量"
+  
+  migration:
+    from_legacy: "使用tools/config_management.py migrate_config命令"
+    to_new_format: "参考active配置的格式和结构"
+    validation: "迁移后使用validate_config命令验证"
+
+# Configuration Statistics
+# =======================
+stats:
+  total_configs: 21
+  active_configs: 12
+  template_configs: 3
+  archived_configs: 4
+  legacy_configs: 2
+  
+  by_use_case:
+    single_experiment: 5
+    multi_model: 2
+    prediction: 3
+    system: 2
+  
+  by_strategy_type:
+    fama_french_5: 3
+    ml: 4
+    meta: 2
+    multi: 1
+  
+  by_portfolio_method:
+    box_based: 8
+    quantitative: 4

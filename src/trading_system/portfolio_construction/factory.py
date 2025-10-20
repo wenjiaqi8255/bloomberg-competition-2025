@@ -12,7 +12,7 @@ from typing import Dict, Any
 from src.trading_system.portfolio_construction.interface.interfaces import IPortfolioBuilder
 from src.trading_system.portfolio_construction.quant_based.quantitative_builder import QuantitativePortfolioBuilder
 from src.trading_system.portfolio_construction.box_based.box_based_builder import BoxBasedPortfolioBuilder
-from src.trading_system.portfolio_construction.utils.config_validator import PortfolioConfigValidator
+from src.trading_system.validation.config.portfolio_validator import PortfolioConfigValidator
 from src.trading_system.portfolio_construction.models.exceptions import InvalidConfigError
 
 logger = logging.getLogger(__name__)

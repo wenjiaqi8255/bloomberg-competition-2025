@@ -33,7 +33,8 @@ class YFinanceProvider(PriceDataProvider):
     def __init__(self, max_retries: int = 3, retry_delay: float = 1.0,
                  request_timeout: int = 30, cache_enabled: bool = True,
                  symbols: Optional[List[str]] = None, start_date: Optional[str] = None,
-                 liquidity_config: Optional[Dict[str, Any]] = None):
+                 liquidity_config: Optional[Dict[str, Any]] = None,
+                 exchange_suffix_map: Optional[Dict[str, str]] = None):
         """
         Initialize the YFinance provider.
 
@@ -58,6 +59,110 @@ class YFinanceProvider(PriceDataProvider):
         self.symbols = symbols
         self.start_date = start_date
         self.liquidity_config = liquidity_config or {}
+
+        # Optional mapping to override default exchange suffixes (merged at runtime)
+        self._custom_exchange_suffix_map = exchange_suffix_map or {}
+
+        # Cache successful symbol resolutions for this session
+        self._symbol_resolution_cache: Dict[str, str] = {}
+
+    @staticmethod
+    def _default_exchange_suffix_map() -> Dict[str, str]:
+        """Return a sensible default mapping from exchange/country codes to Yahoo suffixes.
+
+        Notes:
+        - US listings typically have no suffix. Bloomberg often uses UW/UN for NASDAQ/NYSE.
+        - Some markets have multiple suffices; alternates will be tried separately.
+        """
+        return {
+            # United States / Primary US venues
+            "US": "", "UW": "", "UN": "", "USA": "",
+            # United Kingdom (London Stock Exchange)
+            "LN": ".L",
+            # Hong Kong
+            "HK": ".HK",
+            # Japan (Tokyo)
+            "JP": ".T", "JT": ".T",
+            # Korea
+            "KS": ".KS",  # KOSPI
+            "KQ": ".KQ",  # KOSDAQ
+            # Mainland China
+            "SS": ".SS",  # Shanghai
+            "SZ": ".SZ",  # Shenzhen
+            # Taiwan
+            "TT": ".TW",  # Bloomberg TT -> Yahoo TW (alt .TWO)
+            # Australia
+            "AU": ".AX",
+            # Canada
+            "TO": ".TO",  # TSX
+            "V": ".V",    # TSXV
+            "CN": ".TO",   # Some sources use CN; prefer TSX as default
+            # Switzerland
+            "SW": ".SW",
+            "VX": ".VX",
+            # Eurozone common
+            "GR": ".DE",   # Germany (XETRA)
+            "DE": ".DE",
+            "FP": ".PA",   # France (Paris)
+            "PA": ".PA",
+            "AS": ".AS",   # Netherlands (Amsterdam)
+            "NA": ".AS",
+            "MI": ".MI",   # Italy (Milan)
+            "BR": ".BR",   # Belgium (Brussels)
+            "VI": ".VI",   # Austria (Vienna)
+            "OL": ".OL",   # Norway (Oslo)
+            "ST": ".ST",   # Sweden (Stockholm)
+        }
+
+    @staticmethod
+    def _alternate_suffix_candidates(code: str) -> List[str]:
+        """Return alternate Yahoo suffixes to try for a given exchange/country code."""
+        code = (code or "").upper()
+        if code in ("TO", "CN", "V"):
+            return [".TO", ".V"]
+        if code in ("SW", "VX"):
+            return [".SW", ".VX"]
+        if code in ("TT",):
+            return [".TW", ".TWO"]
+        return []
+
+    def _merge_exchange_suffix_map(self) -> Dict[str, str]:
+        mapping = self._default_exchange_suffix_map().copy()
+        mapping.update(self._custom_exchange_suffix_map)
+        return mapping
+
+    def resolve_symbol(self, ticker: str, country_code: Optional[str]) -> List[str]:
+        """Generate candidate Yahoo symbols from raw ticker and optional country/exchange code.
+
+        Returns ordered candidates to try; the caller should attempt fetches in order.
+        """
+        if not ticker:
+            return []
+
+        raw = ticker.strip().upper()
+        code = (country_code or "").strip().upper()
+
+        # Honor cached resolution first
+        cache_key = f"{raw}|{code}"
+        if cache_key in self._symbol_resolution_cache:
+            return [self._symbol_resolution_cache[cache_key], raw]
+
+        mapping = self._merge_exchange_suffix_map()
+
+        candidates: List[str] = []
+        # 1) ticker + mapped suffix (if any)
+        if code and code in mapping:
+            candidates.append(f"{raw}{mapping[code]}")
+            # 1b) alternates for this code
+            for suf in self._alternate_suffix_candidates(code):
+                c = f"{raw}{suf}"
+                if c not in candidates:
+                    candidates.append(c)
+        # 2) raw ticker as fallback
+        if raw not in candidates:
+            candidates.append(raw)
+
+        return candidates
 
     def get_data_source(self) -> DataSource:
         """Get the data source enum for this provider."""
@@ -92,7 +197,8 @@ class YFinanceProvider(PriceDataProvider):
                            start_date: Union[str, datetime],
                            end_date: Union[str, datetime] = None,
                            period: str = None,
-                           liquidity_config: Optional[Dict[str, Any]] = None) -> Dict[str, pd.DataFrame]:
+                           liquidity_config: Optional[Dict[str, Any]] = None,
+                           ticker_country_map: Optional[Dict[str, Optional[str]]] = None) -> Dict[str, pd.DataFrame]:
         """
         Fetch historical OHLCV data for one or more symbols.
 
@@ -122,43 +228,69 @@ class YFinanceProvider(PriceDataProvider):
         for symbol in symbols:
             logger.debug(f"Fetching data for {symbol}")
 
+            # Generate resolution candidates based on optional country/exchange code
+            country_code = None
+            if ticker_country_map and symbol in ticker_country_map:
+                country_code = ticker_country_map.get(symbol)
+            candidates = self.resolve_symbol(symbol, country_code)
+            if not candidates:
+                candidates = [symbol]
+
             try:
-                # Check cache first
-                cache_key = self._get_cache_key(symbol, start_date, end_date, period)
-                cached_data = self._get_from_cache(cache_key)
-                if cached_data is not None:
-                    results[symbol] = cached_data
-                    continue
+                # Try candidates in order until one succeeds
+                fetch_success = False
+                last_error: Optional[Exception] = None
 
-                # Fetch data with retry logic
-                if period:
-                    data = self._fetch_with_retry(
-                        yf.download, symbol, period=period,
-                        progress=False, timeout=self.request_timeout
-                    )
-                else:
-                    data = self._fetch_with_retry(
-                        yf.download, symbol, start=start_date, end=end_date,
-                        progress=False, timeout=self.request_timeout
-                    )
+                for resolved in candidates:
+                    # Check cache per resolved symbol
+                    cache_key = self._get_cache_key(resolved, start_date, end_date, period)
+                    cached_data = self._get_from_cache(cache_key)
+                    if cached_data is not None:
+                        results[symbol] = cached_data
+                        # Cache resolution for future calls
+                        self._symbol_resolution_cache[f"{symbol.strip().upper()}|{(country_code or '').strip().upper()}"] = resolved
+                        logger.debug(f"Cache hit for {symbol} via {resolved}")
+                        fetch_success = True
+                        break
 
-                if data is not None and not data.empty:
-                    # Data validation and cleaning using base class method
-                    data = self._validate_and_clean_data(data, symbol)
-                    data = self.add_data_source_metadata(data)
+                    # Fetch data with retry logic
+                    if period:
+                        data = self._fetch_with_retry(
+                            yf.download, resolved, period=period,
+                            progress=False, timeout=self.request_timeout
+                        )
+                    else:
+                        data = self._fetch_with_retry(
+                            yf.download, resolved, start=start_date, end=end_date,
+                            progress=False, timeout=self.request_timeout
+                        )
 
-                    # Apply liquidity filtering if configured
-                    effective_liquidity_config = liquidity_config or self.liquidity_config
-                    if effective_liquidity_config and effective_liquidity_config.get('enabled', False):
-                        data = self.apply_liquidity_filter(data, effective_liquidity_config)
+                    if data is not None and not data.empty:
+                        # Data validation and cleaning using base class method
+                        data = self._validate_and_clean_data(data, resolved)
+                        data = self.add_data_source_metadata(data)
 
-                    # Store in cache
-                    self._store_in_cache(cache_key, data)
+                        # Apply liquidity filtering if configured
+                        effective_liquidity_config = liquidity_config or self.liquidity_config
+                        if effective_liquidity_config and effective_liquidity_config.get('enabled', False):
+                            data = self.apply_liquidity_filter(data, effective_liquidity_config)
 
-                    results[symbol] = data
-                    logger.info(f"Successfully fetched {len(data)} rows for {symbol}")
-                else:
-                    logger.warning(f"No data returned for {symbol}")
+                        # Store in cache using resolved key
+                        self._store_in_cache(cache_key, data)
+
+                        # Record result under original symbol key, but log mapping
+                        results[symbol] = data
+                        self._symbol_resolution_cache[f"{symbol.strip().upper()}|{(country_code or '').strip().upper()}"] = resolved
+                        if resolved != symbol:
+                            logger.info(f"Resolved {symbol} -> {resolved}")
+                        logger.info(f"Successfully fetched {len(data)} rows for {resolved}")
+                        fetch_success = True
+                        break
+                    else:
+                        logger.debug(f"No data for candidate {resolved} (from {symbol})")
+
+                if not fetch_success:
+                    logger.warning(f"No data returned for {symbol} after trying {len(candidates)} candidate(s)")
                     failed_symbols.append(symbol)
 
             except Exception as e:

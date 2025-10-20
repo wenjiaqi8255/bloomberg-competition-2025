@@ -1,0 +1,128 @@
+# Prediction Configuration - Single Model
+# ======================================
+# Configuration for generating investment predictions from a single trained model.
+# Supports FF5, ML, and other single-model strategies.
+
+# Prediction settings
+prediction:
+  prediction_date: "2024-01-15"  # Date to make predictions for
+  
+# Strategy configuration (determines which model type)
+strategy:
+  type: "fama_french_5"  # Options: 'fama_french_5', 'ml', 'meta'
+  name: "FF5_Prediction_Strategy"
+
+  # For single model strategies (ff5, ml)
+  parameters:
+    model_id: "ff5_regression_20251016_011357"  # Trained model ID
+    model_registry_path: "./models/"
+    use_fitted_pipeline: true  # Use the fitted feature pipeline stored with the model
+    lookback_days: 252
+    min_signal_strength: 0.00001
+    enable_normalization: true
+    normalization_method: "minmax"
+    enable_short_selling: false
+
+# Data configuration - reuse from MultiModelOrchestrator pattern
+data_provider:
+  type: "YFinanceProvider"
+  parameters:
+    max_retries: 3
+    retry_delay: 1.0
+
+factor_data_provider:
+  type: "FF5DataProvider"
+  parameters:
+    data_frequency: "daily"
+    cache_dir: "./cache/factors"
+
+# Universe configuration
+universe:
+  symbols:
+    - AAPL
+    - MSFT
+    - GOOGL
+    - AMZN
+    - META
+    - TSLA
+    - NVDA
+    - JPM
+    - V
+    - WMT
+    - JNJ
+    - PG
+    - UNH
+    - HD
+    - MA
+    - DIS
+    - PYPL
+    - ADBE
+    - CRM
+    - NFLX
+
+# Portfolio construction - USE FACTORY PATTERN
+portfolio_construction:
+  method: "box_based"  # Factory determines which builder: 'box_based' or 'quantitative'
+  
+  # Box-based configuration (if method: box_based)
+  stocks_per_box: 5
+  min_stocks_per_box: 1
+  allocation_method: "equal"
+  allocation_config: {}
+
+  # Box weight configuration
+  box_weights:
+    method: "equal"
+    # Only generate boxes for common dimensions that can actually be filled
+    dimensions:
+      size: ["large", "mid"]  # Remove small caps for minimal test
+      style: ["growth"]       # Only growth for simplicity
+      region: ["developed"]   # Only developed markets
+      sector: ["Technology", "Financial Services", "Healthcare", "Consumer Discretionary", "Consumer Staples", "Communication Services"]  # Match classifier output
+
+  # Stock classifier configuration - use technical indicators for classification
+  classifier:
+    method: "technical"  # Use technical indicators that are already computed
+    cache_enabled: true
+
+  # Box selector configuration
+  box_selector:
+    type: "top_signals"
+
+  # Centralized constraints for both methods
+  constraints:
+    max_position_weight: 0.10
+    max_leverage: 1.0
+    min_position_weight: 0.02
+  
+  # Alternative: Quantitative configuration (if method: quantitative)
+  # optimizer:
+  #   method: "mean_variance"
+  #   risk_aversion: 1.0
+  #   max_weight: 0.15
+  #   min_weight: 0.02
+  # 
+  # covariance:
+  #   lookback_days: 252
+  #   method: "ledoit_wolf"
+  #   shrinkage: 0.1
+  # 
+  # universe_size: 20
+  # enable_short_selling: false
+
+# Risk constraints
+constraints:
+  max_position_weight: 0.15  # Maximum weight for any single position
+  min_position_weight: 0.02  # Minimum weight threshold
+  max_leverage: 1.0  # Maximum total portfolio leverage
+  max_portfolio_risk: 0.20  # Maximum portfolio volatility
+  sector_diversification: true  # Enable sector diversification checks
+
+# Output configuration
+output:
+  format: "detailed"  # Options: 'simple', 'detailed', 'comparison'
+  include_risk_analysis: true
+  include_sector_analysis: true
+  include_box_analysis: true
+  save_results: true
+  output_path: "./prediction_results/"

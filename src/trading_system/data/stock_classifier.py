@@ -504,26 +504,34 @@ class StockClassifier(ClassificationProvider):
             return StyleCategory.GROWTH, 0.5
 
     def _classify_by_region(self, symbol: str) -> RegionCategory:
-        """Classify stock by region using ticker suffix."""
+        """Classify stock by region using yfinance metadata."""
         try:
-            # Extract country code from symbol (common patterns)
-            symbol_upper = symbol.upper()
-
-            # Check for direct country suffixes
-            if '.' in symbol_upper:
-                country_code = symbol_upper.split('.')[-1]
-                if country_code in self.developed_markets:
-                    return RegionCategory.DEVELOPED
-                else:
-                    return RegionCategory.EMERGING
-
-            # Check for common patterns
-            if any(symbol_upper.endswith(suffix) for suffix in ['.L', '.TO', '.DE', '.PA']):
-                return RegionCategory.DEVELOPED
-            elif any(symbol_upper.endswith(suffix) for suffix in ['.MX', '.BA', '.SA', '.JK']):
-                return RegionCategory.EMERGING
-
-            # Default to developed for US stocks
+            # Try to get country from yfinance metadata first
+            try:
+                ticker = yf.Ticker(symbol)
+                info = ticker.info
+                country = str(info.get('country', '')).strip()
+                
+                if country:
+                    # Map country names to developed/emerging classification
+                    developed_countries = {
+                        'United States', 'Canada', 'United Kingdom', 'Germany', 'France', 
+                        'Italy', 'Spain', 'Netherlands', 'Switzerland', 'Sweden', 
+                        'Norway', 'Denmark', 'Australia', 'New Zealand', 'Japan', 
+                        'Singapore', 'Hong Kong', 'Taiwan', 'South Korea', 'Ireland',
+                        'Austria', 'Belgium', 'Finland', 'Israel', 'Luxembourg'
+                    }
+                    
+                    # Check if country is in developed markets
+                    if country in developed_countries:
+                        return RegionCategory.DEVELOPED
+                    else:
+                        return RegionCategory.EMERGING
+                        
+            except Exception as e:
+                logger.debug(f"Failed to get country from yfinance for {symbol}: {e}")
+            
+            # Fallback: Default to developed for US stocks (most common case)
             return RegionCategory.DEVELOPED
 
         except Exception as e:

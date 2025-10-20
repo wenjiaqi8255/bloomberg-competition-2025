@@ -124,6 +124,33 @@ class XGBoostModel(BaseModel):
         self._best_iteration = None
         
         logger.info(f"Initialized XGBoostModel with {self.n_estimators} estimators")
+
+    @property
+    def supports_batch_prediction(self) -> bool:
+        """
+        XGBoost batch capability depends on training mode.
+        
+        Current implementation assumes per-stock training (independent models).
+        For cross-sectional training, this should return True.
+        
+        Returns:
+            False: Default to independent prediction per symbol (per-stock XGBoost)
+            True: If configured for cross-sectional training (single model for all stocks)
+        """
+        # Check if model is configured for cross-sectional training
+        # This could be determined by config or training data structure
+        return self.config.get('cross_sectional_training', False)
+
+    @property
+    def prediction_mode(self) -> str:
+        """
+        Human-readable description of prediction mode.
+        
+        Returns:
+            'batch': Batch prediction (cross-sectional XGBoost)
+            'independent': Independent prediction per symbol (per-stock XGBoost)
+        """
+        return 'batch' if self.supports_batch_prediction else 'independent'
     
     def fit(self, 
             X: pd.DataFrame, 

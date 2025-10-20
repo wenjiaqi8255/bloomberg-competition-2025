@@ -96,7 +96,6 @@ class FamaFrench5Strategy(BaseStrategy):
             name="FF5",
             feature_pipeline=feature_pipeline,
             model_predictor=model_predictor,
-            position_sizer=position_sizer,
             lookback_days=252,
             risk_free_rate=0.02
         )
@@ -119,7 +118,6 @@ class FamaFrench5Strategy(BaseStrategy):
             name: Strategy identifier
             feature_pipeline: Fitted pipeline (computes technical indicators and merges factor data)
             model_predictor: Predictor with FF5RegressionModel loaded
-            position_sizer: Position sizing component
             lookback_days: Lookback period for factor calculation
             risk_free_rate: Risk-free rate for excess return calculation
             **kwargs: Additional parameters

@@ -1,0 +1,425 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Multi-Model Experiment Configuration Schema",
+  "description": "Schema for multi-model experiment configurations",
+  "type": "object",
+  "required": ["experiment", "data_provider", "base_models", "metamodel"],
+  "properties": {
+    "experiment": {
+      "type": "object",
+      "required": ["name", "output_dir"],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "output_dir": {
+          "type": "string"
+        }
+      }
+    },
+    "data_provider": {
+      "$ref": "base_schemas.json#/definitions/data_provider"
+    },
+    "factor_data_provider": {
+      "$ref": "base_schemas.json#/definitions/factor_data_provider"
+    },
+    "universe": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "feature_engineering": {
+      "$ref": "base_schemas.json#/definitions/feature_engineering"
+    },
+    "periods": {
+      "type": "object",
+      "required": ["train", "test"],
+      "properties": {
+        "train": {
+          "type": "object",
+          "required": ["start", "end"],
+          "properties": {
+            "start": {
+              "type": "string",
+              "format": "date"
+            },
+            "end": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        },
+        "test": {
+          "type": "object",
+          "required": ["start", "end"],
+          "properties": {
+            "start": {
+              "type": "string",
+              "format": "date"
+            },
+            "end": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        }
+      }
+    },
+    "base_models": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["model_type"],
+        "properties": {
+          "model_type": {
+            "type": "string",
+            "enum": ["fama_macbeth", "ff5_regression", "xgboost", "lstm"]
+          },
+          "hpo_trials": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 10
+          },
+          "hpo_metric": {
+            "type": "string",
+            "enum": ["sharpe_ratio", "r2", "mse", "mae"],
+            "default": "sharpe_ratio"
+          },
+          "config": {
+            "$ref": "base_schemas.json#/definitions/model_config"
+          },
+          "feature_config": {
+            "$ref": "base_schemas.json#/definitions/feature_engineering"
+          }
+        }
+      },
+      "minItems": 1
+    },
+    "metamodel": {
+      "type": "object",
+      "required": ["hpo_trials", "hpo_metric", "methods_to_try"],
+      "properties": {
+        "hpo_trials": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 10
+        },
+        "hpo_metric": {
+          "type": "string",
+          "enum": ["sharpe_ratio", "r2", "mse", "mae"],
+          "default": "sharpe_ratio"
+        },
+        "methods_to_try": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["ridge", "equal", "weighted_average"]
+          },
+          "minItems": 1
+        }
+      }
+    },
+    "backtest": {
+      "type": "object",
+      "properties": {
+        "initial_capital": {
+          "type": "number",
+          "minimum": 1000,
+          "maximum": 1000000000,
+          "default": 1000000
+        },
+        "commission": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 0.01,
+          "default": 0.001
+        },
+        "slippage": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 0.01,
+          "default": 0.0005
+        }
+      }
+    },
+    "strategy": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["MLStrategy"],
+          "default": "MLStrategy"
+        },
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "signal_threshold": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0,
+              "default": 0.00001
+            },
+            "max_positions": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "minimum_stocks": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 10
+            }
+          }
+        }
+      }
+    },
+    "portfolio_construction": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": ["box_based", "quantitative"],
+          "default": "box_based"
+        },
+        "rebalance_frequency": {
+          "type": "string",
+          "enum": ["daily", "weekly", "monthly"],
+          "default": "weekly"
+        },
+        "max_positions": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 12
+        },
+        "min_position_weight": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.05
+        },
+        "max_position_weight": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.15
+        }
+      }
+    },
+    "system_requirements": {
+      "type": "object",
+      "properties": {
+        "min_sharpe_ratio": {
+          "type": "number",
+          "minimum": -5.0,
+          "maximum": 5.0,
+          "default": 0.5
+        },
+        "max_drawdown_threshold": {
+          "type": "number",
+          "minimum": -1.0,
+          "maximum": 0.0,
+          "default": -0.3
+        },
+        "min_win_rate": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.4
+        }
+      }
+    },
+    "logging": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": ["DEBUG", "INFO", "WARNING", "ERROR"],
+          "default": "INFO"
+        },
+        "log_to_file": {
+          "type": "boolean",
+          "default": true
+        },
+        "log_file": {
+          "type": "string"
+        },
+        "log_to_console": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "advanced": {
+      "type": "object",
+      "properties": {
+        "parallel_processing": {
+          "type": "boolean",
+          "default": false
+        },
+        "max_workers": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32,
+          "default": 2
+        },
+        "error_handling": {
+          "type": "object",
+          "properties": {
+            "continue_on_model_failure": {
+              "type": "boolean",
+              "default": true
+            },
+            "continue_on_metamodel_failure": {
+              "type": "boolean",
+              "default": false
+            },
+            "max_retry_attempts": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10,
+              "default": 3
+            },
+            "retry_delay_seconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 300,
+              "default": 5
+            }
+          }
+        },
+        "validation": {
+          "type": "object",
+          "properties": {
+            "validate_data_quality": {
+              "type": "boolean",
+              "default": true
+            },
+            "validate_model_performance": {
+              "type": "boolean",
+              "default": true
+            },
+            "validate_metamodel_weights": {
+              "type": "boolean",
+              "default": true
+            },
+            "validate_system_requirements": {
+              "type": "boolean",
+              "default": true
+            },
+            "min_data_success_rate": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0,
+              "default": 0.8
+            },
+            "min_absolute_stocks": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 10
+            }
+          }
+        }
+      }
+    },
+    "quick_test": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "reduced_trials": {
+          "type": "object",
+          "properties": {
+            "model_n_trials": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 5
+            },
+            "metamodel_n_trials": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 5
+            }
+          }
+        },
+        "reduced_data": {
+          "type": "object",
+          "properties": {
+            "universe": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "train_period": {
+              "type": "object",
+              "properties": {
+                "start": {
+                  "type": "string",
+                  "format": "date"
+                },
+                "end": {
+                  "type": "string",
+                  "format": "date"
+                }
+              }
+            },
+            "test_period": {
+              "type": "object",
+              "properties": {
+                "start": {
+                  "type": "string",
+                  "format": "date"
+                },
+                "end": {
+                  "type": "string",
+                  "format": "date"
+                }
+              }
+            }
+          }
+        },
+        "relaxed_requirements": {
+          "type": "object",
+          "properties": {
+            "min_sharpe_ratio": {
+              "type": "number",
+              "minimum": -5.0,
+              "maximum": 5.0,
+              "default": 0.3
+            },
+            "max_drawdown_threshold": {
+              "type": "number",
+              "minimum": -1.0,
+              "maximum": 0.0,
+              "default": -0.4
+            },
+            "min_win_rate": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0,
+              "default": 0.35
+            },
+            "min_absolute_stocks": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 3
+            }
+          }
+        }
+      }
+    }
+  }
+}

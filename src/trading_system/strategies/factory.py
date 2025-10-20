@@ -28,7 +28,6 @@ from .fama_french_5 import FamaFrench5Strategy
 from ..feature_engineering.pipeline import FeatureEngineeringPipeline
 from ..feature_engineering.models.data_types import FeatureConfig
 from ..models.serving.predictor import ModelPredictor
-from ..utils.position_sizer import PositionSizer
 from ..data.stock_classifier import StockClassifier
 # from ..allocation.box_allocator import BoxAllocator  # File removed - functionality deprecated
 
@@ -144,8 +143,6 @@ class StrategyFactory:
         # Step 2: Create ModelPredictor, passing along any extra context like providers
         model_predictor = cls._create_model_predictor(model_id, config, **kwargs)
 
-        # Step 3: Create PositionSizer
-        position_sizer = cls._create_position_sizer(config)
         
         # Step 4: Create Box components if configured
         stock_classifier, box_allocator = cls._create_box_components(config)
@@ -169,7 +166,6 @@ class StrategyFactory:
             name=name,
             feature_pipeline=feature_pipeline,
             model_predictor=model_predictor,
-            position_sizer=position_sizer,
             universe=universe,
             stock_classifier=stock_classifier,
             box_allocator=box_allocator,
@@ -438,25 +434,6 @@ class StrategyFactory:
         # Return as-is if no special handling needed
         return base_part
     
-    @classmethod
-    def _create_position_sizer(cls, config: Dict[str, Any]) -> PositionSizer:
-        """
-        Create position sizer from configuration.
-        
-        Args:
-            config: Full configuration with position_sizing section
-        
-        Returns:
-            PositionSizer instance
-        """
-        sizing_config = config.get('position_sizing', {})
-        
-        return PositionSizer(
-            volatility_target=sizing_config.get('volatility_target', 0.15),
-            max_position_weight=sizing_config.get('max_position_weight', 0.10),
-            max_leverage=sizing_config.get('max_leverage', 1.0),
-            min_position_weight=sizing_config.get('min_position_weight', 0.01)
-        )
     
     @classmethod
     def _extract_strategy_params(cls, 
@@ -574,8 +551,6 @@ class StrategyFactory:
         logger.info(f"  Data provider: {type(data_provider).__name__}")
         logger.info(f"  Factor data provider: {type(factor_data_provider).__name__ if factor_data_provider else 'None'}")
 
-        # Create PositionSizer (optional for MetaStrategy)
-        position_sizer = cls._create_position_sizer(config)
 
         # Get universe from config
         universe = config.get('universe', [])
@@ -588,7 +563,6 @@ class StrategyFactory:
             # MetaStrategy doesn't need its own feature pipeline or model predictor
             feature_pipeline=None,
             model_predictor=None,
-            position_sizer=position_sizer,
             universe=universe,
             # Critical: pass providers to base strategies
             data_provider=data_provider,

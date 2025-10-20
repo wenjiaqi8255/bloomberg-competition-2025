@@ -542,6 +542,27 @@ class StrategyRunner:
             # Phase 6 Enhanced: Create and log backtest visualization charts
             self._create_enhanced_backtest_charts(backtest_results)
 
+            # Validate results before saving
+            try:
+                from trading_system.validation import ExperimentResultValidator
+
+                # Construct validation-compatible result
+                validation_dict = {
+                    'experiment_name': experiment_name,
+                    'trained_model_id': self.results.get('config', {}).get('strategy', {}).get('parameters', {}).get('model_id', 'unknown'),
+                    'performance_metrics': self.results['performance_metrics'],
+                    'status': 'SUCCESS'
+                }
+
+                validator = ExperimentResultValidator()
+                validation_result = validator.validate(validation_dict)
+
+                if validation_result.has_warnings():
+                    for warning in validation_result.get_warnings():
+                        logger.warning(f"Result validation warning: {warning.message}")
+            except ImportError:
+                logger.warning("Experiment result validation not available, skipping validation")
+
             # Save results locally
             self._save_results()
 

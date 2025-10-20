@@ -128,6 +128,24 @@ class ExperimentOrchestrator:
         with open(self.experiment_config_path, 'r') as f:
             self.full_config = yaml.safe_load(f)
 
+        # Validate configuration
+        try:
+            from trading_system.validation.config import SchemaValidator
+            schema_validator = SchemaValidator()
+            validation_result = schema_validator.validate(self.full_config, 'single_experiment_schema')
+
+            if not validation_result.is_valid:
+                error_summary = validation_result.get_summary()
+                error_details = '\n'.join([str(err) for err in validation_result.get_errors()])
+                raise ValueError(f"Experiment configuration validation failed:\n{error_summary}\n{error_details}")
+
+            if validation_result.has_warnings():
+                logger.warning("Configuration validation warnings:")
+                for warning in validation_result.get_warnings():
+                    logger.warning(f"  - {warning.message}")
+        except ImportError:
+            logger.warning("Schema validation not available, skipping validation")
+
     def run_experiment(self) -> Dict[str, Any]:
         """
         Executes the full training-then-backtesting experiment.
@@ -186,6 +204,15 @@ class ExperimentOrchestrator:
         logger.info(f"🔧 DEBUG:   factor_data_provider: {type(factor_data_provider) if factor_data_provider else None}")
         train_pipeline.configure_data(data_provider=data_provider, factor_data_provider=factor_data_provider)
         
+        # Resolve training symbols from config via thin UniverseProvider (CSV or inline)
+        try:
+            from ...trading_system.data.utils.universe_loader import UniverseProvider
+            resolved_symbols = UniverseProvider.resolve_symbols(self.full_config)
+            training_params = {**training_params, 'symbols': resolved_symbols}
+            logger.info(f"Resolved training universe via UniverseProvider: {len(resolved_symbols)} symbols")
+        except Exception as e:
+            logger.warning(f"UniverseProvider resolution failed or not configured; proceeding with provided symbols. Reason: {e}")
+
         logger.info("Executing training pipeline...")
         training_results = train_pipeline.run_pipeline(**training_params)
         
@@ -311,6 +338,25 @@ class ExperimentOrchestrator:
             "component_stats": component_stats,
             "returns_path": str(self.get_strategy_returns_path(model_id))
         }
+        
+        # Validate experiment results
+        try:
+            from trading_system.validation import ExperimentResultValidator
+            
+            validator = ExperimentResultValidator()
+            validation_result = validator.validate(final_results)
+            
+            if not validation_result.is_valid:
+                logger.error(f"Experiment result validation failed: {validation_result.get_summary()}")
+                for error in validation_result.get_errors():
+                    logger.error(f"  - {error}")
+                raise ValueError("Experiment result validation failed")
+            
+            if validation_result.has_warnings():
+                for warning in validation_result.get_warnings():
+                    logger.warning(f"  - {warning}")
+        except ImportError:
+            logger.warning("Experiment result validation not available, skipping validation")
         
         logger.info("End-to-end experiment finished successfully.")
         return final_results

@@ -1,0 +1,249 @@
+# Multi-Model Experiment Configuration
+# ====================================
+# Complete configuration for training multiple base models with HPO,
+# then training a metamodel to combine them optimally.
+
+experiment:
+  name: "multi_model_optimal_system"
+  output_dir: "./results/multi_model_experiment"
+
+# Data configuration (shared across all models)
+data_provider:
+  type: YFinanceProvider
+  parameters:
+    max_retries: 3
+    retry_delay: 1.0
+    request_timeout: 30
+    cache_enabled: true
+
+factor_data_provider:
+  type: FF5DataProvider
+  parameters:
+    data_frequency: "daily"
+    cache_enabled: true
+
+universe:
+  # Technology (Large Growth)
+  - AAPL
+  - MSFT
+  - GOOGL
+  - META
+  - NVDA
+  # Technology (Mid/Large Value)
+  - CSCO
+  - IBM
+  - INTC
+  # Healthcare
+  - JNJ
+  - UNH
+  - PFE
+  - ABT
+  # Financials
+  - JPM
+  - BAC
+  - GS
+  - WFC
+  # Consumer
+  - AMZN
+  - TSLA
+  - HD
+  - WMT
+  - PG
+  - KO
+  # Industrial
+  - CAT
+  - GE
+  - HON
+  # Energy
+  - XOM
+  - CVX
+  # Communication
+  - VZ
+  - DIS
+  - NFLX
+
+# Feature Engineering Configuration (Global)
+# ======================================
+feature_engineering:
+  # Enable cross-sectional features for Fama-MacBeth model
+  # FF5 regression will use FF5 factor features created from factor_data
+  include_cross_sectional: true
+  include_technical: false  # Focus on cross-sectional, not time-series
+  include_theoretical: false
+  # ✅ FF5 models automatically use factor data when factor_data_provider is available
+
+  # Cross-sectional features to compute (for Fama-MacBeth model)
+  cross_sectional_features:
+    - "market_cap"        # Size factor (SMB proxy)
+    - "book_to_market"    # Value factor (HML proxy)
+    - "size"              # Log market cap
+    - "value"             # Value indicator
+    - "momentum"          # Momentum factor
+    - "volatility"        # Risk measure
+
+  # Lookback periods for cross-sectional features
+  cross_sectional_lookback:
+    momentum: 252      # 12-month momentum
+    volatility: 60     # 60-day volatility
+    ma_long: 200       # 200-day MA for value proxy
+    ma_short: 50       # 50-day MA
+
+  # Winsorization to handle outliers
+  winsorize_percentile: 0.01  # Winsorize at 1st and 99th percentile
+
+  # Feature preprocessing
+  normalize_features: true
+  normalization_method: "minmax"  # Min-max normalization to [0, 1] range
+  handle_missing: "forward_fill"
+
+  # Feature validation
+  min_ic_threshold: 0.02  # Minimum Information Coefficient
+  min_significance: 0.10  # 10% significance level
+  feature_lag: 1  # Use lagged features to avoid look-ahead bias
+
+# Training/test periods
+periods:
+  train:
+    start: "2022-01-01"
+    end: "2022-06-30"
+  test:
+    start: "2023-07-01"
+    end: "2023-10-30"
+
+# Base models to train with HPO
+base_models:
+  - model_type: "fama_macbeth"
+    hpo_trials: 10
+    hpo_metric: "sharpe_ratio"
+    # Fama-MacBeth specific configuration
+    config:
+      regularization: "none"  # or "ridge" for regularized cross-sectional regression
+      alpha: 1.0  # Ridge regularization parameter (if ridge is used)
+      min_cross_section_size: 5  # Minimum stocks per cross-section
+      newey_west_lags: null  # Auto-detect for Newey-West standard errors
+    # Model-specific feature configuration for Fama-MacBeth
+    feature_config:
+      include_cross_sectional: true  # Enable cross-sectional features
+      include_technical: false
+      include_theoretical: false
+      cross_sectional_features:
+        - "market_cap"        # Size factor (SMB proxy)
+        - "book_to_market"    # Value factor (HML proxy)
+        - "size"              # Log market cap
+        - "value"             # Value indicator
+        - "momentum"          # Momentum factor
+        - "volatility"        # Risk measure
+      cross_sectional_lookback:
+        momentum: 252      # 12-month momentum
+        volatility: 60     # 60-day volatility
+        ma_long: 200       # 200-day MA for value proxy
+        ma_short: 50       # 50-day MA
+      winsorize_percentile: 0.01
+      normalize_features: true
+      normalization_method: "minmax"
+
+  - model_type: "ff5_regression"
+    hpo_trials: 10
+    hpo_metric: "sharpe_ratio"
+    # FF5 regression specific configuration
+    config:
+      regularization: "ridge"  # Regularization for FF5 regression
+      alpha: 1.0  # Ridge regularization parameter
+      standardize: true  # Standardize features for regression
+    # Model-specific feature configuration for FF5 regression
+    feature_config:
+      include_cross_sectional: false  # ✅ FF5 doesn't need cross-sectional features
+      include_technical: false        # ✅ FF5 doesn't need technical features
+      include_theoretical: false       # ✅ FF5 doesn't need theoretical features
+      enabled_features: []             # No technical features
+      normalize_features: false          # FF5 factors are already standardized
+      # ✅ FF5 model automatically uses factor data from factor_data_provider
+
+# MetaModel configuration with HPO
+metamodel:
+  hpo_trials: 10
+  hpo_metric: "sharpe_ratio"
+  methods_to_try: ["ridge", "equal"]
+
+# Strategy/Backtest configuration (shared)
+backtest:
+  initial_capital: 1000000
+  commission: 0.001
+  slippage: 0.0005
+
+strategy:
+  type: "MLStrategy"
+  parameters:
+    signal_threshold: 0.00001
+    max_positions: 20
+    minimum_stocks: 10  # Minimum stocks required for strategy to operate
+
+# Portfolio construction for final system
+portfolio_construction:
+  method: "box_based"
+  rebalance_frequency: "weekly"
+  max_positions: 12
+  min_position_weight: 0.05
+  max_position_weight: 0.15
+
+# System requirements for validation
+system_requirements:
+  min_sharpe_ratio: 0.5
+  max_drawdown_threshold: -0.3
+  min_win_rate: 0.4
+
+# Logging configuration
+logging:
+  level: "INFO"
+  log_to_file: true
+  log_file: "./results/multi_model_experiment/experiment.log"
+  log_to_console: true
+
+# Advanced configuration
+advanced:
+  # Parallel processing
+  parallel_processing: false  # Set to true if you want parallel model training
+  max_workers: 2
+
+  # Error handling
+  error_handling:
+    continue_on_model_failure: true
+    continue_on_metamodel_failure: false
+    max_retry_attempts: 3
+    retry_delay_seconds: 5
+
+  # Validation
+  validation:
+    validate_data_quality: true
+    validate_model_performance: true
+    validate_metamodel_weights: true
+    validate_system_requirements: true
+    # Data quality validation parameters
+    min_data_success_rate: 0.8      # Minimum 80% of stocks must have data
+    min_absolute_stocks: 10          # Minimum 10 stocks must have data
+
+# Quick test configuration (overrides main config when --quick-test is used)
+quick_test:
+  enabled: true
+  
+  # Reduced parameters for faster testing
+  reduced_trials:
+    model_n_trials: 5
+    metamodel_n_trials: 5
+  
+  # Reduced data for faster testing
+  reduced_data:
+    universe: ["AAPL", "MSFT", "GOOGL"]
+    train_period:
+      start: "2023-01-01"
+      end: "2023-06-30"
+    test_period:
+      start: "2023-07-01"
+      end: "2023-11-30"
+  
+  # Relaxed requirements for testing
+  relaxed_requirements:
+    min_sharpe_ratio: 0.3
+    max_drawdown_threshold: -0.4
+    min_win_rate: 0.35
+    min_absolute_stocks: 3      # Reduce minimum stocks for quick test

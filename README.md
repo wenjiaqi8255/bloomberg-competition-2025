@@ -6,6 +6,8 @@ A production-ready quantitative trading framework built for the Bloomberg termin
 
 ✅ **Complete Pipeline**: Data acquisition → Feature engineering → Strategy execution → Performance calculation → Experiment tracking
 
+⚠️ **PositionSizer Deprecated**: Risk management is now handled by Portfolio Construction framework with centralized constraints
+
 ✅ **MetaModel Strategy Combination**: Machine learning-based combination of multiple trading strategies (Ridge, Lasso, Dynamic)
 
 ✅ **Hyperparameter Optimization**: Comprehensive optimization with Optuna for strategies, MetaModels, and ML models
@@ -22,7 +24,77 @@ A production-ready quantitative trading framework built for the Bloomberg termin
 
 ✅ **Model Persistence**: Save and load trained models using ModelRegistry with versioning and artifacts
 
+## Portfolio Construction & Risk Management
+
+**⚠️ IMPORTANT: PositionSizer Completely Removed**
+
+The `PositionSizer` class has been **completely removed** from the system. Risk management and position sizing are now handled by the Portfolio Construction framework:
+
+- **Box-based method**: Uses `BoxBasedPortfolioBuilder` with systematic box allocation and constraints
+- **Quantitative method**: Uses `QuantitativePortfolioBuilder` with mathematical optimization and constraints
+
+All risk controls (position limits, leverage, volatility targeting) are now configured under `portfolio_construction.constraints` in your YAML configs.
+
+**Migration**: If you were using `position_sizing` configs, move those parameters to `portfolio_construction.constraints`.
+
+### Example Configuration
+
+```yaml
+portfolio_construction:
+  method: "box_based"  # or "quantitative"
+  
+  # Box-based configuration
+  box_weights:
+    method: "equal"
+    dimensions:
+      size: ["large", "mid"]
+      style: ["growth", "value"]
+  stocks_per_box: 3
+  allocation_method: "equal"
+  
+  # Centralized constraints (replaces position_sizing)
+  constraints:
+    max_position_weight: 0.10
+    max_leverage: 1.0
+    min_position_weight: 0.02
+    volatility_target: 0.15  # quantitative only
+```
+
 ## Quick Start
+
+### Stock Universe Management (CSV)
+
+You can load the training symbol universe from a CSV file while keeping backward compatibility with inline symbols.
+
+CSV requirements:
+
+- Required: `ticker`
+- Optional (used for filtering and ordering if present): `market_cap`|`market_cap_corrected`, `weight`, `sector`|`section`, `region`|`country_code`
+
+Filters supported (all optional): `min_market_cap`, `min_weight`, `max_stocks`, `include_sectors`, `exclude_sectors`, `regions`.
+
+Config (Option A):
+
+```yaml
+training_setup:
+  parameters:
+    universe:
+      source: "csv"
+      csv_path: "./data/universes/sp500_holdings.csv"
+      filters:
+        min_market_cap: 2.0
+        max_stocks: 50
+        exclude_sectors: ["Real Estate"]
+    symbols: []  # leaves backward compatibility when empty
+```
+
+Example loader API:
+
+```python
+from src.trading_system.data.utils.universe_loader import load_universe_from_csv, load_symbols_from_config
+
+symbols = load_universe_from_csv("./data/universes/sp500_holdings.csv", {"max_stocks": 50})
+```
 
 ### 1. Environment Setup
 

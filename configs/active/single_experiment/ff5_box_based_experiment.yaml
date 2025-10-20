@@ -1,0 +1,342 @@
+# FF5 + Box-Based Portfolio Construction Experiment
+# =================================================
+# This configuration combines Fama-French 5-factor model training with Box-First portfolio construction
+# to ensure systematic diversification across investment style boxes.
+
+# Part 1: FF5 Model Training Pipeline
+# ----------------------------------
+# Training configuration for the Fama-French 5-factor model
+data_provider:
+  type: "YFinanceProvider"
+  parameters:
+    max_retries: 3
+    retry_delay: 1.0
+
+factor_data_provider:
+  type: "FF5DataProvider"
+  parameters:
+    data_frequency: "daily"
+
+training_setup:
+  model:
+    model_type: "ff5_regression"
+    config:
+      regularization: 'ridge'
+      alpha: 1.0
+      standardize: true
+
+  feature_engineering:
+    # FF5 regression needs FF5 factors, not cross-sectional features
+    include_technical: false
+    include_cross_sectional: false
+    include_theoretical: false
+
+    # FF5 factors will be provided by FF5DataProvider
+    # No additional features needed for pure FF5 regression
+    enabled_features: []
+
+    # Feature preprocessing
+    normalize_features: true
+    handle_missing: "forward_fill"
+
+  # Expanded symbol universe for better box coverage
+  parameters:
+    # Universe selection (Option A - minimally intrusive)
+    # Uncomment to load symbols from CSV instead of inline list
+    universe:
+      source: "csv"
+      csv_path: "./data/universes/merged_tickers.csv"
+      filters:
+        min_market_cap: 1000000000
+        max_stocks: 500
+        # exclude_sectors: ["Real Estate"]
+
+    start_date: "2022-01-01"
+    end_date: "2023-12-31"
+    symbols: []
+    # symbols:
+    #   # Technology (Large Growth)
+    #   - AAPL
+    #   - MSFT
+    #   - GOOGL
+    #   - META
+    #   - NVDA
+    #   # Technology (Mid/Large Value)
+    #   - CSCO
+    #   - IBM
+    #   - INTC
+
+    #   # Healthcare (Large Growth)
+    #   - JNJ
+    #   - UNH
+    #   - PFE
+    #   # Healthcare (Mid/Large Value)
+    #   - ABT
+    #   - TMO
+    #   - DHR
+
+    #   # Financials (Large Growth)
+    #   - JPM
+    #   - BAC
+    #   - GS
+    #   # Financials (Mid/Large Value)
+    #   - WFC
+    #   - MS
+    #   - AXP
+
+    #   # Consumer (Growth)
+    #   - AMZN
+    #   - TSLA
+    #   - HD
+    #   - MCD
+    #   # Consumer (Value)
+    #   - WMT
+    #   - PG
+    #   - KO
+    #   - COST
+
+    #   # Industrial
+    #   - CAT
+    #   - GE
+    #   - HON
+    #   - UPS
+
+    #   # Energy
+    #   - XOM
+    #   - CVX
+    #   - COP
+
+    #   # Communication
+    #   - VZ
+    #   - DIS
+    #   - NFLX
+
+  # Hyperparameter optimization for FF5 model
+  hyperparameter_optimization:
+    enabled: false
+    optimization_method: "optuna"
+    n_trials: 20  # Reduced for faster demo
+    cv_folds: 3
+    objective: "r2"
+    search_space_preset: "ff5_default"
+    sampler_type: "tpe"
+    pruner_type: "median"
+    log_to_wandb: true
+    log_all_trials: true
+
+# Part 2: Box-Based Portfolio Construction Backtest
+# -----------------------------------------------
+# Uses the trained FF5 model with Box-First portfolio construction
+backtest:
+  name: "FF5_BoxBased_Backtest"
+  start_date: "2024-01-01"
+  end_date: "2025-08-31"
+  initial_capital: 1000000
+  benchmark_symbol: "SPY"
+  commission_rate: 0.001
+  slippage_rate: 0.0005
+  rebalance_frequency: "weekly"
+  position_limit: 0.99  # Reduced to 8% for better diversification
+  rebalance_threshold: 0.001
+
+# FF5 Strategy Configuration
+strategy:
+  name: "FF5_BoxBased_Strategy"
+  type: "fama_french_5"
+
+  parameters:
+    model_id: "placeholder_model_id"  # Will be overwritten by orchestrator
+    lookback_days: 252
+    risk_free_rate: 0.02
+
+    # Enable Box-Based portfolio construction
+    portfolio_construction:
+      method: "box_based"
+
+      # Box construction parameters
+      stocks_per_box: 2
+      min_stocks_per_box: 1
+      allocation_method: "signal_proportional"  # Use FF5 signals for weight allocation
+
+      # Box weight configuration - equal weights for all boxes
+      box_weights:
+        method: "equal"
+        dimensions:
+          size: ["large", "mid", "small"]
+          style: ["growth", "value"]
+          region: ["developed", "emerging"]  # Focus on US developed markets
+          sector: [
+            "Technology", "Financials", "Healthcare",
+            "Consumer Discretionary", "Consumer Staples",
+            "Industrials", "Energy", "Communication Services",
+            "Materials", "Utilities", "Real Estate"
+          ]
+
+      # Stock classifier configuration
+      classifier:
+        method: "four_factor"
+        cache_enabled: true
+
+      # Box selector configuration
+  box_selector:
+    type: "signal_based"
+
+  # Centralized constraints for both methods
+  constraints:
+    max_position_weight: 0.99
+    max_leverage: 1.0
+    min_position_weight: 0.02  # Select stocks by FF5 signal strength
+
+    # Strategy-level controls
+    enable_short_selling: false
+    max_position_weight: 0.99  # Consistent with backtest position limit
+
+
+# Reporting and Analysis
+# =====================
+# Enhanced reporting for Box-Based analysis
+reporting:
+  generate_report: true
+  output_directory: "./results/ff5_box_based"
+
+  # Box coverage analysis
+  box_analysis:
+    enabled: true
+    track_box_coverage: true
+    track_box_performance: true
+    generate_box_charts: true
+
+  # Performance attribution
+  attribution_analysis:
+    enabled: true
+    analyze_box_contributions: true
+    analyze_factor_exposures: true
+
+  # Model analysis
+  model_analysis:
+    track_ff5_coefficients: true
+    analyze_factor_stability: true
+    generate_model_plots: true
+
+# Experiment Configuration
+# =======================
+experiment:
+  name: "FF5_BoxBased_Portfolio_Construction"
+  description: "Fama-French 5-factor model with Box-First portfolio construction for systematic diversification"
+
+  # Experiment tracking
+  log_to_wandb: true
+  wandb_project: "ff5_box_based_experiments"
+  tags:
+    - "ff5"
+    - "box_based"
+    - "portfolio_construction"
+    - "factor_model"
+    - "systematic_diversification"
+
+  # Comparison with baseline
+  comparison:
+    enabled: true
+    baseline_method: "quantitative"  # Compare with traditional optimization
+    compare_metrics:
+      - "sharpe_ratio"
+      - "max_drawdown"
+      - "information_ratio"
+      - "box_coverage"
+      - "concentration_risk"
+
+# FF5 Model Hyperparameter Optimization Settings
+# ===========================================
+ff5_hyperparameter_optimization:
+  enabled: true
+  optimization_method: "optuna"
+  n_trials: 30
+  cv_folds: 3
+  objective: "r2"
+  direction: "maximize"
+
+  sampler:
+    type: "tpe"
+    seed: 42
+
+  pruner:
+    type: "median"
+    n_startup_trials: 5
+    n_warmup_steps: 3
+    interval_steps: 1
+
+  search_space:
+    preset: "ff5_default"
+
+    custom_space:
+      regularization:
+        type: "categorical"
+        choices: ["none", "ridge", "lasso"]
+      alpha:
+        type: "float"
+        low: 0.01
+        high: 10.0
+        log_scale: true
+      standardize:
+        type: "categorical"
+        choices: [true, false]
+
+  # Feature analysis
+  feature_analysis:
+    enabled: true
+    analyze_factor_importance: true
+    calculate_factor_correlations: true
+    beta_stability_analysis: true
+
+  # Logging
+  logging:
+    log_optimization: true
+    log_all_trials: true
+    create_optimization_plot: true
+    log_beta_coefficients: true
+    log_factor_analysis: true
+
+  # Validation
+  validation:
+    out_of_sample_test: true
+    time_series_split: true
+    stability_check: true
+    statistical_significance: true
+
+# Risk Management
+# ==============
+risk_management:
+  # Box-level risk controls
+  box_risk_limits:
+    max_box_weight: 0.15  # Maximum 15% in any single box
+    min_box_coverage: 0.6  # Minimum 60% of target boxes covered
+    max_sector_concentration: 0.25  # Maximum 25% in any sector
+
+  # Position-level controls
+  position_limits:
+    max_single_position: 0.08  # Maximum 8% in single stock
+    min_position: 0.01  # Minimum 1% position size
+    max_turnover: 0.5  # Maximum 50% annual turnover
+
+  # Drawdown controls
+  drawdown_control:
+    max_portfolio_drawdown: 0.15  # Stop trading at 15% drawdown
+    volatility_target: 0.12  # Target 12% annual volatility
+    rebalance_on_volatility: true
+
+# Performance Benchmarks
+# ====================
+benchmarks:
+  primary: "SPY"
+  secondary:
+    - "QQQ"  # Nasdaq 100 (Growth bias)
+    - "IWM"  # Russell 2000 (Small cap bias)
+    - "AGG"  # Bonds (Risk-free proxy)
+
+  # Factor model benchmarks
+  factor_benchmarks:
+    - "MTUM"  # Momentum
+    - "QUAL"  # Quality
+    - "VLUE"  # Value
+    - "SIZE"  # Size
+    - "USMV"  # Minimum volatility

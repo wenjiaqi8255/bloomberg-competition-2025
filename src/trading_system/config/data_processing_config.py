@@ -192,6 +192,21 @@ class DataProcessingConfig:
             with open(yaml_path, 'r') as file:
                 config_dict = yaml.safe_load(file)
 
+            # Add optional schema validation if available
+            try:
+                from trading_system.validation.config import SchemaValidator
+                schema_validator = SchemaValidator()
+                
+                # Check if base_schemas.json defines data_processing schema
+                available_schemas = schema_validator.list_available_schemas()
+                if 'data_processing_schema' in available_schemas:
+                    validation_result = schema_validator.validate(config_dict, 'data_processing_schema')
+                    
+                    if not validation_result.is_valid:
+                        logger.warning(f"Data processing config validation warnings: {validation_result.get_summary()}")
+            except ImportError:
+                pass  # Schema validation is optional for backward compatibility
+
             # Parse nested configurations
             config = cls()
 

@@ -52,6 +52,24 @@ class MultiModelOrchestrator:
         # Load configuration
         with open(self.config_path, 'r') as f:
             self.config = yaml.safe_load(f)
+
+        # Validate configuration
+        try:
+            from trading_system.validation.config import SchemaValidator
+            schema_validator = SchemaValidator()
+            validation_result = schema_validator.validate(self.config, 'multi_model_schema')
+
+            if not validation_result.is_valid:
+                error_summary = validation_result.get_summary()
+                error_details = '\n'.join([str(err) for err in validation_result.get_errors()])
+                raise ValueError(f"Multi-model configuration validation failed:\n{error_summary}\n{error_details}")
+
+            if validation_result.has_warnings():
+                logger.warning("Configuration validation warnings:")
+                for warning in validation_result.get_warnings():
+                    logger.warning(f"  - {warning.message}")
+        except ImportError:
+            logger.warning("Schema validation not available, skipping validation")
         
         # Initialize results storage
         self.base_model_results = []
@@ -345,33 +363,50 @@ class MultiModelOrchestrator:
         Raises:
             ValueError: If result validation fails
         """
-        # Check required fields
-        required_fields = ['trained_model_id', 'performance_metrics', 'returns_path']
-        missing_fields = [field for field in required_fields if field not in experiment_result]
-        
-        if missing_fields:
-            raise ValueError(
-                f"Experiment result for {model_type} missing required fields: {missing_fields}"
-            )
-        
-        # Check model ID is not empty
-        model_id = experiment_result['trained_model_id']
-        if not model_id or not isinstance(model_id, str):
-            raise ValueError(f"Invalid model_id for {model_type}: {model_id}")
-        
-        # Check performance metrics exist
-        metrics = experiment_result['performance_metrics']
-        if not metrics or not isinstance(metrics, dict):
-            raise ValueError(f"Invalid performance_metrics for {model_type}")
-        
-        # Check returns file exists
-        returns_path = experiment_result['returns_path']
-        if not returns_path:
-            raise ValueError(f"Missing returns_path for {model_type}")
-        
-        from pathlib import Path
-        if not Path(returns_path).exists():
-            raise ValueError(f"Returns file does not exist for {model_type}: {returns_path}")
+        try:
+            from trading_system.validation import ExperimentResultValidator
+            
+            validator = ExperimentResultValidator()
+            validation_result = validator.validate(experiment_result)
+            
+            if not validation_result.is_valid:
+                error_messages = [issue.message for issue in validation_result.get_errors()]
+                raise ValueError(
+                    f"Experiment result validation failed for {model_type}: {'; '.join(error_messages)}"
+                )
+            
+            if validation_result.has_warnings():
+                for warning in validation_result.get_warnings():
+                    logger.warning(f"[{model_type}] {warning.message}")
+        except ImportError:
+            logger.warning("Experiment result validation not available, using basic validation")
+            # Fallback to basic validation
+            required_fields = ['trained_model_id', 'performance_metrics', 'returns_path']
+            missing_fields = [field for field in required_fields if field not in experiment_result]
+            
+            if missing_fields:
+                raise ValueError(
+                    f"Experiment result for {model_type} missing required fields: {missing_fields}"
+                )
+            
+            # Check model ID is not empty
+            model_id = experiment_result['trained_model_id']
+            if not model_id or not isinstance(model_id, str):
+                raise ValueError(f"Invalid model_id for {model_type}: {model_id}")
+            
+            # Check performance metrics exist
+            metrics = experiment_result['performance_metrics']
+            if not metrics or not isinstance(metrics, dict):
+                raise ValueError(f"Invalid performance_metrics for {model_type}")
+            
+            # Check returns file exists
+            returns_path = experiment_result['returns_path']
+            if not returns_path:
+                raise ValueError(f"Missing returns_path for {model_type}")
+            
+            from pathlib import Path
+            if not Path(returns_path).exists():
+                raise ValueError(f"Returns file does not exist for {model_type}: {returns_path}")
         
         logger.debug(f"✓ {model_type} result validation passed")
 
@@ -501,8 +536,23 @@ class MultiModelOrchestrator:
                 # Run the complete experiment (training + backtest)
                 meta_backtest_result = meta_orchestrator.run_experiment()
 
-                # Validate ensemble model backtest result
-                self._validate_meta_backtest_result(meta_backtest_result)
+                # Validate ensemble model backtest result using ExperimentResultValidator
+                try:
+                    from trading_system.validation import ExperimentResultValidator
+                    validator = ExperimentResultValidator()
+                    validation_result = validator.validate(meta_backtest_result)
+
+                    if not validation_result.is_valid:
+                        logger.error(f"Metamodel result validation failed: {validation_result.get_summary()}")
+                        raise ValueError("Metamodel result validation failed")
+                    
+                    if validation_result.has_warnings():
+                        for warning in validation_result.get_warnings():
+                            logger.warning(f"[Metamodel] {warning.message}")
+                except ImportError:
+                    logger.warning("Experiment result validation not available, using basic validation")
+                    # Fallback to existing validation
+                    self._validate_meta_backtest_result(meta_backtest_result)
 
                 # Store ensemble model backtest results
                 self.meta_backtest_result = {

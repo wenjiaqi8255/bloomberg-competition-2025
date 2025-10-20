@@ -58,6 +58,36 @@ class ConfigFactory:
 
         with open(file_path, 'r') as f:
             config_data = yaml.safe_load(f)
+        
+        # Add schema validation
+        try:
+            from trading_system.validation.config import SchemaValidator
+            schema_validator = SchemaValidator()
+            
+            # Detect config type and validate
+            if 'training_setup' in config_data and 'backtest' in config_data:
+                schema_name = 'single_experiment_schema'
+            elif 'base_models' in config_data and 'metamodel' in config_data:
+                schema_name = 'multi_model_schema'
+            elif 'prediction' in config_data:
+                schema_name = 'prediction_schema'
+            else:
+                logger.warning("Could not detect config type for schema validation")
+                schema_name = None
+            
+            if schema_name:
+                validation_result = schema_validator.validate(config_data, schema_name)
+                
+                if not validation_result.is_valid:
+                    error_summary = validation_result.get_summary()
+                    error_details = '\n'.join([f"  - {err}" for err in validation_result.get_errors()])
+                    raise ValueError(f"Configuration validation failed:\n{error_summary}\n{error_details}")
+                
+                if validation_result.has_warnings():
+                    for warning in validation_result.get_warnings():
+                        logger.warning(f"Config validation: {warning.message}")
+        except ImportError:
+            logger.warning("Schema validation not available, skipping validation")
 
         configs = {}
 

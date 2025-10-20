@@ -41,7 +41,6 @@ class MetaStrategy(BaseStrategy):
                  # Standard BaseStrategy parameters
                  feature_pipeline=None,  # MetaStrategy doesn't need its own
                  model_predictor=None,   # MetaStrategy doesn't need its own
-                 position_sizer=None,
                  universe: Optional[List[str]] = None,
 
                  # Infrastructure providers (critical for base strategies)
@@ -60,7 +59,6 @@ class MetaStrategy(BaseStrategy):
             meta_weights: Dictionary mapping model IDs to weights (sums to 1.0)
             feature_pipeline: Not used for MetaStrategy (can be None)
             model_predictor: Not used for MetaStrategy (can be None)
-            position_sizer: Position sizer instance
             universe: Trading universe (list of symbols)
             data_provider: Market data provider for base strategies
             factor_data_provider: Factor data provider for FF5 strategies
@@ -71,7 +69,6 @@ class MetaStrategy(BaseStrategy):
             name=name,
             feature_pipeline=feature_pipeline,
             model_predictor=model_predictor,
-            position_sizer=position_sizer,
             universe=universe,
             **kwargs
         )

@@ -26,72 +26,94 @@ training_setup:
       standardize: true
 
   feature_engineering:
+    # FF5 regression needs FF5 factors, not cross-sectional features
+    include_technical: false
+    include_cross_sectional: false
+    include_theoretical: false
+
+    # FF5 factors will be provided by FF5DataProvider
+    # No additional features needed for pure FF5 regression
     enabled_features: []
+
+    # Feature preprocessing
+    normalize_features: true
+    handle_missing: "forward_fill"
 
   # Expanded symbol universe for better box coverage
   parameters:
-    start_date: "2018-01-01"
-    end_date: "2018-12-31"
-    symbols:
-      # Technology (Large Growth)
-      - AAPL
-      - MSFT
-      - GOOGL
-      - META
-      - NVDA
-      # Technology (Mid/Large Value)
-      - CSCO
-      - IBM
-      - INTC
+    # Universe selection (Option A - minimally intrusive)
+    # Uncomment to load symbols from CSV instead of inline list
+    universe:
+      source: "csv"
+      csv_path: "./data/universes/holdings_largecap_gt1bn.csv"
+      filters:
+        min_market_cap: 1000000000
+        max_stocks: 200
+        # exclude_sectors: ["Real Estate"]
 
-      # Healthcare (Large Growth)
-      - JNJ
-      - UNH
-      - PFE
-      # Healthcare (Mid/Large Value)
-      - ABT
-      - TMO
-      - DHR
+    start_date: "2024-01-01"
+    end_date: "2025-09-30"
+    symbols: []
+    # symbols:
+    #   # Technology (Large Growth)
+    #   - AAPL
+    #   - MSFT
+    #   - GOOGL
+    #   - META
+    #   - NVDA
+    #   # Technology (Mid/Large Value)
+    #   - CSCO
+    #   - IBM
+    #   - INTC
 
-      # Financials (Large Growth)
-      - JPM
-      - BAC
-      - GS
-      # Financials (Mid/Large Value)
-      - WFC
-      - MS
-      - AXP
+    #   # Healthcare (Large Growth)
+    #   - JNJ
+    #   - UNH
+    #   - PFE
+    #   # Healthcare (Mid/Large Value)
+    #   - ABT
+    #   - TMO
+    #   - DHR
 
-      # Consumer (Growth)
-      - AMZN
-      - TSLA
-      - HD
-      - MCD
-      # Consumer (Value)
-      - WMT
-      - PG
-      - KO
-      - COST
+    #   # Financials (Large Growth)
+    #   - JPM
+    #   - BAC
+    #   - GS
+    #   # Financials (Mid/Large Value)
+    #   - WFC
+    #   - MS
+    #   - AXP
 
-      # Industrial
-      - CAT
-      - GE
-      - HON
-      - UPS
+    #   # Consumer (Growth)
+    #   - AMZN
+    #   - TSLA
+    #   - HD
+    #   - MCD
+    #   # Consumer (Value)
+    #   - WMT
+    #   - PG
+    #   - KO
+    #   - COST
 
-      # Energy
-      - XOM
-      - CVX
-      - COP
+    #   # Industrial
+    #   - CAT
+    #   - GE
+    #   - HON
+    #   - UPS
 
-      # Communication
-      - VZ
-      - DIS
-      - NFLX
+    #   # Energy
+    #   - XOM
+    #   - CVX
+    #   - COP
+
+    #   # Communication
+    #   - VZ
+    #   - DIS
+    #   - NFLX
 
   # Hyperparameter optimization for FF5 model
   hyperparameter_optimization:
-    enabled: true
+    enabled: false
     optimization_method: "optuna"
     n_trials: 20  # Reduced for faster demo
     cv_folds: 3
@@ -107,8 +129,8 @@ training_setup:
 # Uses the trained FF5 model with Box-First portfolio construction
 backtest:
   name: "FF5_BoxBased_Backtest"
-  start_date: "2020-01-01"
-  end_date: "2020-12-31"
+  start_date: "2021-01-01"
+  end_date: "2022-12-31"
   initial_capital: 1000000
   benchmark_symbol: "SPY"
   commission_rate: 0.001
@@ -142,7 +164,7 @@ strategy:
         dimensions:
           size: ["large", "mid", "small"]
           style: ["growth", "value"]
-          region: ["developed"]  # Focus on US developed markets
+          region: ["developed", "emerging"]  # Focus on US developed markets
           sector: [
             "Technology", "Financials", "Healthcare",
             "Consumer Discretionary", "Consumer Staples",

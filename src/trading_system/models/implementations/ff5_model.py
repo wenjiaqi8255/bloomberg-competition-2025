@@ -253,172 +253,110 @@ class FF5RegressionModel(BaseModel):
 
     def predict(self, X: pd.DataFrame, symbols: Optional[List[str]] = None) -> np.ndarray:
         """
-        Predict factor-implied returns using stored betas.
-
-        This method follows the BaseModel contract and returns np.ndarray.
-
-        Args:
-            X: Factor returns DataFrame with required factor columns ['MKT', 'SMB', 'HML', 'RMW', 'CMA']
-               Can be either:
-               - Regular DataFrame with factor values only (for batch prediction)
-               - MultiIndex DataFrame with (symbol, date) levels (for backward compatibility)
-            symbols: Optional list of symbols to predict. If None:
-                    - For batch prediction: uses all trained symbols
-                    - For MultiIndex input: extracts symbols from index
-
-        Returns:
-            np.ndarray: Array of predictions flattened to 1D
-
-        Raises:
-            ValueError: If model is not trained or data is invalid
+        统一预测接口 - 自动检测场景
+        
+        支持两种场景：
+        1. 单日横截面预测（回测）：X shape (1, 5) 或 (n_symbols, 5)
+        2. 多日时间序列预测（训练验证）：X shape (n_observations, 5) with MultiIndex
         """
-        logger.info(f"🔍 FF5RegressionModel.predict() starting")
-        logger.info(f"Model status: {self.status}")
-        logger.info(f"Expected features: {self._expected_features}")
-        logger.info(f"Input columns: {list(X.columns)}")
-        logger.info(f"Input shape: {X.shape}")
-        logger.info(f"Symbols parameter: {symbols}")
-
-        if self.status != ModelStatus.TRAINED:
-            raise ValueError("Model must be trained before making predictions")
-
-        if not self.betas:
-            raise ValueError("Model has no fitted betas - was fit() called successfully?")
-
-        try:
-            # Check for required factor columns
-            missing_factors = set(self._expected_features) - set(X.columns)
-            if missing_factors:
-                logger.error(f"❌ Missing required factor columns: {missing_factors}")
-                logger.error(f"❌ Available columns: {list(X.columns)}")
-                logger.error(f"❌ Expected columns: {self._expected_features}")
-                raise ValueError(f"Missing required factor columns: {missing_factors}")
-
-
-            # New batch prediction logic, then convert to ndarray
-            result = self._predict_batch(X, symbols)
-            if isinstance(result, pd.Series):
-                return result.values
-            elif isinstance(result, pd.DataFrame):
-                return result.values.flatten()
-            else:
-                return result
-
-        except Exception as e:
-            logger.error(f"Failed to make predictions: {e}")
-            import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            raise
+        logger.info(f"🔍 FF5 Prediction - Input: shape={X.shape}, index_type={type(X.index)}")
+        
+        if self.status != ModelStatus.TRAINED or not self.betas:
+            raise ValueError("Model must be trained before predictions")
+        
+        # 验证因子列
+        missing_factors = set(self._expected_features) - set(X.columns)
+        if missing_factors:
+            raise ValueError(f"Missing factors: {missing_factors}")
+        
+        # ====================================================
+        # 场景检测与路由
+        # ====================================================
+        
+        # 场景 1: MultiIndex - 训练/验证场景
+        if isinstance(X.index, pd.MultiIndex):
+            if 'symbol' in X.index.names and 'date' in X.index.names:
+                logger.info("📊 Scenario: Training/Validation (time-series format)")
+                return self._predict_time_series(X, symbols)
+        
+        # 场景 2: 单日横截面 - 回测场景
+        logger.info("🎯 Scenario: Backtesting (cross-sectional format)")
+        result = self._predict_batch(X, symbols)
+        
+        # 转换为 ndarray
+        if isinstance(result, pd.Series):
+            return result.values
+        elif isinstance(result, pd.DataFrame):
+            return result.values.flatten()
+        else:
+            return result
 
     def _predict_batch(self, X: pd.DataFrame, symbols: Optional[List[str]]) -> Union[pd.Series, pd.DataFrame]:
         """
-        New batch prediction logic for better performance.
-
+        批量预测逻辑 - 始终为当前时间点生成横截面预测
+        
+        ⚠️ 重要：此方法只处理单个时间点（横截面）的预测
+        多时间点的循环由 BaseStrategy._get_predictions() 处理
+        
         Args:
-            X: DataFrame with factor values only, shape (T, 5)
-            symbols: List of symbols to predict. If None, uses all trained symbols.
-
+            X: 因子数据，应该只包含**单个日期**的因子值
+            - 对于 FF5：所有股票共享相同的因子值 → shape (1, 5) 或 (5,)
+            symbols: 要预测的股票列表
+        
         Returns:
-            - pd.Series: For single day (T=1) with symbols as index
-            - pd.DataFrame: For multiple days (T>1) with dates as index, symbols as columns
+            pd.Series: 当前日期的横截面预测，index为股票symbols
         """
         logger.info("Using new batch prediction logic")
-
-        # Determine symbols to predict
+        
+        # 确定要预测的股票
         if symbols is None:
             symbols = list(self.betas.keys())
-            logger.info(f"No symbols provided, using all {len(symbols)} trained symbols")
-
-        # Filter to only symbols that have fitted betas
+        
         valid_symbols = [s for s in symbols if s in self.betas]
         missing_symbols = [s for s in symbols if s not in self.betas]
-
-        if not valid_symbols:
-            raise ValueError(f"No valid symbols found. Available symbols: {list(self.betas.keys())}")
-
-        # CRITICAL FIX: Log missing symbols that will cause zero predictions
+        
         if missing_symbols:
-            logger.warning(f"⚠️  SYMBOL MISMATCH: {len(missing_symbols)} symbols not found in trained FF5 model:")
-            logger.warning(f"   Missing symbols: {missing_symbols}")
-            logger.warning(f"   Available symbols: {list(self.betas.keys())}")
-            logger.warning(f"   This will cause zero predictions for missing symbols!")
-            logger.warning(f"   Consider retraining the model with these symbols or using mean betas fallback.")
-
-        logger.info(f"Predicting for {len(valid_symbols)} trained symbols: {valid_symbols}")
-        if missing_symbols:
-            logger.info(f"Will skip {len(missing_symbols)} untrained symbols: {missing_symbols}")
-
-        # Extract factor values (shared by all symbols)
-        factor_values = X[self._expected_features].values  # shape: (T, 5)
-        logger.info(f"Factor values shape: {factor_values.shape}")
-
-        # Batch predict all symbols
+            logger.warning(f"⚠️  Missing symbols: {missing_symbols}")
+        
+        # ⚠️ 关键修复：提取因子值（应该只有一行或一个向量）
+        factor_values = X[self._expected_features].values
+        
+        # 验证输入维度
+        if factor_values.ndim == 1:
+            # 已经是一维向量 (5,)
+            factor_vector = factor_values
+        elif factor_values.shape[0] == 1:
+            # 单行矩阵 (1, 5) → 提取为向量
+            factor_vector = factor_values[0]
+        else:
+            # ⚠️ 错误：不应该有多行
+            logger.error(f"❌ Expected single date factors, got shape {factor_values.shape}")
+            logger.error(f"❌ This indicates incorrect data preparation in upstream code")
+            # 降级处理：取第一行
+            factor_vector = factor_values[0]
+            logger.warning(f"⚠️  Using first row as fallback: {factor_vector}")
+        
+        logger.info(f"Factor vector shape: {factor_vector.shape}")  # 应该是 (5,)
+        
+        # 批量预测所有股票（向量化）
         predictions = {}
         for symbol in valid_symbols:
-            try:
-                # Get stored betas and alpha for this symbol
-                symbol_betas = self.betas[symbol]  # shape: (5,)
-                symbol_alpha = self.alphas[symbol]  # scalar
-
-                # Vectorized prediction: y = alpha + X @ beta
-                # factor_values: (T, 5), symbol_betas: (5,) -> result: (T,)
-                symbol_predictions = symbol_alpha + factor_values @ symbol_betas
-
-                predictions[symbol] = symbol_predictions
-                logger.debug(f"Generated {len(symbol_predictions)} predictions for {symbol}")
-
-            except Exception as e:
-                logger.error(f"Failed to predict for {symbol}: {e}")
-                continue
-
-        if not predictions:
-            raise ValueError("No predictions could be generated")
-
-        # CRITICAL FIX: Handle missing symbols by adding zero predictions
-        # This ensures the output contains all requested symbols in the correct order
-        if missing_symbols:
-            logger.warning(f"Adding zero predictions for {len(missing_symbols)} missing symbols")
-            # Note: Using conservative zero predictions for missing symbols
-            # Future enhancement could use mean betas as fallback
-
-            for symbol in missing_symbols:
-                # Use zero prediction for missing symbols (conservative approach)
-                if len(X) == 1:
-                    # Single day - single zero value
-                    predictions[symbol] = np.array([0.0])
-                else:
-                    # Multiple days - zero values for each date
-                    predictions[symbol] = np.zeros(len(X))
-
-                logger.debug(f"Added zero prediction for missing symbol {symbol}")
-
-        # Convert to appropriate output format with ALL requested symbols
-        if len(X) == 1:
-            # Single day: return Series with symbols as index
-            # CRITICAL FIX: Ensure all requested symbols are included in correct order
-            all_predictions = {}
-            for symbol in symbols:
-                if symbol in predictions:
-                    all_predictions[symbol] = predictions[symbol][0]
-                else:
-                    all_predictions[symbol] = 0.0  # Fallback
-
-            result = pd.Series(all_predictions, name='ff5_prediction')
-            logger.info(f"Generated single-day predictions for {len(result)} symbols (including {len(missing_symbols)} zero predictions)")
-            return result
-        else:
-            # Multiple days: return DataFrame with dates as index, symbols as columns
-            # CRITICAL FIX: Ensure all requested symbols are included in correct order
-            all_predictions = {}
-            for symbol in symbols:
-                if symbol in predictions:
-                    all_predictions[symbol] = predictions[symbol]
-                else:
-                    all_predictions[symbol] = np.zeros(len(X))  # Fallback
-
-            result = pd.DataFrame(all_predictions, index=X.index)
-            logger.info(f"Generated multi-day predictions: {result.shape} (including {len(missing_symbols)} zero columns)")
-            return result
+            symbol_betas = self.betas[symbol]  # shape: (5,)
+            symbol_alpha = self.alphas[symbol]
+            
+            # 向量化预测：r = α + β @ f
+            symbol_prediction = symbol_alpha + factor_vector @ symbol_betas  # scalar
+            predictions[symbol] = symbol_prediction
+        
+        # 处理缺失股票（零预测）
+        for symbol in missing_symbols:
+            predictions[symbol] = 0.0
+        
+        # 始终返回 Series（横截面预测）
+        result = pd.Series(predictions, name='ff5_prediction')
+        logger.info(f"Generated cross-sectional predictions for {len(result)} symbols")
+        
+        return result
 
     def get_feature_importance(self) -> Dict[str, float]:
         """
