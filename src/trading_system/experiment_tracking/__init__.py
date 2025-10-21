@@ -1,19 +1,14 @@
 """
-Experiment tracking utilities for the trading system.
+Simplified experiment tracking utilities for the trading system.
 
-This package provides a unified interface for experiment tracking
-across different backends (WandB, MLflow, etc.) with support for:
-- Model training experiments
-- Hyperparameter optimization
-- Strategy backtesting
-- Model monitoring
-- Performance analysis
+This package provides a minimal interface for experiment tracking
+with WandB backend, following the KISS principle.
 
 Key components:
-- ExperimentTrackerInterface: Abstract interface for tracking
-- ExperimentConfig: Configuration dataclasses
+- ExperimentTrackerInterface: Simple interface for tracking
+- ExperimentConfig: Basic configuration class
 - WandBExperimentTracker: WandB implementation
-- Visualization tools for experiment analysis
+- NullExperimentTracker: No-op implementation for testing
 """
 
 from .interface import (
@@ -24,25 +19,13 @@ from .interface import (
 
 from .config import (
     ExperimentConfig,
-    OptimizationConfig,
-    MonitoringConfig,
     create_training_config,
-    create_optimization_config,
-    create_backtest_config,
-    create_monitoring_config,
-    RUN_TYPES,
-    ALERT_LEVELS
+    create_backtest_config
 )
 
-from .visualizer import ExperimentVisualizer
-from .wandb_adapter import WandBExperimentTracker, create_wandb_tracker_from_config
-from .training_interface import (
-    TrainingExperimentTrackerInterface,
-    TrainingMetrics,
-    ModelLifecycleEvent,
-    TrainingMetricsAggregator,
-    TrainingExperimentConfig,
-    create_training_config
+from .wandb_adapter import (
+    WandBExperimentTracker, 
+    create_wandb_tracker_from_config
 )
 
 __all__ = [
@@ -50,31 +33,15 @@ __all__ = [
     "ExperimentTrackerInterface",
     "ExperimentTrackingError",
     "NullExperimentTracker",
-    "TrainingExperimentTrackerInterface",
 
     # Configuration
     "ExperimentConfig",
-    "OptimizationConfig",
-    "MonitoringConfig",
-    "TrainingExperimentConfig",
-
-    # Training-specific data classes
-    "TrainingMetrics",
-    "ModelLifecycleEvent",
-    "TrainingMetricsAggregator",
 
     # Factory functions
     "create_training_config",
-    "create_optimization_config",
     "create_backtest_config",
-    "create_monitoring_config",
     "create_wandb_tracker_from_config",
 
     # Implementations
     "WandBExperimentTracker",
-    "ExperimentVisualizer",
-
-    # Constants
-    "RUN_TYPES",
-    "ALERT_LEVELS"
 ]

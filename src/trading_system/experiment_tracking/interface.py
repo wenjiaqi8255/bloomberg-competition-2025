@@ -1,9 +1,8 @@
 """
-Experiment tracking interface for the trading system.
+Simplified experiment tracking interface for the trading system.
 
-This module defines the abstract interface for experiment tracking,
-following the dependency inversion principle. Components should depend
-on this interface, not on concrete implementations like WandB.
+This module defines a minimal interface for experiment tracking,
+following the KISS principle. Only includes methods that are actually used.
 """
 
 import logging
@@ -18,13 +17,9 @@ logger = logging.getLogger(__name__)
 
 class ExperimentTrackerInterface(ABC):
     """
-    Abstract interface for experiment tracking systems.
-
-    This interface defines the contract that all experiment tracking
-    implementations must follow, enabling:
-    - Dependency injection for testing
-    - Swappable tracking backends (WandB, MLflow, etc.)
-    - Graceful degradation when tracking is unavailable
+    Simplified interface for experiment tracking systems.
+    
+    Only includes methods that are actually used in the codebase.
     """
 
     @abstractmethod
@@ -33,14 +28,10 @@ class ExperimentTrackerInterface(ABC):
         Initialize a new experiment run.
 
         Args:
-            config: Experiment configuration including project name,
-                   run type, hyperparameters, and metadata.
+            config: Experiment configuration
 
         Returns:
-            Unique run identifier that can be used to reference this run.
-
-        Raises:
-            ExperimentTrackingError: If initialization fails.
+            Unique run identifier
         """
         pass
 
@@ -51,10 +42,6 @@ class ExperimentTrackerInterface(ABC):
 
         Args:
             params: Dictionary of parameter names to values.
-                   Should be logged once at the start of the experiment.
-
-        Raises:
-            ExperimentTrackingError: If logging fails.
         """
         pass
 
@@ -67,9 +54,6 @@ class ExperimentTrackerInterface(ABC):
         Args:
             metrics: Dictionary of metric names to numeric values.
             step: Optional step number for time-series logging.
-
-        Raises:
-            ExperimentTrackingError: If logging fails.
         """
         pass
 
@@ -84,52 +68,6 @@ class ExperimentTrackerInterface(ABC):
             artifact_name: Name for the artifact.
             artifact_type: Type of artifact (e.g., "model", "dataset", "config").
             description: Human-readable description of the artifact.
-
-        Raises:
-            ExperimentTrackingError: If logging fails.
-        """
-        pass
-
-    @abstractmethod
-    def log_figure(self, figure: Any, figure_name: str) -> None:
-        """
-        Log a visualization figure.
-
-        Args:
-            figure: Figure object (plotly Figure, matplotlib Figure, etc.).
-            figure_name: Name for the figure.
-
-        Raises:
-            ExperimentTrackingError: If logging fails.
-        """
-        pass
-
-    @abstractmethod
-    def log_table(self, data: Any, table_name: str) -> None:
-        """
-        Log tabular data.
-
-        Args:
-            data: Table data (pandas DataFrame, list of dicts, etc.).
-            table_name: Name for the table.
-
-        Raises:
-            ExperimentTrackingError: If logging fails.
-        """
-        pass
-
-    @abstractmethod
-    def log_alert(self, title: str, text: str, level: str = "info") -> None:
-        """
-        Log an alert/notification.
-
-        Args:
-            title: Alert title.
-            text: Alert message.
-            level: Alert level ("info", "warning", "error").
-
-        Raises:
-            ExperimentTrackingError: If logging fails.
         """
         pass
 
@@ -139,10 +77,7 @@ class ExperimentTrackerInterface(ABC):
         Update the status of the current run.
 
         Args:
-            status: New status value (e.g., "running", "completed", "failed", "monitoring").
-
-        Raises:
-            ExperimentTrackingError: If status update fails.
+            status: New status value (e.g., "running", "completed", "failed").
         """
         pass
 
@@ -150,18 +85,13 @@ class ExperimentTrackerInterface(ABC):
         """
         Log a dictionary as an artifact.
 
-        This is a convenience method that converts a dictionary to a temporary
-        file and logs it as an artifact. Not all tracking backends support this.
-
         Args:
             data: Dictionary data to log.
             artifact_name: Name for the artifact.
-
-        Raises:
-            ExperimentTrackingError: If logging fails.
         """
         import tempfile
         import json
+        import os
 
         try:
             # Create temporary file
@@ -173,20 +103,15 @@ class ExperimentTrackerInterface(ABC):
             self.log_artifact(temp_path, artifact_name, artifact_type="metadata")
 
             # Clean up
-            import os
             os.unlink(temp_path)
 
         except Exception as e:
             logger.warning(f"Failed to log dictionary as artifact {artifact_name}: {e}")
-            # Don't raise exception to avoid breaking the flow
 
     @abstractmethod
     def create_child_run(self, name: str, config: Optional[Dict[str, Any]] = None) -> 'ExperimentTrackerInterface':
         """
         Create a child run for hierarchical experiment tracking.
-
-        Useful for hyperparameter optimization where each trial
-        should be a separate run but linked to the parent optimization run.
 
         Args:
             name: Name for the child run.
@@ -194,33 +119,6 @@ class ExperimentTrackerInterface(ABC):
 
         Returns:
             New tracker instance for the child run.
-
-        Raises:
-            ExperimentTrackingError: If child run creation fails.
-        """
-        pass
-
-    @abstractmethod
-    def link_to_run(self, run_id: str, link_type: str = "parent") -> None:
-        """
-        Link this run to another run.
-
-        Args:
-            run_id: ID of the run to link to.
-            link_type: Type of relationship ("parent", "child", "related").
-
-        Raises:
-            ExperimentTrackingError: If linking fails.
-        """
-        pass
-
-    @abstractmethod
-    def get_run_url(self) -> Optional[str]:
-        """
-        Get the URL for viewing this run in the tracking UI.
-
-        Returns:
-            URL string if available, None otherwise.
         """
         pass
 
@@ -231,19 +129,6 @@ class ExperimentTrackerInterface(ABC):
 
         Args:
             exit_code: Exit code indicating success (0) or failure (non-zero).
-
-        Raises:
-            ExperimentTrackingError: If finishing fails.
-        """
-        pass
-
-    @abstractmethod
-    def is_active(self) -> bool:
-        """
-        Check if the tracker is currently active and ready to log data.
-
-        Returns:
-            True if tracker is active, False otherwise.
         """
         pass
 
@@ -270,8 +155,7 @@ class NullExperimentTracker(ExperimentTrackerInterface):
     Null object implementation of ExperimentTrackerInterface.
 
     This implementation does nothing and is used when experiment tracking
-    is unavailable or disabled. It allows the system to continue working
-    without errors even when the tracking backend is not configured.
+    is unavailable or disabled.
     """
 
     def __init__(self):
@@ -298,18 +182,6 @@ class NullExperimentTracker(ExperimentTrackerInterface):
         """Do nothing."""
         logger.debug(f"Null tracker: would log artifact {artifact_name}")
 
-    def log_figure(self, figure: Any, figure_name: str) -> None:
-        """Do nothing."""
-        logger.debug(f"Null tracker: would log figure {figure_name}")
-
-    def log_table(self, data: Any, table_name: str) -> None:
-        """Do nothing."""
-        logger.debug(f"Null tracker: would log table {table_name}")
-
-    def log_alert(self, title: str, text: str, level: str = "info") -> None:
-        """Do nothing."""
-        logger.debug(f"Null tracker: would log alert {title}: {text}")
-
     def update_run_status(self, status: str) -> None:
         """Do nothing."""
         logger.debug(f"Null tracker: would update run status to {status}")
@@ -319,18 +191,6 @@ class NullExperimentTracker(ExperimentTrackerInterface):
         logger.debug(f"Null tracker: would create child run {name}")
         return NullExperimentTracker()
 
-    def link_to_run(self, run_id: str, link_type: str = "parent") -> None:
-        """Do nothing."""
-        logger.debug(f"Null tracker: would link to run {run_id}")
-
-    def get_run_url(self) -> Optional[str]:
-        """Return None."""
-        return None
-
     def finish_run(self, exit_code: int = 0) -> None:
         """Do nothing."""
         logger.debug("Null tracker: would finish run")
-
-    def is_active(self) -> bool:
-        """Always return False."""
-        return False

@@ -63,7 +63,7 @@ logger = logging.getLogger(__name__)
 from ...trading_system.models.training.training_pipeline import TrainingPipeline
 from ...trading_system.feature_engineering.pipeline import FeatureEngineeringPipeline
 from ...trading_system.strategy_backtest.strategy_runner import create_strategy_runner
-from ...trading_system.config.factory import ConfigFactory
+# ConfigFactory import removed - using Pydantic configs directly
 from ...trading_system.config.system import SystemConfig
 from ...trading_system.data.base_data_provider import BaseDataProvider
 from ...trading_system.experiment_tracking.wandb_adapter import WandBExperimentTracker
@@ -125,26 +125,43 @@ class ExperimentOrchestrator:
             raise FileNotFoundError(f"Experiment config not found at: {self.experiment_config_path}")
 
         logger.info(f"Loading experiment configuration from {self.experiment_config_path}")
-        with open(self.experiment_config_path, 'r') as f:
-            self.full_config = yaml.safe_load(f)
-
-        # Validate configuration
+        
+        # Try Pydantic configuration system first
         try:
-            from trading_system.validation.config import SchemaValidator
-            schema_validator = SchemaValidator()
-            validation_result = schema_validator.validate(self.full_config, 'single_experiment_schema')
-
-            if not validation_result.is_valid:
-                error_summary = validation_result.get_summary()
-                error_details = '\n'.join([str(err) for err in validation_result.get_errors()])
-                raise ValueError(f"Experiment configuration validation failed:\n{error_summary}\n{error_details}")
-
-            if validation_result.has_warnings():
-                logger.warning("Configuration validation warnings:")
-                for warning in validation_result.get_warnings():
-                    logger.warning(f"  - {warning.message}")
+            from ...trading_system.config.pydantic import ConfigLoader
+            loader = ConfigLoader()
+            self.full_config = loader.load_from_yaml(self.experiment_config_path)
+            logger.info("✅ Using Pydantic configuration system")
+            self._using_pydantic = True
         except ImportError:
-            logger.warning("Schema validation not available, skipping validation")
+            # Pydantic not available, use legacy system
+            logger.warning("⚠️ Pydantic not available, using legacy config system")
+            with open(self.experiment_config_path, 'r') as f:
+                self.full_config = yaml.safe_load(f)
+            self._using_pydantic = False
+        except Exception as e:
+            # Configuration validation failed - this is the key improvement
+            logger.error(f"❌ Configuration validation failed:\n{str(e)}")
+            raise ValueError(f"Invalid configuration: {self.experiment_config_path}") from e
+
+        # Legacy schema validation (only if not using Pydantic)
+        if not self._using_pydantic:
+            try:
+                from trading_system.validation.config import SchemaValidator
+                schema_validator = SchemaValidator()
+                validation_result = schema_validator.validate(self.full_config, 'single_experiment_schema')
+
+                if not validation_result.is_valid:
+                    error_summary = validation_result.get_summary()
+                    error_details = '\n'.join([str(err) for err in validation_result.get_errors()])
+                    raise ValueError(f"Experiment configuration validation failed:\n{error_summary}\n{error_details}")
+
+                if validation_result.has_warnings():
+                    logger.warning("Configuration validation warnings:")
+                    for warning in validation_result.get_warnings():
+                        logger.warning(f"  - {warning.message}")
+            except ImportError:
+                logger.warning("Schema validation not available, skipping validation")
 
     def run_experiment(self) -> Dict[str, Any]:
         """
@@ -239,34 +256,24 @@ class ExperimentOrchestrator:
         else:
             logger.warning("🔧 DEBUG: No factor_data_provider to add to backtest providers")
 
-        # Load backtest and strategy configs using the factory
-        backtest_configs = {
-            'backtest': self.full_config.get('backtest', {}),
-            'strategy': self.full_config.get('strategy', {})
-        }
-
-        # Add universe to strategy config if it exists as a separate section
-        universe = self.full_config.get('universe', [])
-        if universe:
-            backtest_configs['strategy']['universe'] = universe
-
-        # The ConfigFactory needs a file path, so we'll simulate one.
-        # A better long-term solution is to allow it to parse a dict.
-        # For now, let's dump the relevant sections to a string and load from there.
-        import io
-        temp_yaml_string = yaml.dump(backtest_configs)
+        # Load backtest and strategy configs
+        # Use Pydantic objects directly (simplified)
+        strategy_config_obj = self.full_config.get('strategy')
+        backtest_config_obj = self.full_config.get('backtest')
         
-        # We need to load from a file-like object for the factory.
-        with io.StringIO(temp_yaml_string) as temp_yaml_file:
-            # We can't directly use from_yaml, let's create objects manually
-            # This avoids file I/O completely.
-            backtest_config_obj = ConfigFactory.create_backtest_config(
-                **ConfigFactory._process_backtest_params(backtest_configs['backtest'])
-            )
-            strategy_config_obj = ConfigFactory.create_strategy_config(
-                **ConfigFactory._process_strategy_params(backtest_configs['strategy'])
-            )
+        # Validate key fields exist
+        if strategy_config_obj is None:
+            raise ValueError("Strategy configuration not found")
+        if backtest_config_obj is None:
+            raise ValueError("Backtest configuration not found")
         
+        # Check portfolio_construction
+        if strategy_config_obj.portfolio_construction is None:
+            logger.warning("No portfolio_construction in strategy config")
+        else:
+            logger.info(f"✅ Portfolio method: {strategy_config_obj.portfolio_construction.method}")
+        
+        # Convert to dict for compatibility with existing code
         backtest_config_objects = {
             'backtest': backtest_config_obj,
             'strategy': strategy_config_obj
@@ -313,6 +320,11 @@ class ExperimentOrchestrator:
             use_wandb=False
         )
         
+        logger.info(f"🔧 Config objects created:")
+        logger.info(f"🔧   backtest type: {type(backtest_config_objects['backtest'])}")
+        logger.info(f"🔧   strategy type: {type(backtest_config_objects['strategy'])}")
+        logger.info(f"🔧   strategy.parameters: {getattr(backtest_config_objects['strategy'], 'parameters', 'NO ATTR')}")
+
         experiment_name = f"e2e_{model_id}"
         backtest_results = backtest_runner.run_strategy(experiment_name=experiment_name)
         

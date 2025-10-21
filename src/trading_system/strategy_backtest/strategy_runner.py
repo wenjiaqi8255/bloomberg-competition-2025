@@ -160,6 +160,10 @@ class StrategyRunner:
         """
         if config_obj:
             logger.info("Initializing StrategyRunner from configuration object.")
+            logger.info(f"🔧 DEBUG: config_obj keys = {list(config_obj.keys())}")
+            if 'strategy' in config_obj:
+                logger.info(f"🔧 DEBUG: strategy config type = {type(config_obj['strategy'])}")
+                logger.info(f"🔧 DEBUG: strategy config parameters = {getattr(config_obj['strategy'], 'parameters', 'NO PARAMETERS')}")
             self.configs = config_obj
         elif config_path:
             logger.info(f"Initializing StrategyRunner from configuration file: {config_path}")
@@ -320,13 +324,36 @@ class StrategyRunner:
     def _initialize_portfolio_builder(self):
         """Initialize portfolio builder if configured in strategy parameters."""
         try:
+            logger.info("🔧 DEBUG: Starting portfolio builder initialization...")
+            
             strategy_config = self.configs.get('strategy')
             if not strategy_config:
-                logger.info("No strategy config found, skipping portfolio builder initialization")
+                logger.warning("❌ No strategy config found, skipping portfolio builder initialization")
                 return
                 
-            strategy_params = strategy_config.parameters or {}
+            logger.info(f"🔧 DEBUG: strategy_config type = {type(strategy_config)}")
+            logger.info(f"🔧 DEBUG: strategy_config attributes = {dir(strategy_config)}")
+            
+            # Try to get parameters in multiple ways
+            strategy_params = None
+            if hasattr(strategy_config, 'parameters'):
+                strategy_params = strategy_config.parameters
+                logger.info(f"🔧 DEBUG: Got parameters from attribute: {type(strategy_params)}")
+            elif hasattr(strategy_config, '__dict__') and 'parameters' in strategy_config.__dict__:
+                strategy_params = strategy_config.__dict__['parameters']
+                logger.info(f"🔧 DEBUG: Got parameters from __dict__: {type(strategy_params)}")
+            else:
+                logger.warning(f"❌ No parameters found in strategy config")
+                return
+                
+            if not strategy_params:
+                logger.warning("❌ strategy_params is None or empty")
+                return
+                
+            logger.info(f"🔧 DEBUG: strategy_params keys = {list(strategy_params.keys()) if isinstance(strategy_params, dict) else 'NOT A DICT'}")
+            
             portfolio_construction_config = strategy_params.get('portfolio_construction', {})
+            logger.info(f"🔧 DEBUG: portfolio_construction_config = {portfolio_construction_config}")
             
             if not portfolio_construction_config:
                 logger.info("No portfolio_construction config found, using default signal processing")
@@ -334,10 +361,10 @@ class StrategyRunner:
                 
             # Create portfolio builder using factory
             self.portfolio_builder = PortfolioBuilderFactory.create_builder(portfolio_construction_config)
-            logger.info(f"Initialized portfolio builder with method: {portfolio_construction_config.get('method', 'unknown')}")
+            logger.info(f"✅ Initialized portfolio builder with method: {portfolio_construction_config.get('method', 'unknown')}")
             
         except Exception as e:
-            logger.warning(f"Failed to initialize portfolio builder: {e}")
+            logger.error(f"❌ Failed to initialize portfolio builder: {e}", exc_info=True)
             logger.info("Continuing with default signal processing")
 
     def _apply_portfolio_construction(self, strategy_signals: pd.DataFrame, price_data: Dict[str, pd.DataFrame], start_date: datetime) -> pd.DataFrame:
@@ -489,7 +516,7 @@ class StrategyRunner:
 
             # Step 4: Convert signals to unified format and run backtest
             unified_strategy_signals = self._convert_signals_to_unified_format(strategy_signals, price_data)
-
+            
             backtest_results = self.backtest_engine.run_backtest(
                 strategy_signals=unified_strategy_signals,
                 price_data=price_data,

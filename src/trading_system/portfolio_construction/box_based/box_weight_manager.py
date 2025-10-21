@@ -99,15 +99,23 @@ class ConfigurableBoxWeightProvider(IBoxWeightProvider):
                 if not box_def:
                     raise ValueError(f"Weight config at index {i} missing 'box' field")
 
-                if len(box_def) != 4:
-                    raise ValueError(f"Box definition must have 4 elements, got {len(box_def)}")
+                if len(box_def) not in [3, 4]:
+                    raise ValueError(f"Box definition must have 3 or 4 elements, got {len(box_def)}")
 
-                box_key = BoxKey(
-                    size=box_def[0],
-                    style=box_def[1],
-                    region=box_def[2],
-                    sector=box_def[3]
-                )
+                if len(box_def) == 3:
+                    box_key = BoxKey(
+                        size=box_def[0],
+                        style=box_def[1],
+                        region=box_def[2],
+                        sector=None
+                    )
+                else:
+                    box_key = BoxKey(
+                        size=box_def[0],
+                        style=box_def[1],
+                        region=box_def[2],
+                        sector=box_def[3]
+                    )
 
                 # Parse weight
                 weight = weight_config.get('weight')
@@ -228,6 +236,9 @@ class BoxWeightManager:
     def _generate_all_boxes(self, dimensions_config: Dict[str, List[str]]) -> List[BoxKey]:
         """
         Generate all possible box combinations from dimensions.
+        
+        Supports optional sector dimension - if sector is empty or None,
+        generates 3-dimensional boxes without sector classification.
 
         Args:
             dimensions_config: Dictionary with dimension values
@@ -253,23 +264,41 @@ class BoxWeightManager:
             'sector': dimensions_config.get('sector', default_dimensions['sector'])
         }
 
-        # Validate dimensions
-        for dim_name, values in dimensions.items():
-            if not values:
-                logger.warning(f"Empty dimension '{dim_name}', using default")
-                dimensions[dim_name] = default_dimensions[dim_name]
+        # Special handling for empty sector dimension
+        if not dimensions['sector']:
+            logger.info("Sector dimension is empty, generating 3-dimensional boxes without sector classification")
+            # Validate other dimensions
+            for dim_name, values in dimensions.items():
+                if dim_name != 'sector' and not values:
+                    logger.warning(f"Empty dimension '{dim_name}', using default")
+                    dimensions[dim_name] = default_dimensions[dim_name]
+            
+            # Generate 3-dimensional combinations (size × style × region)
+            import itertools
+            box_definitions = []
+            for size, style, region in itertools.product(
+                dimensions['size'], dimensions['style'], dimensions['region']
+            ):
+                box_definitions.append(BoxKey(
+                    size=size, style=style, region=region, sector=None
+                ))
+        else:
+            # Validate all dimensions for 4-dimensional combinations
+            for dim_name, values in dimensions.items():
+                if not values:
+                    logger.warning(f"Empty dimension '{dim_name}', using default")
+                    dimensions[dim_name] = default_dimensions[dim_name]
 
-        # Generate all combinations
-        import itertools
-        box_definitions = []
-
-        for size, style, region, sector in itertools.product(
-            dimensions['size'], dimensions['style'],
-            dimensions['region'], dimensions['sector']
-        ):
-            box_definitions.append(BoxKey(
-                size=size, style=style, region=region, sector=sector
-            ))
+            # Generate 4-dimensional combinations (size × style × region × sector)
+            import itertools
+            box_definitions = []
+            for size, style, region, sector in itertools.product(
+                dimensions['size'], dimensions['style'],
+                dimensions['region'], dimensions['sector']
+            ):
+                box_definitions.append(BoxKey(
+                    size=size, style=style, region=region, sector=sector
+                ))
 
         logger.info(f"Generated {len(box_definitions)} box combinations from dimensions")
         return box_definitions

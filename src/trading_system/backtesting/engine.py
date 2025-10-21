@@ -125,7 +125,6 @@ class BacktestEngine:
 
             # Execute backtest
             logger.info(f"Executing backtest over {len(trading_days)} trading days")
-
             for date in trading_days:
                 # Execute trades for this date
                 daily_signals = aligned_signals.get(date, [])
@@ -202,19 +201,18 @@ class BacktestEngine:
             }
 
             if not valid_signals:
-                logger.debug(f"No valid price data for signals on {date}")
                 return
 
-            # Batch calculate target positions and risk constraints
+            # Calculate trade candidates
             trade_candidates = self._calculate_trade_candidates_batch(valid_signals, price_data, date)
-
-            # Batch transaction cost calculation - DELEGATED to TransactionCostModel
+            
+            # Calculate transaction costs
             trades_with_costs = self._calculate_transaction_costs_batch(trade_candidates)
-
-            # Execute valid trades
+            
+            # Execute trades
             executed_trades = self._execute_trades_batch(trades_with_costs, date)
-
-            # Update positions and cash in batch
+            
+            # Update positions
             self._update_positions_batch(executed_trades)
 
             # Record trades
@@ -425,15 +423,32 @@ class BacktestEngine:
 
         for symbol, signal_info in valid_signals.items():
             current_price = price_data[symbol]
+            
+            if current_price is None:
+                continue
+                
             signal_strength = signal_info['strength']
+            
+            if signal_strength is None:
+                signal_strength = 0.0
 
             # Calculate target position
+                
             target_weight = signal_strength * self.config.position_limit
+            
+                
             target_value = self.current_capital * target_weight
 
             # Get current position
             current_position = self.positions.get(symbol, self._create_empty_position(symbol))
+            
             current_value = current_position.market_value
+            
+            if current_value is None:
+                current_value = 0.0
+                current_position.market_value = 0.0
+            
+            # Calculate value change
             value_change = target_value - current_value
 
             # Check rebalance threshold
@@ -450,6 +465,8 @@ class BacktestEngine:
 
             # Check cash availability for buys
             direction = self._determine_trade_direction(trade_quantity)
+            
+                
             if trade_quantity > 0 and value_change > self.cash_balance:
                 logger.debug(f"Insufficient cash for {symbol} trade")
                 continue
@@ -569,7 +586,9 @@ class BacktestEngine:
             return False
 
         # Drawdown limit (simplified check)
-        if self.current_capital < self.initial_capital * (1 - self.config.max_drawdown_limit):
+        # Drawdown limit check
+        max_drawdown_limit = self.config.max_drawdown_limit or 0.2
+        if self.current_capital < self.initial_capital * (1 - max_drawdown_limit):
             logger.debug(f"Max drawdown limit reached: {(self.current_capital/self.initial_capital - 1):.2%}")
             return False
 
@@ -577,7 +596,7 @@ class BacktestEngine:
 
     def _create_empty_position(self, symbol: str) -> Position:
         """Create an empty position with default values."""
-        return Position(
+        position = Position(
             symbol=symbol,
             quantity=0.0,
             average_cost=0.0,
@@ -586,6 +605,12 @@ class BacktestEngine:
             unrealized_pnl=0.0,
             weight=0.0
         )
+        
+        # 🔍 DEBUG: 记录新创建的位置
+        logger.debug(f"🔍 Created empty position for {symbol}: {position}")
+        logger.debug(f"  - average_cost type: {type(position.average_cost)}, value: {position.average_cost}")
+        
+        return position
 
     def _create_trade(self, symbol: str, side: str, quantity: float,
                      price: float, timestamp: datetime, commission: float = 0.0,
@@ -611,22 +636,30 @@ class BacktestEngine:
         position = self.positions[symbol]
         trade_value = trade.quantity * trade.price
 
+
         if trade.side == 'buy':
             # Update average cost
             total_cost = position.quantity * position.average_cost + trade_value
             total_quantity = position.quantity + trade.quantity
+            
             position.average_cost = total_cost / total_quantity if total_quantity > 0 else trade.price
             position.quantity += trade.quantity
         else:
             # Reduce position
+            logger.debug(f"  - Reducing position: {position.quantity} - {trade.quantity}")
             position.quantity -= trade.quantity
             if position.quantity < 0:
+                logger.debug(f"  - Position went negative, setting to 0")
                 position.quantity = 0
                 position.average_cost = 0
+            logger.debug(f"  - After sell: quantity={position.quantity}, average_cost={position.average_cost}")
 
         position.current_price = trade.price
+        
+            
         position.market_value = position.quantity * position.current_price
         position.unrealized_pnl = position.market_value - (position.quantity * position.average_cost)
+        
 
     def _update_portfolio_value(self, date: datetime) -> None:
         """Update portfolio value with current market prices."""
@@ -635,10 +668,13 @@ class BacktestEngine:
 
         for symbol, position in self.positions.items():
             if position.quantity > 0:
+                
                 current_price = self._get_current_price(symbol, date)
                 if current_price:
                     position.current_price = current_price
                     position.market_value = position.quantity * current_price
+                    
+                        
                     position.unrealized_pnl = position.market_value - (position.quantity * position.average_cost)
 
                 total_position_value += position.market_value

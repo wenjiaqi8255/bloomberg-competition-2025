@@ -43,28 +43,28 @@ training_setup:
   parameters:
     # Universe selection (Option A - minimally intrusive)
     # Uncomment to load symbols from CSV instead of inline list
-    universe:
-      source: "csv"
-      csv_path: "./data/universes/merged_tickers.csv"
-      filters:
-        min_market_cap: 1000000000
-        max_stocks: 500
+    # universe:
+    #   source: "csv"
+    #   csv_path: "./data/universes/merged_tickers.csv"
+    #   filters:
+    #     min_market_cap: 1000000000
+    #     max_stocks: 500
         # exclude_sectors: ["Real Estate"]
 
     start_date: "2022-01-01"
     end_date: "2023-12-31"
-    symbols: []
-    # symbols:
-    #   # Technology (Large Growth)
-    #   - AAPL
-    #   - MSFT
-    #   - GOOGL
-    #   - META
-    #   - NVDA
-    #   # Technology (Mid/Large Value)
-    #   - CSCO
-    #   - IBM
-    #   - INTC
+    # symbols: []
+    symbols:
+      # Technology (Large Growth)
+      - AAPL
+      - MSFT
+      - GOOGL
+      - META
+      - NVDA
+      # Technology (Mid/Large Value)
+      - CSCO
+      - IBM
+      - INTC
 
     #   # Healthcare (Large Growth)
     #   - JNJ
@@ -149,37 +149,37 @@ strategy:
     lookback_days: 252
     risk_free_rate: 0.02
 
-    # Enable Box-Based portfolio construction
-    portfolio_construction:
-      method: "box_based"
+  # Enable Box-Based portfolio construction
+  portfolio_construction:
+    method: "box_based"
 
-      # Box construction parameters
-      stocks_per_box: 2
-      min_stocks_per_box: 1
-      allocation_method: "signal_proportional"  # Use FF5 signals for weight allocation
+    # Box construction parameters
+    stocks_per_box: 3
+    min_stocks_per_box: 3
+    allocation_method: "signal_proportional"  # Use Fama-MacBeth signals for weight allocation
 
-      # Box weight configuration - equal weights for all boxes
-      box_weights:
-        method: "equal"
-        dimensions:
-          size: ["large", "mid", "small"]
-          style: ["growth", "value"]
-          region: ["developed", "emerging"]  # Focus on US developed markets
-          sector: [
-            "Technology", "Financials", "Healthcare",
-            "Consumer Discretionary", "Consumer Staples",
-            "Industrials", "Energy", "Communication Services",
-            "Materials", "Utilities", "Real Estate"
-          ]
+    # Box weight configuration - equal weights for all boxes
+    box_weights:
+      method: "equal"
+      dimensions:
+        size: ["large", "mid", "small"]
+        style: ["growth", "value"]
+        region: ["developed"]  # Focus on US developed markets
+        # sector: [
+        #   "Technology", "Financials", "Healthcare",
+        #   "Consumer Discretionary", "Consumer Staples",
+        #   "Industrials", "Energy", "Communication Services",
+        #   "Materials", "Utilities", "Real Estate"
+        # ]
 
-      # Stock classifier configuration
-      classifier:
-        method: "four_factor"
-        cache_enabled: true
+    # Stock classifier configuration
+    classifier:
+      method: "four_factor"
+      cache_enabled: true
 
-      # Box selector configuration
-  box_selector:
-    type: "signal_based"
+    # Box selector configuration
+    box_selector:
+      type: "signal_based"
 
   # Centralized constraints for both methods
   constraints:

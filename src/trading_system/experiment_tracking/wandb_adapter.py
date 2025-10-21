@@ -353,18 +353,6 @@ class WandBExperimentTracker(ExperimentTrackerInterface):
         except Exception as e:
             self._handle_wandb_error("run linking", e)
 
-    def get_run_url(self) -> Optional[str]:
-        """Get the URL for viewing this run in the WandB UI."""
-        if self.wandb_logger is None or not self.wandb_logger.is_initialized:
-            return None
-
-        try:
-            if hasattr(self.wandb_logger, 'run') and self.wandb_logger.run:
-                return getattr(self.wandb_logger.run, 'url', None)
-            return None
-        except Exception:
-            return None
-
     def finish_run(self, exit_code: int = 0) -> None:
         """Finish the current WandB experiment run."""
         # Finish child runs first

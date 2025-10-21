@@ -291,6 +291,48 @@ class FF5RegressionModel(BaseModel):
         else:
             return result
 
+    def _predict_time_series(self, X: pd.DataFrame, symbols: Optional[List[str]]) -> np.ndarray:
+        """
+        时间序列预测逻辑 - 用于训练/验证场景
+        
+        处理多日时间序列数据，为每个股票生成预测
+        """
+        logger.info("📊 Using new batch prediction logic")
+        
+        if symbols is None:
+            if isinstance(X.index, pd.MultiIndex) and 'symbol' in X.index.names:
+                symbols = X.index.get_level_values('symbol').unique().tolist()
+            else:
+                return np.array([])
+        
+        # 提取因子向量（假设所有股票共享相同的因子值）
+        factor_vector = X.iloc[0][self._expected_features].values
+        logger.info(f"Factor vector shape: {factor_vector.shape}")
+        
+        # 为每个股票生成预测
+        predictions = []
+        for symbol in symbols:
+            if symbol in self.betas:
+                beta = self.betas[symbol]
+                prediction = np.dot(beta, factor_vector)
+                predictions.append(prediction)
+            else:
+                # 如果股票没有训练好的beta，使用默认值
+                predictions.append(0.0)
+        
+        # 🔧 FIX: 确保预测结果长度与输入数据匹配
+        result = np.array(predictions)
+        logger.info(f"Generated {len(result)} predictions for {len(symbols)} symbols")
+        
+        # 如果输入数据有多个时间点，需要为每个时间点生成相同的预测
+        if len(X) > 1:
+            # 为每个时间点重复预测结果
+            repeated_predictions = np.tile(result, len(X))
+            logger.info(f"Repeated predictions to match {len(X)} time points: {len(repeated_predictions)} total predictions")
+            return repeated_predictions
+        
+        return result
+
     def _predict_batch(self, X: pd.DataFrame, symbols: Optional[List[str]]) -> Union[pd.Series, pd.DataFrame]:
         """
         批量预测逻辑 - 始终为当前时间点生成横截面预测

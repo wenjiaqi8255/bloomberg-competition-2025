@@ -328,10 +328,5 @@ def run_optimization(args, logger):
 
     logger.info("\n" + "="*50 + "\n--- END OF REPORT ---\n" + "="*50)
 
-
-# 配置创建函数已简化 - 不再需要复杂的配置转换
-# 现在直接在run_metamodel_experiment中使用简化接口
-
-
 if __name__ == "__main__":
     main()

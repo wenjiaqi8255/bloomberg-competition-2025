@@ -3,7 +3,7 @@ Data types for portfolio construction.
 """
 
 from dataclasses import dataclass
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import pandas as pd
 from datetime import datetime
 
@@ -11,22 +11,25 @@ from datetime import datetime
 @dataclass(frozen=True)
 class BoxKey:
     """
-    4-dimensional Box key for stock classification.
+    Flexible Box key for stock classification.
 
     Boxes are defined by:
     - size: Market capitalization category
     - style: Investment style (growth/value)
     - region: Geographic region
-    - sector: Industry sector
+    - sector: Industry sector (optional - can be None to ignore sector dimension)
     """
     size: str          # 'large' | 'mid' | 'small'
     style: str         # 'growth' | 'value'
     region: str        # 'developed' | 'emerging'
-    sector: str        # 'Technology' | 'Financials' | 'Healthcare' | ...
+    sector: Optional[str] = None  # 'Technology' | 'Financials' | 'Healthcare' | ... or None
 
     def __str__(self) -> str:
         """String representation of the box key."""
-        return f"{self.size}_{self.style}_{self.region}_{self.sector}"
+        parts = [self.size, self.style, self.region]
+        if self.sector is not None:
+            parts.append(self.sector)
+        return "_".join(parts)
 
     def __hash__(self) -> int:
         """Hash for use as dictionary keys."""
@@ -39,19 +42,23 @@ class BoxKey:
     @classmethod
     def from_tuple(cls, box_tuple: tuple) -> 'BoxKey':
         """Create BoxKey from tuple."""
-        if len(box_tuple) != 4:
-            raise ValueError(f"Box tuple must have 4 elements, got {len(box_tuple)}")
-        return cls(size=box_tuple[0], style=box_tuple[1],
-                  region=box_tuple[2], sector=box_tuple[3])
+        if len(box_tuple) == 3:
+            return cls(size=box_tuple[0], style=box_tuple[1], region=box_tuple[2], sector=None)
+        elif len(box_tuple) == 4:
+            return cls(size=box_tuple[0], style=box_tuple[1], region=box_tuple[2], sector=box_tuple[3])
+        else:
+            raise ValueError(f"Box tuple must have 3 or 4 elements, got {len(box_tuple)}")
 
     @classmethod
     def from_string(cls, box_str: str) -> 'BoxKey':
         """Create BoxKey from string representation."""
         parts = box_str.split('_')
-        if len(parts) != 4:
-            raise ValueError(f"Box string must have 4 parts separated by '_', got {len(parts)}")
-        return cls(size=parts[0], style=parts[1],
-                  region=parts[2], sector=parts[3])
+        if len(parts) == 3:
+            return cls(size=parts[0], style=parts[1], region=parts[2], sector=None)
+        elif len(parts) == 4:
+            return cls(size=parts[0], style=parts[1], region=parts[2], sector=parts[3])
+        else:
+            raise ValueError(f"Box string must have 3 or 4 parts separated by '_', got {len(parts)}")
 
 
 @dataclass
