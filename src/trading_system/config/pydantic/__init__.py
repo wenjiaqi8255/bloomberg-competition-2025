@@ -19,14 +19,24 @@ Usage:
 """
 
 from .base import BasePydanticConfig
-from .portfolio import PortfolioConstructionConfig
+from .portfolio import (
+    PortfolioConstructionConfig,
+    BoxBasedPortfolioConfig,
+    QuantitativePortfolioConfig,
+    OptimizerConfig,
+    CovarianceConfig
+)
 from .strategy import StrategyConfig
 from .backtest import BacktestConfig
 from .loader import ConfigLoader
 
 __all__ = [
     'BasePydanticConfig',
-    'PortfolioConstructionConfig', 
+    'PortfolioConstructionConfig',
+    'BoxBasedPortfolioConfig',
+    'QuantitativePortfolioConfig', 
+    'OptimizerConfig',
+    'CovarianceConfig',
     'StrategyConfig',
     'BacktestConfig',
     'ConfigLoader'

@@ -5,7 +5,7 @@
 
 # Prediction settings
 prediction:
-  prediction_date: "2024-01-15"  # Date to make predictions for
+  prediction_date: "2025-08-28"  # Date to make predictions for (use latest available factor data)
   
 # Strategy configuration (determines which model type)
 strategy:
@@ -14,7 +14,7 @@ strategy:
 
   # For single model strategies (ff5, ml)
   parameters:
-    model_id: "ff5_regression_20251016_011357"  # Trained model ID
+    model_id: "ff5_regression_20251023_233648"  # Trained model ID
     model_registry_path: "./models/"
     use_fitted_pipeline: true  # Use the fitted feature pipeline stored with the model
     lookback_days: 252
@@ -38,34 +38,42 @@ factor_data_provider:
 
 # Universe configuration
 universe:
-  symbols:
-    - AAPL
-    - MSFT
-    - GOOGL
-    - AMZN
-    - META
-    - TSLA
-    - NVDA
-    - JPM
-    - V
-    - WMT
-    - JNJ
-    - PG
-    - UNH
-    - HD
-    - MA
-    - DIS
-    - PYPL
-    - ADBE
-    - CRM
-    - NFLX
+  # Uncomment to load symbols from CSV instead of inline list
+  source: "csv"
+  csv_path: "./data/universes/merged_tickers.csv"
+  filters:
+    min_market_cap: 1000000000
+    max_stocks: 50
+    # exclude_sectors: ["Real Estate"]
+  symbols: []
+  
+  # symbols:
+  # # Technology (Large Growth)
+  #   - AAPL
+  #   - MSFT
+  #   - GOOGL
+  #   - META
+  #   - NVDA
+  #   # Technology (Mid/Large Value)
+  #   - CSCO
+  #   - IBM
+  #   - INTC
+
+  #   # Healthcare (Large Growth)
+  #   - JNJ
+  #   - UNH
+  #   - PFE
+  #   # Healthcare (Mid/Large Value)
+  #   - ABT
+  #   - TMO
+  #   - DHR
 
 # Portfolio construction - USE FACTORY PATTERN
 portfolio_construction:
   method: "box_based"  # Factory determines which builder: 'box_based' or 'quantitative'
   
   # Box-based configuration (if method: box_based)
-  stocks_per_box: 5
+  stocks_per_box: 1
   min_stocks_per_box: 1
   allocation_method: "equal"
   allocation_config: {}
@@ -73,17 +81,23 @@ portfolio_construction:
   # Box weight configuration
   box_weights:
     method: "equal"
-    # Only generate boxes for common dimensions that can actually be filled
+    # Generate 18 boxes: 3x3x2 = size x style x region
     dimensions:
-      size: ["large", "mid"]  # Remove small caps for minimal test
-      style: ["growth"]       # Only growth for simplicity
-      region: ["developed"]   # Only developed markets
-      sector: ["Technology", "Financial Services", "Healthcare", "Consumer Discretionary", "Consumer Staples", "Communication Services"]  # Match classifier output
+      size: ["large", "mid", "small"]       # 3 categories
+      style: ["growth", "neutral", "value"] # 3 categories (add neutral)
+      region: ["developed", "emerging"]     # 2 categories
+      # sector: ["Technology", "Financial Services", "Healthcare", "Consumer Discretionary", "Consumer Staples", "Communication Services"]  # Match classifier output
+      sector: []                            # Empty = 3D boxes
 
   # Stock classifier configuration - use technical indicators for classification
   classifier:
     method: "technical"  # Use technical indicators that are already computed
     cache_enabled: true
+    # size_config:
+    #   thresholds:
+    #     large: 500.0  # $500B - only mega caps
+    #     mid: 50.0     # $50B - mid caps
+        # small: 0.0  # Everything below $50B is small
 
   # Box selector configuration
   box_selector:

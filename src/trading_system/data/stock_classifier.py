@@ -37,6 +37,7 @@ class SizeCategory(Enum):
 class StyleCategory(Enum):
     """Style classification categories."""
     VALUE = "value"
+    NEUTRAL = "neutral"
     GROWTH = "growth"
 
 
@@ -151,6 +152,10 @@ class StockClassifier(ClassificationProvider):
         }
         self.developed_markets = set(region_config.get('developed_markets', default_developed_markets))
 
+        # Check if sector should be included in box classification
+        # This is determined by the portfolio construction configuration
+        self.include_sector = config.get('include_sector', True)  # Default to True for backward compatibility
+        
         # Sector config with defaults
         sector_config = config.get('sector_config', {})
         default_sector_mappings = {
@@ -226,7 +231,7 @@ class StockClassifier(ClassificationProvider):
                        price_data: Dict[str, pd.DataFrame] = None,
                        as_of_date: datetime = None) -> Dict[str, InvestmentBox]:
         """
-        Classify stocks into investment boxes.
+        Classify stocks into investment boxes using percentile-based classification.
 
         Args:
             symbols: List of stock symbols to classify
@@ -249,41 +254,141 @@ class StockClassifier(ClassificationProvider):
                 end_date=as_of_date
             )
 
-        boxes = {}
-
+        # Pass 1: Collect metrics for all valid stocks
+        stock_metrics = {}
         for symbol in symbols:
             try:
                 if symbol not in price_data or price_data[symbol] is None:
                     logger.debug(f"No price data for {symbol}")
                     continue
 
-                # Classify the stock
-                classification = self._classify_single_stock(
-                    symbol, price_data[symbol], as_of_date
+                # Get market cap and P/B ratio
+                market_cap = self._get_market_cap(symbol, price_data[symbol])
+                pb_ratio = self._get_pb_ratio(symbol)
+                
+                if market_cap and market_cap > 0:  # Only require market cap
+                    stock_metrics[symbol] = {
+                        'market_cap': market_cap,
+                        'pb_ratio': pb_ratio,
+                        'price_data': price_data[symbol]
+                    }
+
+            except Exception as e:
+                logger.warning(f"Failed to collect metrics for {symbol}: {e}")
+                continue
+
+        if not stock_metrics:
+            logger.warning("No valid stock metrics collected")
+            return {}
+
+        # Calculate percentiles
+        all_caps = [m['market_cap'] for m in stock_metrics.values()]
+        all_pbs = [m['pb_ratio'] for m in stock_metrics.values() if m['pb_ratio'] is not None]
+        
+        cap_p80 = np.percentile(all_caps, 80)
+        cap_p20 = np.percentile(all_caps, 20)
+        
+        # Only calculate P/B percentiles if we have enough data
+        if len(all_pbs) >= 10:  # Need minimum data for percentiles
+            pb_p70 = np.percentile(all_pbs, 70)
+            pb_p30 = np.percentile(all_pbs, 30)
+        else:
+            logger.warning(f"Insufficient P/B data ({len(all_pbs)} stocks), using technical fallback")
+            pb_p70 = None
+            pb_p30 = None
+
+        logger.info(f"Percentiles calculated: Market Cap 20%={cap_p20:.2f}B, 80%={cap_p80:.2f}B")
+        if pb_p70 is not None:
+            logger.info(f"P/B percentiles: 30%={pb_p30:.2f}, 70%={pb_p70:.2f}")
+
+        # Pass 2: Classify stocks with percentiles
+        boxes = {}
+        for symbol, metrics in stock_metrics.items():
+            try:
+                # Classify using percentiles
+                size_category = self._classify_by_size(
+                    metrics['market_cap'], cap_p20, cap_p80
+                )
+                
+                style_category = self._classify_by_style(
+                    metrics['pb_ratio'], pb_p30, pb_p70, metrics['price_data']
+                )
+                
+                region_category = self._classify_by_region(symbol)
+                sector = self._classify_by_sector(symbol)
+
+                # Generate box_key based on whether sector should be included
+                if self.include_sector:
+                    box_key = f"{size_category.value}_{style_category.value}_{region_category.value}_{sector}"
+                else:
+                    box_key = f"{size_category.value}_{style_category.value}_{region_category.value}"
+
+                # Calculate overall classification score
+                overall_score = self._calculate_classification_score(
+                    metrics['market_cap'], 
+                    0.5 if metrics['pb_ratio'] is None else min(1.0, metrics['pb_ratio'] / 5.0),  # Normalize P/B
+                    metrics['price_data']
                 )
 
-                if classification:
-                    box_key = classification['box_key']
-                    if box_key not in boxes:
-                        boxes[box_key] = InvestmentBox(
-                            size=classification['size'],
-                            style=classification['style'],
-                            region=classification['region'],
-                            sector=classification['sector']
-                        )
-
-                    # Add stock to box with classification score
-                    boxes[box_key].add_stock(
-                        symbol=symbol,
-                        market_cap=classification['market_cap'],
-                        score=classification['score']
+                # Create or update box
+                if box_key not in boxes:
+                    boxes[box_key] = InvestmentBox(
+                        size=size_category,
+                        style=style_category,
+                        region=region_category,
+                        sector=sector
                     )
+
+                # Add stock to box
+                boxes[box_key].add_stock(
+                    symbol=symbol,
+                    market_cap=metrics['market_cap'],
+                    score=overall_score
+                )
 
             except Exception as e:
                 logger.warning(f"Failed to classify {symbol}: {e}")
                 continue
 
-        logger.info(f"Created {len(boxes)} investment boxes")
+        logger.info(f"Created {len(boxes)} investment boxes from {len(stock_metrics)} stocks")
+        
+        # Add detailed classification statistics
+        size_counts = {}
+        style_counts = {}
+        region_counts = {}
+        box_details = {}
+        
+        for box_key, box in boxes.items():
+            # Count by category
+            size_counts[box.size.value] = size_counts.get(box.size.value, 0) + len(box.stocks)
+            style_counts[box.style.value] = style_counts.get(box.style.value, 0) + len(box.stocks)
+            region_counts[box.region.value] = region_counts.get(box.region.value, 0) + len(box.stocks)
+            
+            # Store box details
+            box_details[box_key] = {
+                'size': box.size.value,
+                'style': box.style.value,
+                'region': box.region.value,
+                'sector': box.sector,
+                'stock_count': len(box.stocks),
+                'top_stocks': [stock['symbol'] for stock in sorted(box.stocks, key=lambda x: x['score'], reverse=True)[:3]]
+            }
+        
+        # Log detailed statistics
+        logger.info("=" * 60)
+        logger.info("CLASSIFICATION STATISTICS")
+        logger.info("=" * 60)
+        logger.info(f"Size distribution: {size_counts}")
+        logger.info(f"Style distribution: {style_counts}")
+        logger.info(f"Region distribution: {region_counts}")
+        logger.info("")
+        logger.info("CREATED BOXES:")
+        logger.info("-" * 40)
+        for box_key, details in sorted(box_details.items()):
+            logger.info(f"  {box_key}: {details['stock_count']} stocks")
+            logger.info(f"    Top stocks: {details['top_stocks']}")
+        logger.info("=" * 60)
+        
         return boxes
 
     def _classify_single_stock(self, symbol: str, price_data: pd.DataFrame,
@@ -344,6 +449,13 @@ class StockClassifier(ClassificationProvider):
                 market_cap, style_score, data_up_to_date
             )
 
+            # Generate box_key based on whether sector should be included
+            if self.include_sector:
+                box_key = f"{size_category.value}_{style_category.value}_{region_category.value}_{sector}"
+            else:
+                # Generate 3-dimensional box_key without sector
+                box_key = f"{size_category.value}_{style_category.value}_{region_category.value}"
+
             return {
                 'symbol': symbol,
                 'size': size_category,
@@ -352,66 +464,64 @@ class StockClassifier(ClassificationProvider):
                 'sector': sector,
                 'market_cap': market_cap,
                 'score': overall_score,
-                'box_key': f"{size_category.value}_{style_category.value}_{region_category.value}_{sector}"
+                'box_key': box_key
             }
 
         except Exception as e:
             logger.debug(f"Classification failed for {symbol}: {e}")
             return None
 
-    def _classify_by_size(self, symbol: str, price_data: pd.DataFrame) -> Tuple[SizeCategory, float]:
-        """Classify stock by size using market capitalization."""
+    def _classify_by_size(self, market_cap: float, percentile_20: float, 
+                         percentile_80: float) -> SizeCategory:
+        """Classify stock by size using market capitalization percentiles."""
         try:
-            # Get market cap
-            market_cap = self._get_market_cap(symbol, price_data)
-
-            if market_cap >= self.size_thresholds[SizeCategory.LARGE]:
-                return SizeCategory.LARGE, market_cap
-            elif market_cap >= self.size_thresholds[SizeCategory.MID]:
-                return SizeCategory.MID, market_cap
-            else:
-                return SizeCategory.SMALL, market_cap
+            if market_cap >= percentile_80:  # Top 20%
+                return SizeCategory.LARGE
+            elif market_cap >= percentile_20:  # 20%-80%
+                return SizeCategory.MID
+            else:  # Bottom 20%
+                return SizeCategory.SMALL
 
         except Exception as e:
-            logger.debug(f"Size classification failed for {symbol}: {e}")
-            return SizeCategory.MID, 5.0  # Default to mid-cap
+            logger.debug(f"Size classification failed: {e}")
+            return SizeCategory.MID  # Default to mid-cap
 
-    def _classify_by_style(self, symbol: str, price_data: pd.DataFrame) -> Tuple[StyleCategory, float]:
+    def _classify_by_style(self, pb_ratio: Optional[float], percentile_30: float,
+                          percentile_70: float, price_data: pd.DataFrame) -> StyleCategory:
         """
-        Classify stock by style using fundamental data when available,
-        supplemented with technical proxies for value/growth.
-
-        Fundamental indicators:
-        - P/E ratio: Low PE = value, high PE = growth
-        - P/B ratio: Low PB = value, high PB = growth
-
-        Technical proxies (when fundamental data unavailable):
-        - Momentum as value proxy (contrarian indicator)
-        - Volatility as growth proxy (growth stocks tend to be more volatile)
+        Classify stock by style using P/B ratio percentiles.
+        
+        Args:
+            pb_ratio: P/B ratio for the stock
+            percentile_30: 30th percentile P/B ratio
+            percentile_70: 70th percentile P/B ratio
+            price_data: Price data for fallback technical analysis
+            
+        Returns:
+            StyleCategory based on P/B percentile or technical fallback
         """
         try:
-            # 1. Try to get fundamental data first
-            fundamental_score = self._get_fundamental_style_score(symbol)
-
-            if fundamental_score is not None:
-                # Use fundamental data for classification
-                if fundamental_score < 0.3:
-                    return StyleCategory.VALUE, fundamental_score
-                elif fundamental_score > 0.7:
-                    return StyleCategory.GROWTH, fundamental_score
-                else:
-                    # Mixed style - use technical indicators as tiebreaker
-                    technical_score = self._get_technical_style_score(price_data)
-                    combined_score = (fundamental_score + technical_score) / 2
-                    return StyleCategory.GROWTH if combined_score > 0.5 else StyleCategory.VALUE, combined_score
-
-            # Fallback to technical indicators
+            # Primary: P/B ratio percentiles
+            if pb_ratio is not None:
+                if pb_ratio >= percentile_70:  # Top 30% (high P/B)
+                    return StyleCategory.GROWTH
+                elif pb_ratio >= percentile_30:  # 30%-70%
+                    return StyleCategory.NEUTRAL
+                else:  # Bottom 30% (low P/B)
+                    return StyleCategory.VALUE
+            
+            # Fallback to technical if P/B unavailable
             technical_score = self._get_technical_style_score(price_data)
-            return StyleCategory.GROWTH if technical_score > 0.5 else StyleCategory.VALUE, technical_score
+            if technical_score > 0.65:
+                return StyleCategory.GROWTH
+            elif technical_score < 0.35:
+                return StyleCategory.VALUE
+            else:
+                return StyleCategory.NEUTRAL
 
         except Exception as e:
-            logger.debug(f"Style classification failed for {symbol}: {e}")
-            return StyleCategory.GROWTH, 0.5  # Default to growth
+            logger.debug(f"Style classification failed: {e}")
+            return StyleCategory.NEUTRAL  # Default to neutral
 
     def _get_fundamental_style_score(self, symbol: str) -> Optional[float]:
         """
@@ -538,8 +648,12 @@ class StockClassifier(ClassificationProvider):
             logger.debug(f"Region classification failed for {symbol}: {e}")
             return RegionCategory.DEVELOPED
 
-    def _classify_by_sector(self, symbol: str) -> str:
+    def _classify_by_sector(self, symbol: str) -> Optional[str]:
         """Classify stock by sector using mappings."""
+        # If sector classification is disabled, return None
+        if not self.include_sector:
+            return None
+            
         try:
             symbol_upper = symbol.upper()
 
@@ -569,11 +683,12 @@ class StockClassifier(ClassificationProvider):
             elif any(x in symbol_upper for x in ['RETAIL', 'CONSUMER']):
                 return 'Consumer Discretionary'
             else:
-                return 'Industrials'  # Default
+                # No default sector - return None when sector classification is uncertain
+                return None
 
         except Exception as e:
             logger.debug(f"Sector classification failed for {symbol}: {e}")
-            return 'Industrials'
+            return None
 
     def _get_market_cap(self, symbol: str, price_data: pd.DataFrame) -> float:
         """Get market capitalization using available data."""
@@ -618,6 +733,17 @@ class StockClassifier(ClassificationProvider):
         except Exception as e:
             logger.debug(f"Market cap estimation failed for {symbol}: {e}")
             return 5.0  # Default to mid-cap range
+
+    def _get_pb_ratio(self, symbol: str) -> Optional[float]:
+        """Get P/B ratio from yfinance."""
+        try:
+            ticker = yf.Ticker(symbol)
+            info = ticker.info
+            pb_ratio = info.get('priceToBook')
+            return pb_ratio if pb_ratio and pb_ratio > 0 else None
+        except Exception as e:
+            logger.debug(f"P/B ratio fetch failed for {symbol}: {e}")
+            return None
 
     def _calculate_classification_score(self, market_cap: float, style_score: float,
                                       price_data: pd.DataFrame) -> float:

@@ -22,7 +22,9 @@ training_setup:
       random_state: 42
 
   feature_engineering:
-    enabled_features: ['momentum', 'volatility', 'technical', 'volume']
+    enabled_features: ['momentum'
+    # , 'volatility', 'technical', 'volume'
+    ]
     momentum_periods: [21, 63, 252]
     volatility_windows: [20, 60]
     lookback_periods: [20, 60, 252]
@@ -33,8 +35,9 @@ training_setup:
     include_cross_sectional: true
 
     cross_sectional_features: [
-      'market_cap', 'book_to_market', 'size', 'value', 'momentum', 'volatility',
-      'country_risk_premium', 'equity_risk_premium', 'default_spread', 'corporate_tax_rate'
+      'market_cap'
+      # 'book_to_market', 'size', 'value', 'momentum', 'volatility',
+      # 'country_risk_premium', 'equity_risk_premium', 'default_spread', 'corporate_tax_rate'
     ]
 
     cross_sectional_lookback:
@@ -62,11 +65,11 @@ training_setup:
       - GOOGL
       - AMZN
       - META
-      - TSLA
-      - NVDA
-      - JPM
-      - V
-      - WMT
+      # - TSLA
+      # - NVDA
+      # - JPM
+      # - V
+      # - WMT
 
   # Hyperparameter optimization configuration
   hyperparameter_optimization:

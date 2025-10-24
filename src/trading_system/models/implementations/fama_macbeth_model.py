@@ -260,7 +260,7 @@ class FamaMacBethModel(BaseModel):
             logger.error(f"Failed to fit Fama-MacBeth model: {e}")
             raise
     
-    def predict(self, X: pd.DataFrame) -> np.ndarray:
+    def predict(self, X: Union[pd.DataFrame, np.ndarray]) -> np.ndarray:
         """
         Predict expected returns using average coefficients.
         
@@ -268,7 +268,9 @@ class FamaMacBethModel(BaseModel):
             E[R_i] = γ_avg_0 + Σ_k(γ_avg_k * X_ki)
         
         Args:
-            X: Feature DataFrame (can be panel or cross-sectional)
+            X: Feature DataFrame or ndarray
+               - If ndarray: assumes features are in same order as training
+               - If DataFrame: uses column names to ensure correct feature order
         
         Returns:
             Array of predicted returns
@@ -283,6 +285,19 @@ class FamaMacBethModel(BaseModel):
             raise ValueError("Model coefficients not available")
         
         try:
+            # ✅ 统一输入格式 - 确保X是DataFrame
+            if isinstance(X, np.ndarray):
+                # 如果输入是numpy array，转换为DataFrame
+                if self.feature_names is None or len(self.feature_names) == 0:
+                    raise ValueError("Cannot convert array to DataFrame: feature_names not set")
+                
+                X = pd.DataFrame(X, columns=self.feature_names)
+                logger.debug(f"Converted numpy array to DataFrame with shape {X.shape}")
+            
+            # 验证输入是DataFrame
+            if not isinstance(X, pd.DataFrame):
+                raise ValueError(f"X must be DataFrame or ndarray, got {type(X)}")
+            
             # Validate features
             missing_features = set(self.feature_names) - set(X.columns)
             if missing_features:

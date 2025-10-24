@@ -53,27 +53,27 @@ training_setup:
 
     start_date: "2022-01-01"
     end_date: "2023-12-31"
-    symbols: []
-    # symbols:
-    #   # Technology (Large Growth)
-    #   - AAPL
-    #   - MSFT
-    #   - GOOGL
-    #   - META
-    #   - NVDA
-    #   # Technology (Mid/Large Value)
-    #   - CSCO
-    #   - IBM
-    #   - INTC
+    # symbols: []
+    symbols:
+      # Technology (Large Growth)
+      - AAPL
+      - MSFT
+      - GOOGL
+      - META
+      - NVDA
+      # Technology (Mid/Large Value)
+      - CSCO
+      - IBM
+      - INTC
 
-    #   # Healthcare (Large Growth)
-    #   - JNJ
-    #   - UNH
-    #   - PFE
-    #   # Healthcare (Mid/Large Value)
-    #   - ABT
-    #   - TMO
-    #   - DHR
+      # Healthcare (Large Growth)
+      - JNJ
+      - UNH
+      - PFE
+      # Healthcare (Mid/Large Value)
+      - ABT
+      - TMO
+      - DHR
 
     #   # Financials (Large Growth)
     #   - JPM

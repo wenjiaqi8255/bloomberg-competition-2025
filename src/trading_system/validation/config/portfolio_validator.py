@@ -256,8 +256,9 @@ class PortfolioConfigValidator(BaseValidator):
                 result.add_error(f"Dimensions config missing '{dim}'")
             elif not isinstance(values, list):
                 result.add_error(f"'{dim}' in dimensions must be a list")
-            elif len(values) == 0:
+            elif len(values) == 0 and dim != 'sector':  # Allow sector to be empty for 3D boxes
                 result.add_error(f"'{dim}' in dimensions cannot be empty")
+            # sector can be empty - this creates 3-dimensional boxes without sector classification
     
     def validate_and_fix_config(self, config: Dict[str, Any]) -> Tuple[bool, List[str], Dict[str, Any]]:
         """

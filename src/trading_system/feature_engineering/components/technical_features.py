@@ -309,48 +309,6 @@ class TechnicalIndicatorCalculator:
                 features[f'momentum_rank_{period}d'] = momentum_rank
                 logger.debug(f"DEBUG: momentum_rank_{period}d has {momentum_rank.isnull().sum()} NaN values")
 
-        # Technical indicators within momentum function
-        # RSI
-        delta = prices.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / loss
-        rsi = 100 - (100 / (1 + rs))
-        features['rsi_14'] = rsi
-        logger.debug(f"DEBUG: rsi_14 has {rsi.isnull().sum()} NaN values")
-
-        # Stochastic Oscillator
-        k_period = 14
-        d_period = 3
-        low_min = group_df['Low'].rolling(window=k_period).min()
-        high_max = group_df['High'].rolling(window=k_period).max()
-        k_percent = 100 * ((group_df['Close'] - low_min) / (high_max - low_min + 1e-8))
-        d_percent = k_percent.rolling(window=d_period).mean()
-        features['stochastic_k'] = k_percent
-        features['stochastic_d'] = d_percent
-        logger.debug(f"DEBUG: stochastic_k has {k_percent.isnull().sum()} NaN values")
-        logger.debug(f"DEBUG: stochastic_d has {d_percent.isnull().sum()} NaN values")
-
-        # Williams %R
-        williams_r = -100 * ((high_max - group_df['Close']) / (high_max - low_min + 1e-8))
-        features['williams_r'] = williams_r
-        logger.debug(f"DEBUG: williams_r has {williams_r.isnull().sum()} NaN values")
-
-        # Money Flow Index (MFI)
-        if 'Volume' in group_df.columns:
-            typical_price = (group_df['High'] + group_df['Low'] + group_df['Close']) / 3
-            money_flow = typical_price * group_df['Volume']
-
-            positive_flow = money_flow.where(typical_price > typical_price.shift(1), 0)
-            negative_flow = money_flow.where(typical_price < typical_price.shift(1), 0)
-
-            positive_mf = positive_flow.rolling(window=14).sum()
-            negative_mf = negative_flow.rolling(window=14).sum()
-
-            mfi = 100 - (100 / (1 + positive_mf / negative_mf))
-            features['mfi'] = mfi
-            logger.debug(f"DEBUG: mfi has {mfi.isnull().sum()} NaN values")
-
         # Analyze missing values before returning
         self._analyze_missing_values(features, "momentum")
 
@@ -449,108 +407,165 @@ class TechnicalIndicatorCalculator:
         opens = group_df['Open']
         volumes = group_df['Volume'] if 'Volume' in group_df.columns else None
 
-        # Simple Moving Averages
-        for period in [10, 20, 50, 200]:
-            sma = prices.rolling(window=period).mean()
-            features[f'sma_{period}'] = sma
-            logger.debug(f"DEBUG: sma_{period} has {sma.isnull().sum()} NaN values")
+        # Get technical indicators from config
+        technical_indicators = getattr(self.config, 'technical_indicators', []) if self.config else []
 
-            # Price above SMA
-            features[f'price_above_sma_{period}'] = (prices > sma).astype(int)
-            logger.debug(f"DEBUG: price_above_sma_{period} has {((prices > sma).astype(int)).isnull().sum()} NaN values")
+        # Simple Moving Averages
+        if 'sma' in technical_indicators or not technical_indicators:
+            for period in [10, 20, 50, 200]:
+                sma = prices.rolling(window=period).mean()
+                features[f'sma_{period}'] = sma
+                logger.debug(f"DEBUG: sma_{period} has {sma.isnull().sum()} NaN values")
+
+                # Price above SMA
+                features[f'price_above_sma_{period}'] = (prices > sma).astype(int)
+                logger.debug(f"DEBUG: price_above_sma_{period} has {((prices > sma).astype(int)).isnull().sum()} NaN values")
 
         # Exponential Moving Averages
-        for period in [12, 26]:
-            ema = prices.ewm(span=period).mean()
-            features[f'ema_{period}'] = ema
-            logger.debug(f"DEBUG: ema_{period} has {ema.isnull().sum()} NaN values")
+        if 'ema' in technical_indicators or not technical_indicators:
+            for period in [12, 26]:
+                ema = prices.ewm(span=period).mean()
+                features[f'ema_{period}'] = ema
+                logger.debug(f"DEBUG: ema_{period} has {ema.isnull().sum()} NaN values")
 
         # MACD
-        ema_12 = prices.ewm(span=12).mean()
-        ema_26 = prices.ewm(span=26).mean()
-        macd_line = ema_12 - ema_26
-        macd_signal = macd_line.ewm(span=9).mean()
-        macd_histogram = macd_line - macd_signal
+        if 'macd' in technical_indicators or not technical_indicators:
+            ema_12 = prices.ewm(span=12).mean()
+            ema_26 = prices.ewm(span=26).mean()
+            macd_line = ema_12 - ema_26
+            macd_signal = macd_line.ewm(span=9).mean()
+            macd_histogram = macd_line - macd_signal
 
-        features['macd_line'] = macd_line
-        features['macd_signal'] = macd_signal
-        features['macd_histogram'] = macd_histogram
-        logger.debug(f"DEBUG: macd_line has {macd_line.isnull().sum()} NaN values")
-        logger.debug(f"DEBUG: macd_signal has {macd_signal.isnull().sum()} NaN values")
-        logger.debug(f"DEBUG: macd_histogram has {macd_histogram.isnull().sum()} NaN values")
+            features['macd_line'] = macd_line
+            features['macd_signal'] = macd_signal
+            features['macd_histogram'] = macd_histogram
+            logger.debug(f"DEBUG: macd_line has {macd_line.isnull().sum()} NaN values")
+            logger.debug(f"DEBUG: macd_signal has {macd_signal.isnull().sum()} NaN values")
+            logger.debug(f"DEBUG: macd_histogram has {macd_histogram.isnull().sum()} NaN values")
 
         # Bollinger Bands
-        sma_20 = prices.rolling(window=20).mean()
-        std_20 = prices.rolling(window=20).std()
-        bb_upper = sma_20 + (std_20 * 2)
-        bb_lower = sma_20 - (std_20 * 2)
+        if 'bollinger_bands' in technical_indicators or not technical_indicators:
+            sma_20 = prices.rolling(window=20).mean()
+            std_20 = prices.rolling(window=20).std()
+            bb_upper = sma_20 + (std_20 * 2)
+            bb_lower = sma_20 - (std_20 * 2)
 
-        features['sma_20'] = sma_20  # Already added above, but keeping for consistency
-        features['bb_upper'] = bb_upper
-        features['bb_middle'] = sma_20
-        features['bb_lower'] = bb_lower
+            features['sma_20'] = sma_20  # Already added above, but keeping for consistency
+            features['bb_upper'] = bb_upper
+            features['bb_middle'] = sma_20
+            features['bb_lower'] = bb_lower
 
-        # Bollinger Band position and width
-        bb_position = (prices - bb_lower) / (bb_upper - bb_lower)
-        bb_width = (bb_upper - bb_lower) / sma_20
+            # Bollinger Band position and width
+            bb_position = (prices - bb_lower) / (bb_upper - bb_lower)
+            bb_width = (bb_upper - bb_lower) / sma_20
 
-        features['bb_position'] = bb_position
-        features['bb_width'] = bb_width
-        logger.debug(f"DEBUG: bb_position has {bb_position.isnull().sum()} NaN values")
-        logger.debug(f"DEBUG: bb_width has {bb_width.isnull().sum()} NaN values")
+            features['bb_position'] = bb_position
+            features['bb_width'] = bb_width
+            logger.debug(f"DEBUG: bb_position has {bb_position.isnull().sum()} NaN values")
+            logger.debug(f"DEBUG: bb_width has {bb_width.isnull().sum()} NaN values")
+
+        # RSI
+        if 'rsi' in technical_indicators or not technical_indicators:
+            delta = prices.diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            rs = gain / loss
+            rsi = 100 - (100 / (1 + rs))
+            features['rsi_14'] = rsi
+            logger.debug(f"DEBUG: rsi_14 has {rsi.isnull().sum()} NaN values")
+
+        # Stochastic Oscillator
+        if 'stochastic' in technical_indicators or not technical_indicators:
+            k_period = 14
+            d_period = 3
+            low_min = group_df['Low'].rolling(window=k_period).min()
+            high_max = group_df['High'].rolling(window=k_period).max()
+            k_percent = 100 * ((group_df['Close'] - low_min) / (high_max - low_min + 1e-8))
+            d_percent = k_percent.rolling(window=d_period).mean()
+            features['stochastic_k'] = k_percent
+            features['stochastic_d'] = d_percent
+            logger.debug(f"DEBUG: stochastic_k has {k_percent.isnull().sum()} NaN values")
+            logger.debug(f"DEBUG: stochastic_d has {d_percent.isnull().sum()} NaN values")
+
+        # Williams %R
+        if 'williams_r' in technical_indicators or not technical_indicators:
+            k_period = 14
+            low_min = group_df['Low'].rolling(window=k_period).min()
+            high_max = group_df['High'].rolling(window=k_period).max()
+            williams_r = -100 * ((high_max - group_df['Close']) / (high_max - low_min + 1e-8))
+            features['williams_r'] = williams_r
+            logger.debug(f"DEBUG: williams_r has {williams_r.isnull().sum()} NaN values")
+
+        # Money Flow Index (MFI)
+        if 'mfi' in technical_indicators or not technical_indicators:
+            if 'Volume' in group_df.columns:
+                typical_price = (group_df['High'] + group_df['Low'] + group_df['Close']) / 3
+                money_flow = typical_price * group_df['Volume']
+
+                positive_flow = money_flow.where(typical_price > typical_price.shift(1), 0)
+                negative_flow = money_flow.where(typical_price < typical_price.shift(1), 0)
+
+                positive_mf = positive_flow.rolling(window=14).sum()
+                negative_mf = negative_flow.rolling(window=14).sum()
+
+                mfi = 100 - (100 / (1 + positive_mf / negative_mf))
+                features['mfi'] = mfi
+                logger.debug(f"DEBUG: mfi has {mfi.isnull().sum()} NaN values")
 
         # ADX (Average Directional Index)
-        # Calculate directional movement
-        high_diff = highs.diff()
-        low_diff = -lows.diff()
+        if 'adx' in technical_indicators or not technical_indicators:
+            # Calculate directional movement
+            high_diff = highs.diff()
+            low_diff = -lows.diff()
 
-        dm_plus = np.where((high_diff > low_diff) & (high_diff > 0), high_diff, 0)
-        dm_minus = np.where((low_diff > high_diff) & (low_diff > 0), low_diff, 0)
+            dm_plus = np.where((high_diff > low_diff) & (high_diff > 0), high_diff, 0)
+            dm_minus = np.where((low_diff > high_diff) & (low_diff > 0), low_diff, 0)
 
-        # True Range
-        tr1 = highs - lows
-        tr2 = abs(highs - prices.shift(1))
-        tr3 = abs(lows - prices.shift(1))
-        true_range = np.maximum(tr1, np.maximum(tr2, tr3))
+            # True Range
+            tr1 = highs - lows
+            tr2 = abs(highs - prices.shift(1))
+            tr3 = abs(lows - prices.shift(1))
+            true_range = np.maximum(tr1, np.maximum(tr2, tr3))
 
-        # Convert to pandas Series for rolling operations
-        # Flatten arrays if needed
-        dm_plus_flat = dm_plus.flatten() if dm_plus.ndim > 1 else dm_plus
-        dm_minus_flat = dm_minus.flatten() if dm_minus.ndim > 1 else dm_minus
+            # Convert to pandas Series for rolling operations
+            # Flatten arrays if needed
+            dm_plus_flat = dm_plus.flatten() if dm_plus.ndim > 1 else dm_plus
+            dm_minus_flat = dm_minus.flatten() if dm_minus.ndim > 1 else dm_minus
 
-        # true_range is already a pandas Series from np.maximum, just ensure it's Series
-        if hasattr(true_range, 'values'):
-            tr_flat = true_range.values.flatten() if true_range.values.ndim > 1 else true_range.values
-        else:
-            tr_flat = true_range.flatten() if hasattr(true_range, 'flatten') else true_range
+            # true_range is already a pandas Series from np.maximum, just ensure it's Series
+            if hasattr(true_range, 'values'):
+                tr_flat = true_range.values.flatten() if true_range.values.ndim > 1 else true_range.values
+            else:
+                tr_flat = true_range.flatten() if hasattr(true_range, 'flatten') else true_range
 
-        dm_plus_series = pd.Series(dm_plus_flat, index=group_df.index)
-        dm_minus_series = pd.Series(dm_minus_flat, index=group_df.index)
-        tr_series = pd.Series(tr_flat, index=group_df.index)
+            dm_plus_series = pd.Series(dm_plus_flat, index=group_df.index)
+            dm_minus_series = pd.Series(dm_minus_flat, index=group_df.index)
+            tr_series = pd.Series(tr_flat, index=group_df.index)
 
-        # Smoothed values
-        atr = tr_series.rolling(window=14).mean()
-        di_plus = 100 * (dm_plus_series.rolling(window=14).mean() / atr)
-        di_minus = 100 * (dm_minus_series.rolling(window=14).mean() / atr)
+            # Smoothed values
+            atr = tr_series.rolling(window=14).mean()
+            di_plus = 100 * (dm_plus_series.rolling(window=14).mean() / atr)
+            di_minus = 100 * (dm_minus_series.rolling(window=14).mean() / atr)
 
-        # ADX calculation
-        dx = 100 * abs(di_plus - di_minus) / (di_plus + di_minus)
-        adx = dx.rolling(window=14).mean()
+            # ADX calculation
+            dx = 100 * abs(di_plus - di_minus) / (di_plus + di_minus)
+            adx = dx.rolling(window=14).mean()
 
-        features['adx'] = adx
-        logger.debug(f"DEBUG: adx has {adx.isnull().sum()} NaN values")
+            features['adx'] = adx
+            logger.debug(f"DEBUG: adx has {adx.isnull().sum()} NaN values")
 
         # Commodity Channel Index (CCI)
-        typical_price = (highs + lows + prices) / 3
-        sma_tp = typical_price.rolling(window=20).mean()
-        mean_deviation = typical_price.rolling(window=20).apply(lambda x: np.mean(np.abs(x - x.mean())))
-        cci = (typical_price - sma_tp) / (0.015 * mean_deviation)
+        if 'cci' in technical_indicators or not technical_indicators:
+            typical_price = (highs + lows + prices) / 3
+            sma_tp = typical_price.rolling(window=20).mean()
+            mean_deviation = typical_price.rolling(window=20).apply(lambda x: np.mean(np.abs(x - x.mean())))
+            cci = (typical_price - sma_tp) / (0.015 * mean_deviation)
 
-        features['cci'] = cci
-        logger.debug(f"DEBUG: cci has {cci.isnull().sum()} NaN values")
+            features['cci'] = cci
+            logger.debug(f"DEBUG: cci has {cci.isnull().sum()} NaN values")
 
         # Volume-based indicators (if volume data available)
-        if volumes is not None:
+        if volumes is not None and ('volume_indicators' in technical_indicators or not technical_indicators):
             # Volume Price Trend
             vpt = volumes * prices.pct_change()
             vpt_cumsum = vpt.cumsum()

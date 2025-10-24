@@ -39,6 +39,7 @@ class BacktestConfig(BasePydanticConfig):
     )
     position_limit: float = Field(ge=0, le=1, default=0.1, description="Maximum position weight")
     rebalance_threshold: float = Field(ge=0, le=0.1, default=0.01, description="Rebalance threshold")
+    enable_short_selling: bool = Field(default=False, description="Enable short selling")
     
     # Risk management
     max_drawdown_limit: Optional[float] = Field(default=None, ge=0, le=1, description="Maximum drawdown limit")
@@ -133,6 +134,7 @@ class BacktestConfig(BasePydanticConfig):
             'rebalance_frequency': self.rebalance_frequency,
             'position_limit': f"{self.position_limit:.1%}",
             'rebalance_threshold': f"{self.rebalance_threshold:.1%}",
+            'enable_short_selling': self.enable_short_selling,
             'risk_limits': {
                 'max_drawdown': f"{self.max_drawdown_limit:.1%}" if self.max_drawdown_limit else "None",
                 'volatility': f"{self.volatility_limit:.1%}" if self.volatility_limit else "None"

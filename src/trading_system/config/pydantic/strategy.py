@@ -5,10 +5,14 @@ Pydantic configuration for trading strategies.
 Directly maps YAML strategy section with automatic validation.
 """
 
-from typing import Dict, Any, Literal, Optional, List
+from typing import Dict, Any, Literal, Optional, List, Union
 from pydantic import BaseModel, Field, field_validator, model_validator
 from .base import BasePydanticConfig
-from .portfolio import PortfolioConstructionConfig
+from .portfolio import (
+    PortfolioConstructionConfig,
+    BoxBasedPortfolioConfig,
+    QuantitativePortfolioConfig
+)
 
 
 class StrategyConfig(BasePydanticConfig):
@@ -34,7 +38,7 @@ class StrategyConfig(BasePydanticConfig):
     risk_free_rate: float = Field(ge=0, le=0.1, default=0.02, description="Risk-free rate")
     
     # Portfolio construction (can be at top level or in parameters)
-    portfolio_construction: Optional[PortfolioConstructionConfig] = Field(
+    portfolio_construction: Optional[Any] = Field(
         default=None, 
         description="Portfolio construction configuration"
     )
@@ -80,14 +84,57 @@ class StrategyConfig(BasePydanticConfig):
         return values
     
     @model_validator(mode='after')
+    def resolve_portfolio_construction_union(self):
+        """Resolve portfolio construction union type based on method."""
+        if self.portfolio_construction is None:
+            return self
+        
+        if isinstance(self.portfolio_construction, dict):
+            pc_data = self.portfolio_construction
+            if 'method' in pc_data:
+                method = pc_data['method']
+                
+                if method == 'box_based':
+                    # Create BoxBasedPortfolioConfig
+                    self.portfolio_construction = BoxBasedPortfolioConfig(**pc_data)
+                
+                elif method == 'quantitative':
+                    # For quantitative, we need to merge with parameters
+                    parameters = self.parameters or {}
+                    if 'universe_size' in parameters:
+                        pc_data['universe_size'] = parameters['universe_size']
+                    if 'optimizer' in parameters:
+                        pc_data['optimizer'] = parameters['optimizer']
+                    if 'covariance' in parameters:
+                        pc_data['covariance'] = parameters['covariance']
+                    if 'enable_short_selling' in parameters:
+                        pc_data['enable_short_selling'] = parameters['enable_short_selling']
+                    
+                    # Remove classifier if present (not needed for quantitative)
+                    if 'classifier' in pc_data:
+                        del pc_data['classifier']
+                    
+                    # Create QuantitativePortfolioConfig
+                    self.portfolio_construction = QuantitativePortfolioConfig(**pc_data)
+                
+                else:
+                    raise ValueError(f"Unknown portfolio construction method: {method}")
+        
+        return self
+    
+    @model_validator(mode='after')
     def validate_strategy_requirements(self):
         """Validate strategy-specific requirements."""
         # FF5 strategy validation
         if self.type == 'fama_french_5':
-            if self.portfolio_construction and self.portfolio_construction.method == 'box_based':
-                # Validate box_based is compatible with FF5
-                if not self.portfolio_construction.box_weights.dimensions:
-                    raise ValueError("FF5 with box_based requires box_weights.dimensions")
+            if self.portfolio_construction:
+                # Use isinstance for type-safe validation
+                if isinstance(self.portfolio_construction, BoxBasedPortfolioConfig):
+                    # Box-based validation is already done in BoxBasedPortfolioConfig
+                    pass
+                elif isinstance(self.portfolio_construction, QuantitativePortfolioConfig):
+                    # Quantitative validation is already done in QuantitativePortfolioConfig
+                    pass
         
         return self
     
@@ -95,13 +142,23 @@ class StrategyConfig(BasePydanticConfig):
         """Get strategy configuration summary."""
         base_summary = super().get_summary()
         
+        # Get portfolio method info safely
+        portfolio_method = None
+        if self.portfolio_construction:
+            if isinstance(self.portfolio_construction, BoxBasedPortfolioConfig):
+                portfolio_method = "box_based"
+            elif isinstance(self.portfolio_construction, QuantitativePortfolioConfig):
+                portfolio_method = "quantitative"
+            else:
+                portfolio_method = getattr(self.portfolio_construction, 'method', 'unknown')
+        
         base_summary.update({
             'type': self.type,
             'model_id': self.model_id,
             'lookback_days': self.lookback_days,
             'risk_free_rate': f"{self.risk_free_rate:.2%}",
             'has_portfolio_construction': self.portfolio_construction is not None,
-            'portfolio_method': self.portfolio_construction.method if self.portfolio_construction else None,
+            'portfolio_method': portfolio_method,
             'constraints_count': len(self.constraints) if self.constraints else 0,
             'parameters_count': len(self.parameters)
         })

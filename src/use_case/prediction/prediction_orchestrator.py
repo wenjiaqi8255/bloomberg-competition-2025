@@ -222,7 +222,20 @@ class PredictionOrchestrator:
     
     def _get_universe(self) -> List[str]:
         """Get universe symbols from configuration."""
-        return self.config.get('universe', {}).get('symbols', [])
+        universe_config = self.config.get('universe', {})
+        
+        # Check if using CSV source
+        if universe_config.get('source') == 'csv':
+            csv_path = universe_config.get('csv_path')
+            if not csv_path:
+                raise ValueError("universe.source=csv specified but csv_path is missing")
+            
+            filters = universe_config.get('filters', {})
+            from ...trading_system.data.utils.universe_loader import load_universe_from_csv
+            return load_universe_from_csv(csv_path, filters)
+        
+        # Fallback to inline symbols
+        return universe_config.get('symbols', [])
     
     def _generate_signals(self, strategy, universe: List[str], prediction_date: datetime) -> pd.DataFrame:
         """

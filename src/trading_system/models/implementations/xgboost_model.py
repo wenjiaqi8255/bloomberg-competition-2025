@@ -252,12 +252,14 @@ class XGBoostModel(BaseModel):
             logger.error(f"Failed to train XGBoostModel: {e}")
             raise
     
-    def predict(self, X: pd.DataFrame) -> np.ndarray:
+    def predict(self, X: Union[pd.DataFrame, np.ndarray]) -> np.ndarray:
         """
         Make predictions using the trained model.
         
         Args:
-            X: Feature DataFrame
+            X: Feature DataFrame or ndarray
+               - If ndarray: assumes features are in same order as training
+               - If DataFrame: uses column names to ensure correct feature order
         
         Returns:
             Array of predictions
@@ -269,6 +271,19 @@ class XGBoostModel(BaseModel):
             raise ValueError("Model must be trained before making predictions")
         
         try:
+            # ✅ 统一输入格式 - 确保X是DataFrame
+            if isinstance(X, np.ndarray):
+                # 如果输入是numpy array，转换为DataFrame
+                if self._feature_names is None or len(self._feature_names) == 0:
+                    raise ValueError("Cannot convert array to DataFrame: feature_names not set")
+                
+                X = pd.DataFrame(X, columns=self._feature_names)
+                logger.debug(f"Converted numpy array to DataFrame with shape {X.shape}")
+            
+            # 验证输入是DataFrame
+            if not isinstance(X, pd.DataFrame):
+                raise ValueError(f"X must be DataFrame or ndarray, got {type(X)}")
+            
             # Validate input data
             self.validate_data(X)
             
@@ -337,6 +352,19 @@ class XGBoostModel(BaseModel):
             predictions = []
 
             for X in X_batch:
+                # ✅ 统一输入格式 - 确保X是DataFrame
+                if isinstance(X, np.ndarray):
+                    # 如果输入是numpy array，转换为DataFrame
+                    if self._feature_names is None or len(self._feature_names) == 0:
+                        raise ValueError("Cannot convert array to DataFrame: feature_names not set")
+                    
+                    X = pd.DataFrame(X, columns=self._feature_names)
+                    logger.debug(f"Converted numpy array to DataFrame with shape {X.shape}")
+                
+                # 验证输入是DataFrame
+                if not isinstance(X, pd.DataFrame):
+                    raise ValueError(f"X must be DataFrame or ndarray, got {type(X)}")
+                
                 # Validate input data
                 self.validate_data(X)
 

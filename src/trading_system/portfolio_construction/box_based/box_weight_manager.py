@@ -305,18 +305,24 @@ class BoxWeightManager:
 
     def get_target_weight(self, box_key: BoxKey) -> float:
         """
-        Get target weight for a specific box.
+        Get target weight for a specific box, with fallback for unlisted boxes.
 
         Args:
             box_key: Box to get weight for
 
         Returns:
-            Target weight for the box (0.0 if box not found)
+            Target weight for the box, with fallback for unlisted boxes
         """
         if self._cached_weights is None:
             self._cached_weights = self.provider.get_box_weights()
 
-        return self._cached_weights.get(box_key, 0.0)
+        # Try to get weight from target list
+        if box_key in self._cached_weights:
+            return self._cached_weights[box_key]
+        
+        # Box not in target list - return equal weight (will be normalized later)
+        logger.debug(f"Box {box_key} not in target list, using equal weight")
+        return 1.0
 
     def get_target_boxes(self) -> List[BoxKey]:
         """Get list of all target boxes."""
@@ -369,6 +375,29 @@ class BoxWeightManager:
 
         covered_weight = sum(target_weights[box] for box in covered_boxes)
         uncovered_weight = sum(target_weights[box] for box in uncovered_boxes)
+
+        # Add detailed logging for debugging
+        logger.info("=" * 60)
+        logger.info("BOX COVERAGE ANALYSIS")
+        logger.info("=" * 60)
+        logger.info(f"Target boxes ({len(target_boxes)}):")
+        for box in sorted(target_boxes, key=lambda x: f"{x.size}_{x.style}_{x.region}"):
+            logger.info(f"  {box.size}_{box.style}_{box.region}")
+        
+        logger.info(f"\nAvailable boxes ({len(available_boxes)}):")
+        for box in sorted(available_boxes, key=lambda x: f"{x.size}_{x.style}_{x.region}"):
+            logger.info(f"  {box.size}_{box.style}_{box.region}")
+        
+        logger.info(f"\nCovered boxes ({len(covered_boxes)}):")
+        for box in sorted(covered_boxes, key=lambda x: f"{x.size}_{x.style}_{x.region}"):
+            logger.info(f"  ✓ {box.size}_{box.style}_{box.region}")
+        
+        logger.info(f"\nUncovered boxes ({len(uncovered_boxes)}):")
+        for box in sorted(uncovered_boxes, key=lambda x: f"{x.size}_{x.style}_{x.region}"):
+            logger.info(f"  ✗ {box.size}_{box.style}_{box.region}")
+        
+        logger.info(f"\nCoverage: {len(covered_boxes)}/{len(target_boxes)} = {len(covered_boxes)/len(target_boxes)*100:.1f}%")
+        logger.info("=" * 60)
 
         return {
             'total_target_boxes': len(target_boxes),

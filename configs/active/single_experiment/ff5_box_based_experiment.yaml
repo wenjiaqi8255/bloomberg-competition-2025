@@ -43,28 +43,28 @@ training_setup:
   parameters:
     # Universe selection (Option A - minimally intrusive)
     # Uncomment to load symbols from CSV instead of inline list
-    # universe:
-    #   source: "csv"
-    #   csv_path: "./data/universes/merged_tickers.csv"
-    #   filters:
-    #     min_market_cap: 1000000000
-    #     max_stocks: 500
+    universe:
+      source: "csv"
+      csv_path: "./data/universes/merged_tickers.csv"
+      filters:
+        min_market_cap: 1000000000
+        max_stocks: 50
         # exclude_sectors: ["Real Estate"]
 
-    start_date: "2022-01-01"
-    end_date: "2023-12-31"
-    # symbols: []
-    symbols:
-      # Technology (Large Growth)
-      - AAPL
-      - MSFT
-      - GOOGL
-      - META
-      - NVDA
-      # Technology (Mid/Large Value)
-      - CSCO
-      - IBM
-      - INTC
+    start_date: "2025-01-01"
+    end_date: "2025-09-30"
+    symbols: []
+    # symbols:
+    #   # Technology (Large Growth)
+    #   - AAPL
+    #   - MSFT
+    #   - GOOGL
+    #   - META
+    #   - NVDA
+    #   # Technology (Mid/Large Value)
+    #   - CSCO
+    #   - IBM
+    #   - INTC
 
     #   # Healthcare (Large Growth)
     #   - JNJ
@@ -130,7 +130,7 @@ training_setup:
 backtest:
   name: "FF5_BoxBased_Backtest"
   start_date: "2024-01-01"
-  end_date: "2025-08-31"
+  end_date: "2024-12-31"
   initial_capital: 1000000
   benchmark_symbol: "SPY"
   commission_rate: 0.001
@@ -164,7 +164,7 @@ strategy:
       dimensions:
         size: ["large", "mid", "small"]
         style: ["growth", "value"]
-        region: ["developed"]  # Focus on US developed markets
+        region: ["developed","emerging"]  # Focus on US developed markets
         # sector: [
         #   "Technology", "Financials", "Healthcare",
         #   "Consumer Discretionary", "Consumer Staples",

@@ -7,13 +7,17 @@ system to use different construction methods.
 """
 
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Union
 
 from src.trading_system.portfolio_construction.interface.interfaces import IPortfolioBuilder
 from src.trading_system.portfolio_construction.quant_based.quantitative_builder import QuantitativePortfolioBuilder
 from src.trading_system.portfolio_construction.box_based.box_based_builder import BoxBasedPortfolioBuilder
 from src.trading_system.validation.config.portfolio_validator import PortfolioConfigValidator
 from src.trading_system.portfolio_construction.models.exceptions import InvalidConfigError
+from src.trading_system.config.pydantic.portfolio import (
+    BoxBasedPortfolioConfig,
+    QuantitativePortfolioConfig
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +32,12 @@ class PortfolioBuilderFactory:
     """
 
     @staticmethod
-    def create_builder(config: Dict[str, Any]) -> IPortfolioBuilder:
+    def create_builder(config: Union[Dict[str, Any], BoxBasedPortfolioConfig, QuantitativePortfolioConfig]) -> IPortfolioBuilder:
         """
         Create portfolio builder based on configuration.
 
         Args:
-            config: Portfolio construction configuration
+            config: Portfolio construction configuration (dict or Pydantic config)
 
         Returns:
             Configured portfolio builder
@@ -41,34 +45,51 @@ class PortfolioBuilderFactory:
         Raises:
             InvalidConfigError: If configuration is invalid
         """
-        # Validate configuration first
-        validator = PortfolioConfigValidator()
-        is_valid, errors = validator.validate_config(config)
+        # Handle Pydantic config objects
+        if isinstance(config, (BoxBasedPortfolioConfig, QuantitativePortfolioConfig)):
+            config_dict = config.model_dump()
+        else:
+            # Handle dict config (legacy support)
+            config_dict = config
+            
+            # Validate configuration first
+            validator = PortfolioConfigValidator()
+            is_valid, errors = validator.validate_config(config_dict)
 
-        if not is_valid:
-            raise InvalidConfigError(
-                f"Invalid portfolio construction configuration: {errors}",
-                config_section='portfolio_construction',
-                validation_errors=errors
-            )
-
-        # Determine construction method
-        method = config.get('method', 'quantitative').lower()
+            if not is_valid:
+                raise InvalidConfigError(
+                    f"Invalid portfolio construction configuration: {errors}",
+                    config_section='portfolio_construction',
+                    validation_errors=errors
+                )
 
         try:
-            if method == 'quantitative':
-                logger.info("Creating QuantitativePortfolioBuilder")
-                return QuantitativePortfolioBuilder(config)
-
-            elif method == 'box_based':
+            # Use type checking for better type safety
+            if isinstance(config, BoxBasedPortfolioConfig):
                 logger.info("Creating BoxBasedPortfolioBuilder")
-                return BoxBasedPortfolioBuilder(config)
+                return BoxBasedPortfolioBuilder(config_dict)
+
+            elif isinstance(config, QuantitativePortfolioConfig):
+                logger.info("Creating QuantitativePortfolioBuilder")
+                return QuantitativePortfolioBuilder(config_dict)
 
             else:
-                raise InvalidConfigError(
-                    f"Unknown portfolio construction method: {method}",
-                    config_section='method'
-                )
+                # Fallback to method-based dispatch for dict configs
+                method = config_dict.get('method', 'quantitative').lower()
+                
+                if method == 'quantitative':
+                    logger.info("Creating QuantitativePortfolioBuilder")
+                    return QuantitativePortfolioBuilder(config_dict)
+
+                elif method == 'box_based':
+                    logger.info("Creating BoxBasedPortfolioBuilder")
+                    return BoxBasedPortfolioBuilder(config_dict)
+
+                else:
+                    raise InvalidConfigError(
+                        f"Unknown portfolio construction method: {method}",
+                        config_section='method'
+                    )
 
         except Exception as e:
             if isinstance(e, InvalidConfigError):

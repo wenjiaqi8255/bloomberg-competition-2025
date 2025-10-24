@@ -282,7 +282,17 @@ class FeatureEngineeringPipeline:
         if self._is_fitted and not is_fitting:
             features = self._apply_scaling(features)
 
-        # Step 9: Return processed features
+        # Step 9: Validate that features were generated when expected
+        if features.empty and (self.config.include_technical or 
+                              (self.cross_sectional_calculator is not None) or 
+                              (self.box_feature_provider is not None)):
+            error_msg = ("No features were generated despite feature engineering being enabled. "
+                        "This may be due to insufficient data for technical indicators or "
+                        "configuration issues. Check your data length and feature configuration.")
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+
+        # Step 10: Return processed features
         logger.info(f"Feature transformation complete: {features.shape}")
         return features
 
@@ -339,6 +349,8 @@ class FeatureEngineeringPipeline:
                     if not combined_technical.empty:
                         symbol_features = pd.concat([symbol_features, combined_technical], axis=1)
                         logger.debug(f"Added {len(combined_technical.columns)} technical features for {symbol}")
+                    else:
+                        logger.warning(f"No valid technical features generated for {symbol} - all features were NaN")
 
                 # Create MultiIndex for this symbol's features
                 index_format = self._get_index_format_for_model()

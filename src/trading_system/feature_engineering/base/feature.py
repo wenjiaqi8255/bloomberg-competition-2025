@@ -62,7 +62,7 @@ class FeatureConfig:
     enable_missing_value_monitoring: bool = field(default=True)
     missing_value_report_path: Optional[str] = field(default=None)
     warmup_tolerance_multiplier: float = field(default=1.5)  # Allow 1.5x expected warmup
-    technical_indicators: List[str] = field(default_factory=lambda: ["rsi", "macd", "bollinger_bands", "stochastic", "williams_r"])
+    technical_indicators: List[str] = field(default_factory=lambda: ["sma", "ema", "macd", "bollinger_bands", "rsi", "stochastic", "williams_r", "mfi"])
     technical_patterns: List[str] = field(default_factory=lambda: ["rsi", "macd", "bollinger_position", "stochastic"])
 
     # Factor model parameters (for FF5)

@@ -293,43 +293,30 @@ class FF5RegressionModel(BaseModel):
 
     def _predict_time_series(self, X: pd.DataFrame, symbols: Optional[List[str]]) -> np.ndarray:
         """
-        时间序列预测逻辑 - 用于训练/验证场景
-        
-        处理多日时间序列数据，为每个股票生成预测
+        正确的时间序列预测逻辑
         """
-        logger.info("📊 Using new batch prediction logic")
+        logger.info("📊 Using corrected time-series prediction logic")
         
-        if symbols is None:
-            if isinstance(X.index, pd.MultiIndex) and 'symbol' in X.index.names:
-                symbols = X.index.get_level_values('symbol').unique().tolist()
-            else:
-                return np.array([])
-        
-        # 提取因子向量（假设所有股票共享相同的因子值）
-        factor_vector = X.iloc[0][self._expected_features].values
-        logger.info(f"Factor vector shape: {factor_vector.shape}")
-        
-        # 为每个股票生成预测
         predictions = []
-        for symbol in symbols:
+        
+        # 为每个(symbol, date)组合生成独立预测
+        for (symbol, date), row in X.iterrows():
             if symbol in self.betas:
+                # 获取该时间点的因子值
+                factor_values = row[self._expected_features].values
+                
+                # 使用该symbol的beta进行预测
                 beta = self.betas[symbol]
-                prediction = np.dot(beta, factor_vector)
+                alpha = self.alphas[symbol]
+                
+                # 预测：r = α + β₁×MKT + β₂×SMB + β₃×HML + β₄×RMW + β₅×CMA
+                prediction = alpha + np.dot(beta, factor_values)
                 predictions.append(prediction)
             else:
-                # 如果股票没有训练好的beta，使用默认值
                 predictions.append(0.0)
         
-        # 🔧 FIX: 确保预测结果长度与输入数据匹配
         result = np.array(predictions)
-        logger.info(f"Generated {len(result)} predictions for {len(symbols)} symbols")
-        
-        # 如果输入数据有多个时间点，需要为每个时间点生成相同的预测
-        if len(X) > 1:
-            # 为每个时间点重复预测结果
-            repeated_predictions = np.tile(result, len(X))
-            logger.info(f"Repeated predictions to match {len(X)} time points: {len(repeated_predictions)} total predictions")
-            return repeated_predictions
+        logger.info(f"Generated {len(result)} predictions for {len(X)} (symbol, date) combinations")
         
         return result
 

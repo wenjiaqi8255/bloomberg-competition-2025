@@ -258,9 +258,50 @@ class StrategyRunner:
 
         return unified_signals
 
+    def _initialize_wandb_run(self):
+        """Initialize WandB run early for logging initialization process."""
+        try:
+            # 如果 experiment_tracker 还没有初始化，先初始化它
+            if self.experiment_tracker is None:
+                # Use WandB tracker by default, with fallback to null tracker
+                try:
+                    self.experiment_tracker = WandBExperimentTracker(
+                        project_name='bloomberg-competition',
+                        tags=[],
+                        group=None,
+                        fail_silently=True
+                    )
+                except Exception:
+                    logger.warning("WandB tracker initialization failed, using null tracker")
+                    self.experiment_tracker = NullExperimentTracker()
+            
+            # 创建临时的 experiment config 用于初始化日志
+            from ..experiment_tracking import create_backtest_config
+            temp_config = create_backtest_config(
+                project_name='bloomberg-competition',
+                strategy_name='initializing',
+                strategy_config={},
+                tags=['initialization'],
+                group=None
+            )
+            temp_config.experiment_name = f"initialization_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            
+            # 初始化 WandB run
+            run_id = self.experiment_tracker.init_run(temp_config)
+            logger.info(f"Started initialization run: {run_id}")
+            self._wandb_run_created = True
+            
+        except Exception as e:
+            logger.warning(f"Failed to initialize WandB run for initialization logging: {e}")
+            # 继续执行，不中断初始化过程
+            self._wandb_run_created = False
+
     def initialize(self):
         """Initialize all components based on configuration."""
         try:
+            # 先创建 WandB run，这样初始化日志就能被记录
+            self._initialize_wandb_run()
+            
             logger.info("Initializing strategy runner components...")
 
             # Initialize data provider if not already provided
@@ -275,7 +316,15 @@ class StrategyRunner:
 
             # Initialize strategy with config objects
             strategy_config_dict = self.configs['strategy'].parameters.copy()  # Make a copy to avoid mutation
-            strategy_config_dict['type'] = self.configs['strategy'].strategy_type.value
+            
+            # 添加容错处理 strategy_type 访问
+            try:
+                strategy_config_dict['type'] = self.configs['strategy'].strategy_type.value
+            except AttributeError:
+                # 如果 strategy_type 不存在，使用 type 字段
+                strategy_config_dict['type'] = self.configs['strategy'].type
+                logger.warning("strategy_type property not available, using type field directly")
+            
             strategy_config_dict['name'] = self.configs['strategy'].name
             # Include universe from config object if not already in parameters
             if 'universe' not in strategy_config_dict and self.configs['strategy'].universe:
@@ -322,50 +371,23 @@ class StrategyRunner:
             raise
 
     def _initialize_portfolio_builder(self):
-        """Initialize portfolio builder if configured in strategy parameters."""
-        try:
-            logger.info("🔧 DEBUG: Starting portfolio builder initialization...")
+        """Initialize portfolio builder from strategy configuration."""
+        strategy_config = self.configs.get('strategy')
+        if not strategy_config:
+            logger.info("No strategy config found, using default signal processing")
+            return
             
-            strategy_config = self.configs.get('strategy')
-            if not strategy_config:
-                logger.warning("❌ No strategy config found, skipping portfolio builder initialization")
-                return
-                
-            logger.info(f"🔧 DEBUG: strategy_config type = {type(strategy_config)}")
-            logger.info(f"🔧 DEBUG: strategy_config attributes = {dir(strategy_config)}")
+        # Get portfolio construction config from top-level attribute
+        portfolio_construction_config = getattr(strategy_config, 'portfolio_construction', None)
+        
+        if not portfolio_construction_config:
+            logger.info("No portfolio_construction config found, using default signal processing")
+            return
             
-            # Try to get parameters in multiple ways
-            strategy_params = None
-            if hasattr(strategy_config, 'parameters'):
-                strategy_params = strategy_config.parameters
-                logger.info(f"🔧 DEBUG: Got parameters from attribute: {type(strategy_params)}")
-            elif hasattr(strategy_config, '__dict__') and 'parameters' in strategy_config.__dict__:
-                strategy_params = strategy_config.__dict__['parameters']
-                logger.info(f"🔧 DEBUG: Got parameters from __dict__: {type(strategy_params)}")
-            else:
-                logger.warning(f"❌ No parameters found in strategy config")
-                return
-                
-            if not strategy_params:
-                logger.warning("❌ strategy_params is None or empty")
-                return
-                
-            logger.info(f"🔧 DEBUG: strategy_params keys = {list(strategy_params.keys()) if isinstance(strategy_params, dict) else 'NOT A DICT'}")
-            
-            portfolio_construction_config = strategy_params.get('portfolio_construction', {})
-            logger.info(f"🔧 DEBUG: portfolio_construction_config = {portfolio_construction_config}")
-            
-            if not portfolio_construction_config:
-                logger.info("No portfolio_construction config found, using default signal processing")
-                return
-                
-            # Create portfolio builder using factory
-            self.portfolio_builder = PortfolioBuilderFactory.create_builder(portfolio_construction_config)
-            logger.info(f"✅ Initialized portfolio builder with method: {portfolio_construction_config.get('method', 'unknown')}")
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to initialize portfolio builder: {e}", exc_info=True)
-            logger.info("Continuing with default signal processing")
+        # Create portfolio builder using factory
+        self.portfolio_builder = PortfolioBuilderFactory.create_builder(portfolio_construction_config)
+        method = getattr(portfolio_construction_config, 'method', 'unknown')
+        logger.info(f"✅ Initialized portfolio builder with method: {method}")
 
     def _apply_portfolio_construction(self, strategy_signals: pd.DataFrame, price_data: Dict[str, pd.DataFrame], start_date: datetime) -> pd.DataFrame:
         """
@@ -445,34 +467,45 @@ class StrategyRunner:
         logger.info(f"Running strategy: {experiment_name}")
 
         try:
-            # Create experiment configuration
-            strategy_config = self.configs.get('strategy')
-            backtest_config = self.configs.get('backtest')
+            # 检查是否已经有 WandB run，如果没有则创建一个正式的 run
+            if not hasattr(self, '_wandb_run_created') or not self._wandb_run_created:
+                # Create experiment configuration
+                strategy_config = self.configs.get('strategy')
+                backtest_config = self.configs.get('backtest')
 
-            # Build hyperparameters from configs
-            hyperparameters = {}
-            if strategy_config:
-                hyperparameters.update(strategy_config.parameters or {})
-            if backtest_config:
-                hyperparameters.update({
-                    'initial_capital': backtest_config.initial_capital,
-                    'start_date': backtest_config.start_date,
-                    'end_date': backtest_config.end_date,
-                    'benchmark_symbol': backtest_config.benchmark_symbol
-                })
+                # Build hyperparameters from configs
+                hyperparameters = {}
+                if strategy_config:
+                    hyperparameters.update(strategy_config.parameters or {})
+                if backtest_config:
+                    hyperparameters.update({
+                        'initial_capital': backtest_config.initial_capital,
+                        'start_date': backtest_config.start_date,
+                        'end_date': backtest_config.end_date,
+                        'benchmark_symbol': backtest_config.benchmark_symbol
+                    })
 
-            experiment_config = create_backtest_config(
-                project_name='bloomberg-competition',
-                strategy_name=self.strategy.get_name(),
-                strategy_config=hyperparameters,
-                tags=[strategy_config.strategy_type.value if strategy_config else 'unknown'],
-                group=None
-            )
-            experiment_config.experiment_name = experiment_name
+                # 添加容错处理 strategy_type 访问
+                try:
+                    strategy_type_tag = strategy_config.strategy_type.value if strategy_config else 'unknown'
+                except AttributeError:
+                    strategy_type_tag = strategy_config.type if strategy_config else 'unknown'
 
-            # Initialize experiment with new interface
-            run_id = self.experiment_tracker.init_run(experiment_config)
-            logger.info(f"Started experiment run: {run_id}")
+                experiment_config = create_backtest_config(
+                    project_name='bloomberg-competition',
+                    strategy_name=self.strategy.get_name(),
+                    strategy_config=hyperparameters,
+                    tags=[strategy_type_tag],
+                    group=None
+                )
+                experiment_config.experiment_name = experiment_name
+
+                # Initialize experiment with new interface
+                run_id = self.experiment_tracker.init_run(experiment_config)
+                logger.info(f"Started experiment run: {run_id}")
+                self._wandb_run_created = True
+            else:
+                logger.info("Using existing WandB run for strategy execution")
 
             # Log configuration summary
             config_summary = {name: config.get_summary() for name, config in self.configs.items()}

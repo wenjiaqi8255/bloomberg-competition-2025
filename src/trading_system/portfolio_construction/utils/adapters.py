@@ -26,13 +26,15 @@ class ClassificationAdapter:
 
     @staticmethod
     def convert_investment_boxes_to_box_keys(
-        investment_boxes: Dict[str, InvestmentBox]
+        investment_boxes: Dict[str, InvestmentBox],
+        include_sector: bool = True
     ) -> Dict[str, BoxKey]:
         """
         Convert InvestmentBox objects to BoxKey format.
 
         Args:
             investment_boxes: Dictionary mapping box_key to InvestmentBox objects
+            include_sector: Whether to include sector information in BoxKey
 
         Returns:
             Dictionary mapping stock symbols to BoxKey objects
@@ -50,7 +52,7 @@ class ClassificationAdapter:
                     size=investment_box.size.value,
                     style=investment_box.style.value,
                     region=investment_box.region.value,
-                    sector=investment_box.sector
+                    sector=investment_box.sector if include_sector else None
                 )
 
                 # Add classification for each stock in this box

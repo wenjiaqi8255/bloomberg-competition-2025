@@ -45,7 +45,9 @@ training_setup:
     include_cross_sectional: true  # Enable cross-sectional features for Fama-MacBeth
 
     # Cross-sectional features for Fama-MacBeth regression
-    cross_sectional_features: ['market_cap', 'book_to_market', 'size', 'value', 'momentum', 'volatility']
+    cross_sectional_features: ['market_cap'
+    # , 'book_to_market', 'size', 'value', 'momentum', 'volatility'
+    ]
     cross_sectional_lookback:
       momentum: 252
       volatility: 60
@@ -55,7 +57,7 @@ training_setup:
 
   # Parameters for the training pipeline execution
   parameters:
-    start_date: "2024-01-01"
+    start_date: "2025-01-01"
     end_date: "2025-09-30"
     symbols:
       # Technology (Large Growth)
@@ -69,50 +71,50 @@ training_setup:
       - IBM
       - INTC
 
-      # Healthcare (Large Growth)
-      - JNJ
-      - UNH
-      - PFE
-      # Healthcare (Mid/Large Value)
-      - ABT
-      - TMO
-      - DHR
+      # # Healthcare (Large Growth)
+      # - JNJ
+      # - UNH
+      # - PFE
+      # # Healthcare (Mid/Large Value)
+      # - ABT
+      # - TMO
+      # - DHR
 
-      # Financials (Large Growth)
-      - JPM
-      - BAC
-      - GS
-      # Financials (Mid/Large Value)
-      - WFC
-      - MS
-      - AXP
+      # # Financials (Large Growth)
+      # - JPM
+      # - BAC
+      # - GS
+      # # Financials (Mid/Large Value)
+      # - WFC
+      # - MS
+      # - AXP
 
-      # Consumer (Growth)
-      - AMZN
-      - TSLA
-      - HD
-      - MCD
-      # Consumer (Value)
-      - WMT
-      - PG
-      - KO
-      - COST
+      # # Consumer (Growth)
+      # - AMZN
+      # - TSLA
+      # - HD
+      # - MCD
+      # # Consumer (Value)
+      # - WMT
+      # - PG
+      # - KO
+      # - COST
 
-      # Industrial
-      - CAT
-      - GE
-      - HON
-      - UPS
+      # # Industrial
+      # - CAT
+      # - GE
+      # - HON
+      # - UPS
 
-      # Energy
-      - XOM
-      - CVX
-      - COP
+      # # Energy
+      # - XOM
+      # - CVX
+      # - COP
 
-      # Communication
-      - VZ
-      - DIS
-      - NFLX
+      # # Communication
+      # - VZ
+      # - DIS
+      # - NFLX
 
   # Hyperparameter optimization for Fama-MacBeth model
   hyperparameter_optimization:
@@ -199,40 +201,49 @@ strategy:
 
 # Part 4: Feature Engineering Configuration
 # ---------------------------------------
-feature_engineering:
-  # Enable cross-sectional features (key for Fama-MacBeth)
-  include_cross_sectional: true
-  include_technical: false  # Focus on cross-sectional, not time-series
-  include_theoretical: false
+# feature_engineering:
+#   # Enable cross-sectional features (key for Fama-MacBeth)
+#   include_cross_sectional: true
+#   include_technical: true  # Focus on cross-sectional, not time-series
+#   include_theoretical: false
 
-  # Cross-sectional features to compute
-  cross_sectional_features:
-    - "market_cap"        # Size factor (SMB proxy)
-    - "book_to_market"    # Value factor (HML proxy)
-    - "size"              # Log market cap
-    - "value"             # Value indicator
-    - "momentum"          # Momentum factor
-    - "volatility"        # Risk measure
+#   # 添加技术特征计算所需的参数
+#   momentum_periods: [5, 10, 20, 60, 120, 252]  # 动量特征周期
+#   volatility_windows: [5, 10, 20, 60, 120]     # 波动率窗口
+#   momentum_methods: ["simple"]                 # 动量计算方法
+#   volatility_methods: ["std", "ewm"]           # 波动率计算方法
+  
+#   # 明确控制技术指标生成
+#   technical_indicators: ["sma", "ema", "macd", "bollinger_bands", "rsi", "stochastic", "williams_r", "mfi"]
 
-  # Lookback periods for cross-sectional features
-  cross_sectional_lookback:
-    momentum: 252      # 12-month momentum
-    volatility: 60     # 60-day volatility
-    ma_long: 200       # 200-day MA for value proxy
-    ma_short: 50       # 50-day MA
+#   # Cross-sectional features to compute
+#   cross_sectional_features:
+#     - "market_cap"        # Size factor (SMB proxy)
+#     # - "book_to_market"    # Value factor (HML proxy)
+#     # - "size"              # Log market cap
+#     # - "value"             # Value indicator
+#     # - "momentum"          # Momentum factor
+#     # - "volatility"        # Risk measure
 
-  # Winsorization to handle outliers
-  winsorize_percentile: 0.01  # Winsorize at 1st and 99th percentile
+#   # Lookback periods for cross-sectional features
+#   cross_sectional_lookback:
+#     momentum: 252      # 12-month momentum
+#     volatility: 60     # 60-day volatility
+#     ma_long: 200       # 200-day MA for value proxy
+#     ma_short: 50       # 50-day MA
 
-  # Feature preprocessing
-  normalize_features: true
-  normalization_method: "minmax"  # Min-max normalization to [0, 1] range for TradingSignal compatibility
-  handle_missing: "forward_fill"
+#   # Winsorization to handle outliers
+#   winsorize_percentile: 0.01  # Winsorize at 1st and 99th percentile
 
-  # Feature validation
-  min_ic_threshold: 0.02  # Minimum Information Coefficient
-  min_significance: 0.10  # 10% significance level
-  feature_lag: 1  # Use lagged features to avoid look-ahead bias
+#   # Feature preprocessing
+#   normalize_features: true
+#   normalization_method: "minmax"  # Min-max normalization to [0, 1] range for TradingSignal compatibility
+#   handle_missing: "forward_fill"
+
+#   # Feature validation
+#   min_ic_threshold: 0.02  # Minimum Information Coefficient
+#   min_significance: 0.10  # 10% significance level
+#   feature_lag: 1  # Use lagged features to avoid look-ahead bias
 
 # Part 5: Model Configuration
 # ---------------------------
@@ -268,7 +279,7 @@ model:
 
     # Cross-validation
     cv_method: "time_series_split"
-    cv_folds: 5
+    cv_folds: 2
 
 # Part 6: System Integration Configuration
 # ---------------------------------------

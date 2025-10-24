@@ -99,10 +99,20 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
         """Initialize all sub-components."""
         # Stock classifier
         classifier_config = self.config.get('classifier', {})
+        
+        # Check if sector should be included based on box_weights configuration
+        box_weights_config = self.config.get('box_weights', {})
+        dimensions = box_weights_config.get('dimensions', {})
+        sector_dimension = dimensions.get('sector', [])
+        
+        # If sector dimension is empty, don't include sector in classification
+        include_sector = len(sector_dimension) > 0
+        classifier_config['include_sector'] = include_sector
+        
+        logger.info(f"StockClassifier configured with include_sector={include_sector}")
         self.stock_classifier = StockClassifier(classifier_config)
 
         # Box weight manager
-        box_weights_config = self.config.get('box_weights', {})
         self.box_weight_manager = BoxWeightManager(box_weights_config)
 
         # Selection parameters
@@ -164,12 +174,18 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
             # Step 2: Group stocks by boxes and analyze coverage
             logger.info("[Step 2/4] Analyzing box coverage...")
             box_stocks = ClassificationAdapter.group_stocks_by_box(request.universe, classifications)
+            
+            # Check if we have any stocks to work with
+            if not box_stocks:
+                raise PortfolioConstructionError("No stocks available for portfolio construction")
+            
+            # Analyze coverage for logging purposes
             coverage_info = self.box_weight_manager.get_coverage_info(list(box_stocks.keys()))
             construction_log.append(f"Box coverage: {coverage_info['coverage_ratio']:.1%} "
                                    f"({coverage_info['covered_boxes']}/{coverage_info['total_target_boxes']})")
-
-            if coverage_info['covered_boxes'] == 0:
-                raise PortfolioConstructionError("No boxes have sufficient stock coverage")
+            construction_log.append(f"Using {len(box_stocks)} available boxes for portfolio construction")
+            
+            # Continue with available boxes instead of failing on partial coverage
 
             # Step 3: Select stocks and allocate weights within boxes
             logger.info("[Step 3/4] Selecting stocks and allocating weights...")
@@ -258,7 +274,10 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
             investment_boxes = self.stock_classifier.classify_stocks(
                 universe, price_data, as_of_date=as_of_date
             )
-            box_keys = ClassificationAdapter.convert_investment_boxes_to_box_keys(investment_boxes)
+            box_keys = ClassificationAdapter.convert_investment_boxes_to_box_keys(
+                investment_boxes, 
+                include_sector=self.stock_classifier.include_sector
+            )
 
             logger.debug(f"Classified {len(box_keys)} stocks into boxes")
             return box_keys
@@ -288,9 +307,11 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
             'log': construction_log
         }
 
-        target_boxes = self.box_weight_manager.get_target_boxes()
+        # Use available boxes instead of target boxes
+        available_boxes = list(box_stocks.keys())
+        logger.info(f"Processing {len(available_boxes)} available boxes for portfolio construction")
 
-        for box_key in target_boxes:
+        for box_key in available_boxes:
             try:
                 box_result = self._process_single_box(box_key, box_stocks.get(box_key, []), signals)
 
@@ -382,7 +403,8 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
                 'weights': stock_weights,
                 'reason': None,
                 'box_weight': target_weight,
-                'selected_stocks': selected_stocks
+                'selected_stocks': selected_stocks,
+                'log': f"Box {box_key}: {len(selected_stocks)} stocks selected, weight {target_weight:.4f}"
             }
 
         except Exception as e:

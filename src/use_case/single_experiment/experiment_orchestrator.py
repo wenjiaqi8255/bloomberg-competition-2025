@@ -317,7 +317,7 @@ class ExperimentOrchestrator:
             config_obj=backtest_config_objects,
             providers=providers,
             experiment_tracker=backtest_tracker,
-            use_wandb=False
+            use_wandb=True
         )
         
         logger.info(f"🔧 Config objects created:")

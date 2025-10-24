@@ -208,28 +208,53 @@ class FamaFrench5Strategy(BaseStrategy):
         """Get the expected factor columns for FF5 model."""
         return ['MKT', 'SMB', 'HML', 'RMW', 'CMA']
 
-    def _get_predictions(self,
-                        features: pd.DataFrame,
-                        price_data: Dict[str, pd.DataFrame],
-                        start_date: datetime,
-                        end_date: datetime) -> pd.DataFrame:
-        """
-        FF5 prediction using optimized batch mode.
+    def generate_signals(self, pipeline_data, start_date, end_date):
+        """Generate signals with pipeline data context"""
         
-        The parent class implementation now automatically detects batch capability
-        (supports_batch_prediction = True for FF5) and uses optimized batch
-        prediction, so we can just delegate to it.
+        # ✅ 保存pipeline_data以便_get_predictions访问
+        self._current_pipeline_data = pipeline_data
         
-        Performance: ~30x faster than previous symbol-by-symbol iteration.
-        """
-        logger.info(f"[{self.name}] Using optimized FF5 batch prediction")
-        current_model = self.model_predictor.get_current_model()
-        logger.info(f"[{self.name}] Model batch capability: {current_model.supports_batch_prediction}")
-        
-        # Parent implementation automatically detects batch capability
-        # and uses batch prediction - no need for custom logic!
-        return super()._get_predictions(features, price_data, start_date, end_date)
+        # 调用父类方法
+        return super().generate_signals(pipeline_data, start_date, end_date)
 
+    def _get_predictions(self, features, price_data, start_date, end_date):
+        """
+        FF5预测使用pipeline_data中的factor_data
+        """
+        if not hasattr(self, '_current_pipeline_data'):
+            return super()._get_predictions(features, price_data, start_date, end_date)
+        
+        factor_data = self._current_pipeline_data.get('factor_data')
+        if factor_data is None:
+            logger.error("No factor_data in pipeline_data")
+            return pd.DataFrame()
+        
+        current_model = self.model_predictor.get_current_model()
+        symbols = list(price_data.keys())
+        
+        predictions_list = []
+        
+        # 对预测日期范围内的每一天
+        for date in pd.date_range(start_date, end_date):
+            if date not in factor_data.index:
+                logger.warning(f"Date {date} not in factor_data")
+                continue
+            
+            # 获取该日期的因子值
+            date_factors = factor_data.loc[[date], ['MKT', 'SMB', 'HML', 'RMW', 'CMA']]
+            
+            # 预测
+            preds = current_model.predict(date_factors, symbols=symbols)
+            
+            if isinstance(preds, np.ndarray):
+                preds = pd.Series(preds, index=symbols, name=date)
+            
+            predictions_list.append(preds)
+        
+        if predictions_list:
+            return pd.concat(predictions_list, axis=1).T
+        else:
+            return pd.DataFrame()
 
     def get_info(self) -> Dict:
         """Get Fama-French strategy information."""
