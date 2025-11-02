@@ -14,6 +14,7 @@ from pandas.tseries.offsets import BDay
 from ..types.enums import DataSource
 from .validation import DataValidator, DataValidationError
 from .base_data_provider import PriceDataProvider
+from .cache.stock_data_cache import StockDataCache
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,10 @@ class YFinanceProvider(PriceDataProvider):
                  request_timeout: int = 30, cache_enabled: bool = True,
                  symbols: Optional[List[str]] = None, start_date: Optional[str] = None,
                  liquidity_config: Optional[Dict[str, Any]] = None,
-                 exchange_suffix_map: Optional[Dict[str, str]] = None):
+                 exchange_suffix_map: Optional[Dict[str, str]] = None,
+                 cache_dir: str = "./cache/stock_data",
+                 enable_disk_cache: bool = True,
+                 cache_version: str = "v1"):
         """
         Initialize the YFinance provider.
 
@@ -42,10 +46,13 @@ class YFinanceProvider(PriceDataProvider):
             max_retries: Maximum number of retry attempts
             retry_delay: Delay between retries in seconds
             request_timeout: Request timeout in seconds
-            cache_enabled: Whether to enable caching
+            cache_enabled: Whether to enable in-memory caching (L1 cache)
             symbols: List of symbols to provide data for (optional)
             start_date: Start date for historical data (optional)
             liquidity_config: Liquidity filtering configuration
+            cache_dir: Directory for persistent disk cache (L2 cache)
+            enable_disk_cache: Whether to enable persistent disk caching
+            cache_version: Cache version for compatibility checking
         """
         super().__init__(
             max_retries=max_retries,
@@ -65,6 +72,15 @@ class YFinanceProvider(PriceDataProvider):
 
         # Cache successful symbol resolutions for this session
         self._symbol_resolution_cache: Dict[str, str] = {}
+
+        # Initialize persistent disk cache (L2 cache)
+        self.enable_disk_cache = enable_disk_cache
+        self.disk_cache: Optional[StockDataCache] = None
+        if enable_disk_cache:
+            self.disk_cache = StockDataCache(cache_dir=cache_dir, cache_version=cache_version)
+            logger.info(f"Disk cache enabled at {cache_dir}")
+        else:
+            logger.info("Disk cache disabled")
 
     @staticmethod
     def _default_exchange_suffix_map() -> Dict[str, str]:
@@ -242,28 +258,104 @@ class YFinanceProvider(PriceDataProvider):
                 last_error: Optional[Exception] = None
 
                 for resolved in candidates:
-                    # Check cache per resolved symbol
+                    # Step 1: Check L1 cache (in-memory cache)
                     cache_key = self._get_cache_key(resolved, start_date, end_date, period)
                     cached_data = self._get_from_cache(cache_key)
                     if cached_data is not None:
                         results[symbol] = cached_data
-                        # Cache resolution for future calls
                         self._symbol_resolution_cache[f"{symbol.strip().upper()}|{(country_code or '').strip().upper()}"] = resolved
-                        logger.debug(f"Cache hit for {symbol} via {resolved}")
+                        logger.debug(f"L1 cache hit for {symbol} via {resolved}")
                         fetch_success = True
                         break
 
-                    # Fetch data with retry logic
-                    if period:
-                        data = self._fetch_with_retry(
-                            yf.download, resolved, period=period,
-                            progress=False, timeout=self.request_timeout
-                        )
+                    # Step 2: Check L2 cache (disk cache) if enabled
+                    cached_data = None
+                    missing_ranges = []
+                    if self.enable_disk_cache and self.disk_cache is not None:
+                        # Convert start_date and end_date to datetime if they're strings
+                        req_start = pd.to_datetime(start_date) if isinstance(start_date, str) else start_date
+                        req_end = pd.to_datetime(end_date) if isinstance(end_date, str) else end_date
+                        
+                        # Try to get cached data
+                        cached_data = self.disk_cache.get(resolved, start_date=req_start, end_date=req_end)
+                        
+                        if cached_data is not None and not cached_data.empty:
+                            # Check if we have all the data needed
+                            cached_start = cached_data.index.min()
+                            cached_end = cached_data.index.max()
+                            
+                            # Check for missing date ranges
+                            missing_ranges = self.disk_cache.get_missing_date_ranges(
+                                resolved, req_start, req_end
+                            )
+                            
+                            if not missing_ranges:
+                                # All data is in cache
+                                logger.debug(f"L2 cache hit (complete) for {symbol} via {resolved}")
+                                # Validate and clean cached data
+                                cached_data = self._validate_and_clean_data(cached_data, resolved)
+                                cached_data = self.add_data_source_metadata(cached_data)
+                                results[symbol] = cached_data
+                                # Store in L1 cache
+                                self._store_in_cache(cache_key, cached_data)
+                                self._symbol_resolution_cache[f"{symbol.strip().upper()}|{(country_code or '').strip().upper()}"] = resolved
+                                fetch_success = True
+                                break
+                            else:
+                                logger.info(f"L2 cache hit (partial) for {symbol}: need to fetch {len(missing_ranges)} missing range(s)")
+
+                    # Step 3: Fetch missing data from network
+                    fetched_data_list = []
+                    
+                    if missing_ranges:
+                        # Fetch only missing ranges
+                        for missing_start, missing_end in missing_ranges:
+                            logger.debug(f"Fetching missing range for {symbol}: {missing_start} to {missing_end}")
+                            if period:
+                                # For period-based requests, fetch the full period
+                                data = self._fetch_with_retry(
+                                    yf.download, resolved, period=period,
+                                    progress=False, timeout=self.request_timeout
+                                )
+                            else:
+                                data = self._fetch_with_retry(
+                                    yf.download, resolved, start=missing_start, end=missing_end,
+                                    progress=False, timeout=self.request_timeout
+                                )
+                            if data is not None and not data.empty:
+                                fetched_data_list.append(data)
                     else:
-                        data = self._fetch_with_retry(
-                            yf.download, resolved, start=start_date, end=end_date,
-                            progress=False, timeout=self.request_timeout
-                        )
+                        # No cache, fetch full range
+                        if period:
+                            data = self._fetch_with_retry(
+                                yf.download, resolved, period=period,
+                                progress=False, timeout=self.request_timeout
+                            )
+                        else:
+                            data = self._fetch_with_retry(
+                                yf.download, resolved, start=start_date, end=end_date,
+                                progress=False, timeout=self.request_timeout
+                            )
+                        if data is not None and not data.empty:
+                            fetched_data_list.append(data)
+
+                    # Step 4: Combine cached and fetched data
+                    if cached_data is not None and not cached_data.empty:
+                        # Merge cached data with newly fetched data
+                        all_data = [cached_data]
+                        all_data.extend(fetched_data_list)
+                        data = pd.concat(all_data, axis=0)
+                        # Remove duplicates (keep last occurrence, which is newer data)
+                        data = data[~data.index.duplicated(keep='last')]
+                        data = data.sort_index()
+                        logger.debug(f"Merged cached and fetched data for {symbol}: {len(cached_data)} cached + {sum(len(d) for d in fetched_data_list)} fetched = {len(data)} total")
+                    elif fetched_data_list:
+                        # Only fetched data
+                        data = pd.concat(fetched_data_list, axis=0) if len(fetched_data_list) > 1 else fetched_data_list[0]
+                        data = data[~data.index.duplicated(keep='last')]
+                        data = data.sort_index()
+                    else:
+                        data = None
 
                     if data is not None and not data.empty:
                         # Data validation and cleaning using base class method
@@ -275,8 +367,21 @@ class YFinanceProvider(PriceDataProvider):
                         if effective_liquidity_config and effective_liquidity_config.get('enabled', False):
                             data = self.apply_liquidity_filter(data, effective_liquidity_config)
 
-                        # Store in cache using resolved key
+                        # Store in L1 cache (in-memory)
                         self._store_in_cache(cache_key, data)
+
+                        # Store in L2 cache (disk) if enabled
+                        if self.enable_disk_cache and self.disk_cache is not None:
+                            try:
+                                # Remove metadata columns before caching
+                                data_to_cache = data.copy()
+                                for col in ['DataSource', 'Provider', 'FetchTime', 'Symbol']:
+                                    if col in data_to_cache.columns:
+                                        data_to_cache = data_to_cache.drop(columns=[col])
+                                self.disk_cache.set(resolved, data_to_cache, merge=True)
+                                logger.debug(f"Stored {symbol} in L2 cache")
+                            except Exception as e:
+                                logger.warning(f"Failed to store {symbol} in L2 cache: {e}")
 
                         # Record result under original symbol key, but log mapping
                         results[symbol] = data
@@ -477,10 +582,7 @@ class YFinanceProvider(PriceDataProvider):
             # First normalize the data format
             data = self._normalize_yfinance_data(data, symbol)
 
-            # Use base class validation for price data
-            data = self.validate_price_data(data, symbol)
-
-            # Additional YFinance-specific validation and cleaning
+            # CLEAN DATA FIRST before validation
             # Check for anomalous values and fix them
             for col in ['Open', 'High', 'Low', 'Close']:
                 if col in data.columns:
@@ -490,7 +592,7 @@ class YFinanceProvider(PriceDataProvider):
                         logger.warning(f"Found {len(negative_prices)} negative prices in {col} for {symbol}")
                         data.loc[data[col] < 0, col] = pd.NA
 
-            # Validate High-Low relationships
+            # Fix High-Low relationships BEFORE validation
             invalid_hl = data[data['High'] < data['Low']]
             if not invalid_hl.empty:
                 logger.warning(f"Found {len(invalid_hl)} invalid High-Low pairs for {symbol}")
@@ -498,7 +600,7 @@ class YFinanceProvider(PriceDataProvider):
                 data.loc[invalid_hl.index, ['High', 'Low']] = \
                     data.loc[invalid_hl.index, ['Low', 'High']].values
 
-            # Validate High-Low-Open-Close relationships
+            # Fix OHLC relationships BEFORE validation
             invalid_ohlc = data[
                 (data['High'] < data['Open']) |
                 (data['High'] < data['Close']) |
@@ -506,10 +608,20 @@ class YFinanceProvider(PriceDataProvider):
                 (data['Low'] > data['Close'])
             ]
             if not invalid_ohlc.empty:
-                logger.warning(f"Found {len(invalid_ohlc)} invalid OHLC relationships for {symbol}")
+                logger.warning(f"Found {len(invalid_ohlc)} invalid OHLC relationships for {symbol}, fixing...")
                 # Fix by adjusting high/low
                 data.loc[invalid_ohlc.index, 'High'] = data.loc[invalid_ohlc.index, ['Open', 'Close', 'High']].max(axis=1)
                 data.loc[invalid_ohlc.index, 'Low'] = data.loc[invalid_ohlc.index, ['Open', 'Close', 'Low']].min(axis=1)
+
+            # Remove rows with NaN values in critical columns after cleaning
+            before_drop = len(data)
+            data = data.dropna(subset=['Open', 'High', 'Low', 'Close'])
+            if len(data) < before_drop:
+                logger.warning(f"Dropped {before_drop - len(data)} rows with NaN values for {symbol}")
+
+            # NOW validate the cleaned data
+            # Use base class validation for price data
+            self.validate_price_data(data, symbol)
 
             # Add symbol column for multi-symbol datasets
             data['Symbol'] = symbol
@@ -583,3 +695,102 @@ class YFinanceProvider(PriceDataProvider):
         except Exception as e:
             logger.warning(f"Symbol validation failed for {symbol}: {e}")
             return False
+
+    def clear_stock_cache(self, symbol: Optional[str] = None) -> None:
+        """
+        Clear stock data cache.
+
+        Args:
+            symbol: If specified, clear cache for this symbol only;
+                   otherwise clear all cached stock data
+        """
+        # Clear L1 cache (in-memory)
+        if symbol:
+            # Clear cache entries for this symbol
+            keys_to_remove = [
+                key for key in self._cache.keys()
+                if symbol.upper() in key.upper()
+            ]
+            for key in keys_to_remove:
+                del self._cache[key]
+            logger.info(f"Cleared L1 cache for {symbol}")
+        else:
+            self.clear_cache()
+            logger.info("Cleared all L1 cache")
+
+        # Clear L2 cache (disk)
+        if self.enable_disk_cache and self.disk_cache is not None:
+            self.disk_cache.clear(symbol)
+            if symbol:
+                logger.info(f"Cleared L2 cache for {symbol}")
+            else:
+                logger.info("Cleared all L2 cache")
+
+    def get_cache_stats(self) -> Dict[str, Any]:
+        """
+        Get cache statistics.
+
+        Returns:
+            Dictionary with cache statistics for both L1 and L2 caches
+        """
+        stats = {
+            'l1_cache': self.get_cache_info(),
+            'l2_cache_enabled': self.enable_disk_cache
+        }
+
+        if self.enable_disk_cache and self.disk_cache is not None:
+            stats['l2_cache'] = self.disk_cache.get_cache_stats()
+        else:
+            stats['l2_cache'] = None
+
+        return stats
+
+    def warmup_cache(
+        self,
+        symbols: Union[str, List[str]],
+        start_date: Union[str, datetime],
+        end_date: Union[str, datetime] = None
+    ) -> Dict[str, Any]:
+        """
+        Warm up the cache by pre-fetching data for symbols.
+
+        Args:
+            symbols: Single symbol or list of symbols
+            start_date: Start date for data
+            end_date: End date for data (default: today)
+
+        Returns:
+            Dictionary with warmup results
+        """
+        if isinstance(symbols, str):
+            symbols = [symbols]
+
+        if end_date is None:
+            end_date = datetime.now()
+
+        logger.info(f"Warming up cache for {len(symbols)} symbols "
+                   f"from {start_date} to {end_date}")
+
+        results = self.get_historical_data(
+            symbols=symbols,
+            start_date=start_date,
+            end_date=end_date
+        )
+
+        return {
+            'requested_symbols': len(symbols),
+            'cached_symbols': len(results),
+            'success_rate': len(results) / len(symbols) if symbols else 0,
+            'cached_symbol_list': list(results.keys())
+        }
+
+    def clear_invalid_cache(self) -> int:
+        """
+        Clear invalid cache files.
+
+        Returns:
+            Number of invalid cache files cleared
+        """
+        if self.enable_disk_cache and self.disk_cache is not None:
+            return self.disk_cache.clear_invalid_cache()
+        return 0
