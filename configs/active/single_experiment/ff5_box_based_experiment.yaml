@@ -45,10 +45,10 @@ training_setup:
     # Uncomment to load symbols from CSV instead of inline list
     universe:
       source: "csv"
-      csv_path: "./data/universes/merged_tickers.csv"
+      csv_path: "./data/universes/complete_stock_data_converted.csv"
       filters:
         min_market_cap: 1000000000
-        max_stocks: 50
+        max_stocks: 500
         # exclude_sectors: ["Real Estate"]
 
     start_date: "2025-01-01"

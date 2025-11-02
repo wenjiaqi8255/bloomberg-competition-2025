@@ -14,7 +14,7 @@ strategy:
 
   # For single model strategies (ff5, ml)
   parameters:
-    model_id: "ff5_regression_20251023_233648"  # Trained model ID
+    model_id: "ff5_regression_20251024_020851"  # Trained model ID
     model_registry_path: "./models/"
     use_fitted_pipeline: true  # Use the fitted feature pipeline stored with the model
     lookback_days: 252
@@ -43,7 +43,7 @@ universe:
   csv_path: "./data/universes/merged_tickers.csv"
   filters:
     min_market_cap: 1000000000
-    max_stocks: 50
+    max_stocks: 500
     # exclude_sectors: ["Real Estate"]
   symbols: []
   

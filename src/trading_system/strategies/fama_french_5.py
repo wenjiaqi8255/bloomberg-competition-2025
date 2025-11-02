@@ -218,43 +218,77 @@ class FamaFrench5Strategy(BaseStrategy):
         return super().generate_signals(pipeline_data, start_date, end_date)
 
     def _get_predictions(self, features, price_data, start_date, end_date):
-        """
-        FF5预测使用pipeline_data中的factor_data
-        """
-        if not hasattr(self, '_current_pipeline_data'):
-            return super()._get_predictions(features, price_data, start_date, end_date)
+        # """
+        # FF5预测使用pipeline_data中的factor_data
+        # """
+        # if not hasattr(self, '_current_pipeline_data'):
+        #     return super()._get_predictions(features, price_data, start_date, end_date)
         
-        factor_data = self._current_pipeline_data.get('factor_data')
-        if factor_data is None:
-            logger.error("No factor_data in pipeline_data")
-            return pd.DataFrame()
+        # factor_data = self._current_pipeline_data.get('factor_data')
+        # if factor_data is None:
+        #     logger.error("No factor_data in pipeline_data")
+        #     return pd.DataFrame()
+        
+        # current_model = self.model_predictor.get_current_model()
+        # symbols = list(price_data.keys())
+        
+        # predictions_list = []
+        
+        # # 对预测日期范围内的每一天
+        # for date in pd.date_range(start_date, end_date):
+        #     if date not in factor_data.index:
+        #         logger.warning(f"Date {date} not in factor_data")
+        #         continue
+            
+        #     # 获取该日期的因子值
+        #     date_factors = factor_data.loc[[date], ['MKT', 'SMB', 'HML', 'RMW', 'CMA']]
+            
+        #     # 预测
+        #     preds = current_model.predict(date_factors, symbols=symbols)
+            
+        #     if isinstance(preds, np.ndarray):
+        #         preds = pd.Series(preds, index=symbols, name=date)
+            
+        #     predictions_list.append(preds)
+        
+        # if predictions_list:
+        #     return pd.concat(predictions_list, axis=1).T
+        # else:
+        #     return pd.DataFrame()
+        """
+        FF5预测现在直接使用模型的alpha值作为信号。
+        这更符合因子投资的初衷：寻找持续产生超额回报的资产。
+        """
+        logger.info("修正：FF5策略现在使用模型的 Alpha 作为固定信号。")
         
         current_model = self.model_predictor.get_current_model()
-        symbols = list(price_data.keys())
-        
-        predictions_list = []
-        
-        # 对预测日期范围内的每一天
-        for date in pd.date_range(start_date, end_date):
-            if date not in factor_data.index:
-                logger.warning(f"Date {date} not in factor_data")
-                continue
-            
-            # 获取该日期的因子值
-            date_factors = factor_data.loc[[date], ['MKT', 'SMB', 'HML', 'RMW', 'CMA']]
-            
-            # 预测
-            preds = current_model.predict(date_factors, symbols=symbols)
-            
-            if isinstance(preds, np.ndarray):
-                preds = pd.Series(preds, index=symbols, name=date)
-            
-            predictions_list.append(preds)
-        
-        if predictions_list:
-            return pd.concat(predictions_list, axis=1).T
-        else:
+        if not hasattr(current_model, 'get_symbol_alphas'):
+            logger.error("当前模型不支持 get_symbol_alphas 方法，无法获取 Alpha。")
             return pd.DataFrame()
+
+        # 一次性获取所有已训练股票的 alpha 值
+        alphas = current_model.get_symbol_alphas()
+        if not alphas:
+            logger.error("未能从模型中获取任何 Alpha 值。")
+            return pd.DataFrame()
+
+        # 将 alpha 转换为一个 Series，这是我们的信号
+        alpha_signals = pd.Series(alphas)
+
+        # 创建一个符合回测时间范围的 DataFrame
+        # 每一天的信号都是固定不变的 alpha 值
+        date_range = pd.date_range(start_date, end_date, freq='D')
+        predictions_df = pd.DataFrame(index=date_range)
+
+        for symbol, alpha_value in alpha_signals.items():
+            predictions_df[symbol] = alpha_value
+            
+        # 确保返回的 DataFrame 包含正确的股票
+        symbols_in_data = list(price_data.keys())
+        predictions_df = predictions_df.reindex(columns=symbols_in_data).fillna(0.0)
+
+        logger.info(f"成功为 {len(alpha_signals)} 只股票生成了基于 Alpha 的信号。")
+        return predictions_df
 
     def get_info(self) -> Dict:
         """Get Fama-French strategy information."""
