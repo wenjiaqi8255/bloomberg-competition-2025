@@ -132,6 +132,38 @@ def _apply_filters(df: pd.DataFrame, filters: Dict[str, Any]) -> pd.DataFrame:
         regions_set = {str(x).strip().upper() for x in regions}
         result = result[result[reg_col].astype(str).str.strip().str.upper().isin(regions_set)]
 
+    # Box gate by CSV source sheet (ensure per-box coverage using existing CSV metadata)
+    include_boxes = filters.get("include_boxes")
+    if include_boxes:
+        ss_col = "source_sheet" if "source_sheet" in result.columns else None
+        if ss_col is None:
+            raise ValueError("include_boxes provided but CSV lacks 'source_sheet' column")
+
+        # Filter by requested boxes
+        include_set_boxes = {str(x).strip() for x in include_boxes}
+        result = result[result[ss_col].astype(str).str.strip().isin(include_set_boxes)]
+
+        # Optional: select top-N per box by market_cap (fallback: weight)
+        per_box_top_n = int(filters.get("per_box_top_n", 0) or 0)
+        key = _first_present(result, _MARKET_CAP_COLUMNS) or _first_present(result, _WEIGHT_COLUMNS)
+        if per_box_top_n > 0 and key is not None and not result.empty:
+            tmp = result.copy()
+            tmp[key] = pd.to_numeric(tmp[key], errors="coerce")
+            tmp = tmp.sort_values([ss_col, key], ascending=[True, False], kind="mergesort")
+            result = tmp.groupby(ss_col, as_index=False, sort=False).head(per_box_top_n)
+
+        # Fail fast if any targeted box is below minimum required
+        per_box_min_n = int(filters.get("per_box_min_n", 0) or 0)
+        fail_fast = filters.get("fail_fast", True)
+        if per_box_min_n > 0 and fail_fast:
+            counts = result[ss_col].value_counts() if not result.empty else pd.Series(dtype=int)
+            missing = [b for b in include_set_boxes if int(counts.get(b, 0)) < per_box_min_n]
+            if missing:
+                raise ValueError(
+                    f"Universe gate unmet: boxes below per_box_min_n={per_box_min_n}: {missing}. "
+                    "Widen universe.filters or adjust include_boxes/per_box_min_n/per_box_top_n."
+                )
+
     return result
 
 

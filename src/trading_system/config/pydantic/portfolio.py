@@ -165,6 +165,10 @@ class BoxBasedPortfolioConfig(BasePydanticConfig):
         default=None,
         description="Configuration for allocation method (required for mean_variance and optimized)"
     )
+    allocation_scope: Literal["within_box","global"] = Field(
+        default="within_box",
+        description="Global MV across all selected stocks vs within-box allocation"
+    )
     
     # Box configuration
     box_weights: BoxWeightsConfig = Field(description="Box weight configuration")
