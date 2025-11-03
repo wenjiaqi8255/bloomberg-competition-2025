@@ -7,7 +7,8 @@ different implementation approaches.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
+from datetime import datetime
 import pandas as pd
 
 from src.trading_system.portfolio_construction.models.types import PortfolioConstructionRequest, BoxConstructionResult, BoxKey
@@ -146,7 +147,9 @@ class IWithinBoxAllocator(ABC):
 
     @abstractmethod
     def allocate(self, stocks: List[str], total_weight: float,
-                signals: pd.Series) -> Dict[str, float]:
+                signals: pd.Series,
+                price_data: Optional[Dict[str, pd.DataFrame]] = None,
+                date: Optional[datetime] = None) -> Dict[str, float]:
         """
         Allocate weights within a box.
 
@@ -154,6 +157,8 @@ class IWithinBoxAllocator(ABC):
             stocks: List of selected stocks in the box
             total_weight: Total weight allocated to this box
             signals: Signal strengths for all stocks
+            price_data: Optional price data for risk-based allocation methods
+            date: Optional date for data filtering
 
         Returns:
             Dictionary mapping stock symbols to weights within the box

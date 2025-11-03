@@ -324,6 +324,8 @@ class YFinanceProvider(PriceDataProvider):
                                 )
                             if data is not None and not data.empty:
                                 fetched_data_list.append(data)
+                            else:
+                                logger.warning(f"Failed to fetch missing range for {symbol}: {missing_start} to {missing_end}")
                     else:
                         # No cache, fetch full range
                         if period:
@@ -342,8 +344,27 @@ class YFinanceProvider(PriceDataProvider):
                     # Step 4: Combine cached and fetched data
                     if cached_data is not None and not cached_data.empty:
                         # Merge cached data with newly fetched data
+                        # Normalize fetched data before merging to ensure consistent column format
+                        normalized_fetched_list = []
+                        if fetched_data_list:
+                            for fetched_data in fetched_data_list:
+                                # Normalize fetched data to ensure same column structure as cached data
+                                normalized_fetched = self._normalize_yfinance_data(fetched_data, resolved)
+                                normalized_fetched_list.append(normalized_fetched)
+                        
+                        # Ensure all data has same columns before merging
                         all_data = [cached_data]
-                        all_data.extend(fetched_data_list)
+                        all_data.extend(normalized_fetched_list if normalized_fetched_list else fetched_data_list)
+                        
+                        # Align columns to avoid MultiIndex issues when concatenating
+                        common_columns = set(cached_data.columns)
+                        for df in all_data[1:]:
+                            common_columns = common_columns.intersection(set(df.columns))
+                        
+                        # Filter to common columns only
+                        if common_columns:
+                            all_data = [df[[col for col in df.columns if col in common_columns]] for df in all_data]
+                        
                         data = pd.concat(all_data, axis=0)
                         # Remove duplicates (keep last occurrence, which is newer data)
                         data = data[~data.index.duplicated(keep='last')]
@@ -358,8 +379,20 @@ class YFinanceProvider(PriceDataProvider):
                         data = None
 
                     if data is not None and not data.empty:
+                        before_clean_rows = len(data)
+                        before_clean_end = data.index.max()
+                        
                         # Data validation and cleaning using base class method
                         data = self._validate_and_clean_data(data, resolved)
+                        
+                        after_clean_rows = len(data)
+                        after_clean_end = data.index.max() if not data.empty else None
+                        
+                        if before_clean_rows != after_clean_rows:
+                            logger.warning(f"Data rows changed during cleaning for {symbol}: {before_clean_rows} -> {after_clean_rows}")
+                        if before_clean_end and after_clean_end and before_clean_end > after_clean_end:
+                            logger.error(f"⚠️ CRITICAL: Data end date reduced for {symbol} during cleaning: {before_clean_end} -> {after_clean_end}")
+                        
                         data = self.add_data_source_metadata(data)
 
                         # Apply liquidity filtering if configured
@@ -551,7 +584,7 @@ class YFinanceProvider(PriceDataProvider):
             data.columns = data.columns.get_level_values(0)
 
         # Handle multiple symbols data (different structure)
-        elif data.columns.nlevels > 1:
+        elif hasattr(data.columns, 'nlevels') and data.columns.nlevels > 1:
             logger.debug(f"Normalizing multi-symbol data for {symbol}")
             # For multi-symbol data, extract the specific symbol
             if symbol in data.columns.get_level_values(1):
@@ -561,6 +594,8 @@ class YFinanceProvider(PriceDataProvider):
                     if (col, symbol) in data.columns:
                         symbol_data[col] = data[(col, symbol)]
                 data = symbol_data
+            else:
+                logger.warning(f"Symbol {symbol} not found in multi-symbol columns")
 
         return data
 
@@ -615,9 +650,17 @@ class YFinanceProvider(PriceDataProvider):
 
             # Remove rows with NaN values in critical columns after cleaning
             before_drop = len(data)
+            before_drop_end = data.index.max() if not data.empty else None
+            
             data = data.dropna(subset=['Open', 'High', 'Low', 'Close'])
-            if len(data) < before_drop:
-                logger.warning(f"Dropped {before_drop - len(data)} rows with NaN values for {symbol}")
+            
+            after_drop = len(data)
+            after_drop_end = data.index.max() if not data.empty else None
+            
+            if after_drop < before_drop:
+                logger.warning(f"Dropped {before_drop - after_drop} rows with NaN values for {symbol}")
+                if before_drop_end and after_drop_end and before_drop_end > after_drop_end:
+                    logger.error(f"⚠️ CRITICAL: Data end date reduced for {symbol} from {before_drop_end} to {after_drop_end}!")
 
             # NOW validate the cleaned data
             # Use base class validation for price data

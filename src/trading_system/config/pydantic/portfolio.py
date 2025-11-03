@@ -130,6 +130,23 @@ class CovarianceConfig(BaseModel):
         validate_assignment = True
 
 
+class AllocationConfig(BaseModel):
+    """Allocation configuration for within-box weight allocation."""
+    
+    risk_aversion: float = Field(default=2.0, ge=0.1, le=10.0, description="Risk aversion parameter for mean-variance")
+    lookback_days: int = Field(default=252, ge=30, le=1000, description="Lookback period for covariance estimation")
+    covariance_method: Literal["simple", "ledoit_wolf", "factor_model"] = Field(
+        default="ledoit_wolf", 
+        description="Covariance estimation method"
+    )
+    min_regression_obs: int = Field(default=24, ge=10, le=252, description="Minimum observations for factor model regression")
+    min_signal_threshold: float = Field(default=1e-6, ge=0.0, description="Minimum signal threshold for signal_proportional")
+    
+    class Config:
+        extra = "allow"  # Allow extra fields for backward compatibility
+        validate_assignment = True
+
+
 class BoxBasedPortfolioConfig(BasePydanticConfig):
     """
     Box-based portfolio construction configuration.
@@ -140,9 +157,13 @@ class BoxBasedPortfolioConfig(BasePydanticConfig):
     method: Literal["box_based"] = Field(default="box_based", description="Portfolio construction method")
     stocks_per_box: int = Field(ge=1, description="Number of stocks per box")
     min_stocks_per_box: int = Field(ge=1, description="Minimum stocks per box")
-    allocation_method: Literal["equal", "signal_proportional"] = Field(
+    allocation_method: Literal["equal", "signal_proportional", "mean_variance", "optimized"] = Field(
         default="equal", 
         description="Allocation method within boxes"
+    )
+    allocation_config: Optional[AllocationConfig] = Field(
+        default=None,
+        description="Configuration for allocation method (required for mean_variance and optimized)"
     )
     
     # Box configuration
@@ -175,6 +196,12 @@ class BoxBasedPortfolioConfig(BasePydanticConfig):
         # Validate box_weights has dimensions
         if not self.box_weights.dimensions:
             raise ValueError("box_based method requires box_weights.dimensions")
+        
+        # Validate allocation_config is provided for methods that need it
+        if self.allocation_method in ["mean_variance", "optimized"]:
+            if self.allocation_config is None:
+                # Create default allocation_config if not provided
+                self.allocation_config = AllocationConfig()
         
         return self
     

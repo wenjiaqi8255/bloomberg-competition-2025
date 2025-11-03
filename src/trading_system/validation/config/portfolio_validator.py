@@ -130,8 +130,32 @@ class PortfolioConfigValidator(BaseValidator):
         
         # Validate allocation_method
         allocation_method = config.get('allocation_method', 'equal')
-        if allocation_method not in ['equal', 'signal_proportional']:
-            result.add_error(f"Invalid allocation_method '{allocation_method}'. Must be 'equal' or 'signal_proportional'")
+        valid_allocation_methods = ['equal', 'signal_proportional', 'mean_variance', 'optimized']
+        if allocation_method not in valid_allocation_methods:
+            result.add_error(
+                f"Invalid allocation_method '{allocation_method}'. Must be one of: {', '.join(valid_allocation_methods)}"
+            )
+        
+        # Validate allocation_config for methods that require it
+        if allocation_method in ['mean_variance', 'optimized']:
+            allocation_config = config.get('allocation_config')
+            if allocation_config is None:
+                result.add_warning(
+                    f"allocation_method '{allocation_method}' typically requires 'allocation_config'. "
+                    f"Default values will be used if not provided."
+                )
+            elif not isinstance(allocation_config, dict):
+                result.add_error("'allocation_config' must be a dictionary")
+            else:
+                # Validate allocation_config fields for mean_variance
+                if allocation_method == 'mean_variance':
+                    covariance_method = allocation_config.get('covariance_method', 'ledoit_wolf')
+                    valid_covariance_methods = ['simple', 'ledoit_wolf', 'factor_model']
+                    if covariance_method not in valid_covariance_methods:
+                        result.add_error(
+                            f"Invalid covariance_method '{covariance_method}'. "
+                            f"Must be one of: {', '.join(valid_covariance_methods)}"
+                        )
         
         # Validate classifier config if present
         classifier_config = config.get('classifier')

@@ -11,7 +11,8 @@ from .base import BasePydanticConfig
 from .portfolio import (
     PortfolioConstructionConfig,
     BoxBasedPortfolioConfig,
-    QuantitativePortfolioConfig
+    QuantitativePortfolioConfig,
+    AllocationConfig
 )
 
 
@@ -95,6 +96,9 @@ class StrategyConfig(BasePydanticConfig):
                 method = pc_data['method']
                 
                 if method == 'box_based':
+                    # Convert allocation_config dict to AllocationConfig if present
+                    if 'allocation_config' in pc_data and isinstance(pc_data['allocation_config'], dict):
+                        pc_data['allocation_config'] = AllocationConfig(**pc_data['allocation_config'])
                     # Create BoxBasedPortfolioConfig
                     self.portfolio_construction = BoxBasedPortfolioConfig(**pc_data)
                 

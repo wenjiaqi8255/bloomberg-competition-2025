@@ -32,12 +32,14 @@ class PortfolioBuilderFactory:
     """
 
     @staticmethod
-    def create_builder(config: Union[Dict[str, Any], BoxBasedPortfolioConfig, QuantitativePortfolioConfig]) -> IPortfolioBuilder:
+    def create_builder(config: Union[Dict[str, Any], BoxBasedPortfolioConfig, QuantitativePortfolioConfig],
+                      factor_data_provider=None) -> IPortfolioBuilder:
         """
         Create portfolio builder based on configuration.
 
         Args:
             config: Portfolio construction configuration (dict or Pydantic config)
+            factor_data_provider: Optional factor data provider for factor model covariance
 
         Returns:
             Configured portfolio builder
@@ -67,11 +69,11 @@ class PortfolioBuilderFactory:
             # Use type checking for better type safety
             if isinstance(config, BoxBasedPortfolioConfig):
                 logger.info("Creating BoxBasedPortfolioBuilder")
-                return BoxBasedPortfolioBuilder(config_dict)
+                return BoxBasedPortfolioBuilder(config_dict, factor_data_provider=factor_data_provider)
 
             elif isinstance(config, QuantitativePortfolioConfig):
                 logger.info("Creating QuantitativePortfolioBuilder")
-                return QuantitativePortfolioBuilder(config_dict)
+                return QuantitativePortfolioBuilder(config_dict, factor_data_provider=factor_data_provider)
 
             else:
                 # Fallback to method-based dispatch for dict configs
@@ -79,11 +81,11 @@ class PortfolioBuilderFactory:
                 
                 if method == 'quantitative':
                     logger.info("Creating QuantitativePortfolioBuilder")
-                    return QuantitativePortfolioBuilder(config_dict)
+                    return QuantitativePortfolioBuilder(config_dict, factor_data_provider=factor_data_provider)
 
                 elif method == 'box_based':
                     logger.info("Creating BoxBasedPortfolioBuilder")
-                    return BoxBasedPortfolioBuilder(config_dict)
+                    return BoxBasedPortfolioBuilder(config_dict, factor_data_provider=factor_data_provider)
 
                 else:
                     raise InvalidConfigError(

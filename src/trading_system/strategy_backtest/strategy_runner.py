@@ -385,7 +385,10 @@ class StrategyRunner:
             return
             
         # Create portfolio builder using factory
-        self.portfolio_builder = PortfolioBuilderFactory.create_builder(portfolio_construction_config)
+        self.portfolio_builder = PortfolioBuilderFactory.create_builder(
+            portfolio_construction_config,
+            factor_data_provider=self.factor_data_provider
+        )
         method = getattr(portfolio_construction_config, 'method', 'unknown')
         logger.info(f"✅ Initialized portfolio builder with method: {method}")
 

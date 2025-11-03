@@ -82,14 +82,16 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
     4. Distribute weights within boxes
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], factor_data_provider=None):
         """
         Initialize Box-Based portfolio builder.
 
         Args:
             config: Configuration dictionary for box-based construction
+            factor_data_provider: Optional factor data provider for factor model covariance
         """
         self.config = config
+        self.factor_data_provider = factor_data_provider
         self._initialize_components()
         self._validate_configuration()
 
@@ -121,8 +123,15 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
 
         # Weight allocation
         allocation_method = self.config.get('allocation_method', 'equal')
-        allocation_config = self.config.get('allocation_config', {})
-        self.weight_allocator = WeightAllocatorFactory.create_allocator(allocation_method, allocation_config)
+        allocation_config = self.config.get('allocation_config', {}) or {}
+        # Convert Pydantic model to dict if needed
+        if hasattr(allocation_config, 'model_dump'):
+            allocation_config = allocation_config.model_dump()
+        elif not isinstance(allocation_config, dict):
+            allocation_config = {}
+        self.weight_allocator = WeightAllocatorFactory.create_allocator(
+            allocation_method, allocation_config, factor_data_provider=self.factor_data_provider
+        )
 
         # Box selector (can be overridden via config)
         self.box_selector = SignalBasedBoxSelector()
@@ -190,7 +199,7 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
             # Step 3: Select stocks and allocate weights within boxes
             logger.info("[Step 3/4] Selecting stocks and allocating weights...")
             final_weights, box_results = self._construct_from_boxes(
-                box_stocks, request.signals, request.date
+                box_stocks, request.signals, request.price_data, request.date
             )
             construction_log.extend(box_results['log'])
 
@@ -286,13 +295,15 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
             raise ClassificationError("Stock classification failed", str(e))
 
     def _construct_from_boxes(self, box_stocks: Dict[BoxKey, List[str]],
-                            signals: pd.Series, date: datetime) -> tuple[Dict[str, float], Dict[str, Any]]:
+                            signals: pd.Series, price_data: Dict[str, pd.DataFrame],
+                            date: datetime) -> tuple[Dict[str, float], Dict[str, Any]]:
         """
         Construct portfolio by processing each box.
 
         Args:
             box_stocks: Dictionary mapping boxes to available stocks
             signals: Signal strengths for all stocks
+            price_data: Price data for all stocks
             date: Construction date
 
         Returns:
@@ -313,7 +324,9 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
 
         for box_key in available_boxes:
             try:
-                box_result = self._process_single_box(box_key, box_stocks.get(box_key, []), signals)
+                box_result = self._process_single_box(
+                    box_key, box_stocks.get(box_key, []), signals, price_data, date
+                )
 
                 if box_result['weights']:
                     final_weights.update(box_result['weights'])
@@ -336,7 +349,8 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
         return final_weights, box_results
 
     def _process_single_box(self, box_key: BoxKey, candidate_stocks: List[str],
-                           signals: pd.Series) -> Dict[str, Any]:
+                           signals: pd.Series, price_data: Dict[str, pd.DataFrame],
+                           date: datetime) -> Dict[str, Any]:
         """
         Process a single box: select stocks and allocate weights.
 
@@ -344,6 +358,8 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
             box_key: Box to process
             candidate_stocks: Available stocks in the box
             signals: Signal strengths for all stocks
+            price_data: Price data for all stocks
+            date: Construction date
 
         Returns:
             Dictionary with processing results
@@ -390,7 +406,9 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
 
         # Allocate weights within the box
         try:
-            stock_weights = self.weight_allocator.allocate(selected_stocks, target_weight, signals)
+            stock_weights = self.weight_allocator.allocate(
+                selected_stocks, target_weight, signals, price_data, date
+            )
 
             # Log detailed weight allocation
             logger.info(f"   💰 Box weight: {target_weight:.4f} ({target_weight*100:.2f}%)")

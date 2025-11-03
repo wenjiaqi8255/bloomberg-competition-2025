@@ -412,7 +412,10 @@ class PredictionOrchestrator:
         """
         # Create portfolio builder via factory
         portfolio_config = self.config['portfolio_construction']
-        builder = PortfolioBuilderFactory.create_builder(portfolio_config)
+        builder = PortfolioBuilderFactory.create_builder(
+            portfolio_config,
+            factor_data_provider=self.factor_data_provider
+        )
         
         # Get latest signals as Series
         latest_signals = signals.iloc[-1] if not signals.empty else pd.Series()

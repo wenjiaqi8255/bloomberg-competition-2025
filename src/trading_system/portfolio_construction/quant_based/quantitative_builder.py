@@ -20,7 +20,11 @@ from src.trading_system.portfolio_construction.models.exceptions import (
 )
 from src.trading_system.optimization.optimizer import PortfolioOptimizer
 from src.trading_system.data.stock_classifier import StockClassifier
-from src.trading_system.utils.risk import LedoitWolfCovarianceEstimator
+from src.trading_system.utils.risk import (
+    LedoitWolfCovarianceEstimator,
+    SimpleCovarianceEstimator,
+    FactorModelCovarianceEstimator
+)
 from src.trading_system.data.box_sampling_provider import BoxSamplingProvider
 
 logger = logging.getLogger(__name__)
@@ -42,14 +46,16 @@ class QuantitativePortfolioBuilder(IPortfolioBuilder):
     providing optional box-aware enhancements.
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], factor_data_provider=None):
         """
         Initialize quantitative portfolio builder.
 
         Args:
             config: Configuration for quantitative construction
+            factor_data_provider: Optional factor data provider for factor model covariance
         """
         self.config = config
+        self.factor_data_provider = factor_data_provider
         self._initialize_components()
         self._validate_configuration()
 
@@ -71,7 +77,25 @@ class QuantitativePortfolioBuilder(IPortfolioBuilder):
         # Covariance estimator
         cov_config = self.config.get('covariance', {})
         lookback_days = cov_config.get('lookback_days', 252)
-        self.covariance_estimator = LedoitWolfCovarianceEstimator(lookback_days=lookback_days)
+        covariance_method = cov_config.get('method', 'ledoit_wolf')
+        
+        if covariance_method == 'factor_model':
+            if self.factor_data_provider is None:
+                logger.warning("factor_model requires factor_data_provider, falling back to ledoit_wolf")
+                self.covariance_estimator = LedoitWolfCovarianceEstimator(lookback_days=lookback_days)
+            else:
+                min_regression_obs = cov_config.get('min_regression_obs', 24)
+                self.covariance_estimator = FactorModelCovarianceEstimator(
+                    factor_data_provider=self.factor_data_provider,
+                    lookback_days=lookback_days,
+                    min_regression_obs=min_regression_obs
+                )
+                logger.info(f"Using FactorModelCovarianceEstimator with {lookback_days} days lookback")
+        elif covariance_method == 'simple':
+            self.covariance_estimator = SimpleCovarianceEstimator(lookback_days=lookback_days)
+        else:
+            # Default to Ledoit-Wolf
+            self.covariance_estimator = LedoitWolfCovarianceEstimator(lookback_days=lookback_days)
 
         # Stock classifier for box constraints
         classifier_config = self.config.get('classifier', {})

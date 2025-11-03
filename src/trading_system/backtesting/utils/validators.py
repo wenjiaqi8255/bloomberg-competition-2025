@@ -248,17 +248,25 @@ def align_data_periods(strategy_signals: Dict[datetime, List[Any]],
 
     # Filter signals to only include dates with price data
     aligned_signals = {}
+    filtered_count = 0
+    
     for signal_date, signals in strategy_signals.items():
         date_to_check = signal_date.date() if hasattr(signal_date, 'date') else signal_date
 
         if date_to_check in normalized_dates:
             aligned_signals[signal_date] = signals
         else:
-            logger.debug(f"Filtering out signal date {signal_date} - no price data available")
-
-    filtered_count = len(strategy_signals) - len(aligned_signals)
+            filtered_count += 1
+            if filtered_count <= 5:  # Only log first 5 filtered dates to avoid spam
+                logger.debug(f"Filtering out signal date {signal_date} (checked as {date_to_check}) - no price data available")
+    
     if filtered_count > 0:
-        logger.info(f"Filtered out {filtered_count} signal dates due to missing price data")
+        logger.warning(f"Filtered out {filtered_count}/{len(strategy_signals)} signal dates due to missing price data")
+        if len(aligned_signals) == 0 and len(strategy_signals) > 0:
+            signal_date_list = sorted([d.date() if hasattr(d, 'date') else d for d in strategy_signals.keys()])
+            logger.error(f"⚠️ CRITICAL: All {len(strategy_signals)} signal dates were filtered out!")
+            logger.error(f"Signal dates sample: {signal_date_list[:5]}")
+            logger.error(f"Price dates sample: {sorted(normalized_dates)[:5] if normalized_dates else 'N/A'}")
 
     return aligned_signals
 
@@ -280,14 +288,34 @@ def clean_price_data(price_data: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFr
             # Make a copy to avoid modifying original data
             cleaned = data.copy()
 
+            # Remove metadata columns before cleaning (they shouldn't affect price data validation)
+            metadata_columns = ['DataSource', 'Provider', 'FetchTime', 'Symbol']
+            cleaned_metadata = {}
+            for col in metadata_columns:
+                if col in cleaned.columns:
+                    cleaned_metadata[col] = cleaned[col]
+                    cleaned = cleaned.drop(columns=[col])
+
+            # Forward fill missing values in price columns only
+            price_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+            existing_price_cols = [col for col in price_columns if col in cleaned.columns]
+            
+            if not existing_price_cols:
+                logger.warning(f"No price columns found for {symbol}")
+                continue
+
             # Forward fill missing values
-            cleaned = cleaned.ffill()
+            cleaned[existing_price_cols] = cleaned[existing_price_cols].ffill()
 
             # Backward fill any remaining NaN at the beginning
-            cleaned = cleaned.bfill()
+            cleaned[existing_price_cols] = cleaned[existing_price_cols].bfill()
 
-            # Remove any remaining NaN rows
-            cleaned = cleaned.dropna()
+            # Remove any remaining NaN rows (only check price columns)
+            initial_len = len(cleaned)
+            cleaned = cleaned.dropna(subset=existing_price_cols)
+            
+            if len(cleaned) < initial_len:
+                logger.debug(f"Removed {initial_len - len(cleaned)} rows with NaN in price columns for {symbol}")
 
             # Ensure data is sorted by date
             cleaned = cleaned.sort_index()
@@ -297,7 +325,7 @@ def clean_price_data(price_data: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFr
                 cleaned_data[symbol] = cleaned
                 logger.debug(f"Cleaned {symbol}: {len(data)} -> {len(cleaned)} rows")
             else:
-                logger.warning(f"All data removed during cleaning for {symbol}")
+                logger.warning(f"All data removed during cleaning for {symbol} - possibly no data in backtest date range")
 
         except Exception as e:
             logger.error(f"Error cleaning price data for {symbol}: {e}")
