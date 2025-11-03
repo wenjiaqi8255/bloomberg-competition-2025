@@ -525,7 +525,7 @@ class StrategyRunner:
                 universe=universe,
                 start_date=backtest_config.start_date,
                 end_date=backtest_config.end_date,
-                benchmark_symbol=backtest_config.benchmark_symbol
+                backtest_config=backtest_config
             )
 
             # Log data statistics
@@ -732,7 +732,7 @@ class StrategyRunner:
             logger.error(f"Failed to create enhanced backtest charts: {e}")
 
     def _fetch_data(self, universe: List[str], start_date: datetime,
-                   end_date: datetime, benchmark_symbol: str) -> tuple:
+                   end_date: datetime, backtest_config) -> tuple:
         """
         Fetch price data for asset universe and benchmark.
 
@@ -740,7 +740,7 @@ class StrategyRunner:
             universe: List of asset tickers
             start_date: Start date for data fetch
             end_date: End date for data fetch
-            benchmark_symbol: Benchmark symbol
+            backtest_config: BacktestConfig object containing benchmark configuration
 
         Returns:
             Tuple of (price_data_dict, benchmark_dataframe)
@@ -778,17 +778,61 @@ class StrategyRunner:
             raise ValueError("Failed to fetch price data")
 
         # Fetch benchmark data
+        # Priority: benchmark config > benchmark_symbol (backward compatible)
         benchmark_data = None
-        if benchmark_symbol and benchmark_symbol in valid_symbols:
-            benchmark_data = price_data[benchmark_symbol]
-        elif benchmark_symbol:
-            # Fetch benchmark separately if not in universe
-            benchmark_data_dict = self.data_provider.get_historical_data(
-                symbols=[benchmark_symbol],
-                start_date=start_date,
-                end_date=end_date
-            )
-            benchmark_data = benchmark_data_dict.get(benchmark_symbol)
+        
+        if backtest_config.benchmark:
+            # Use benchmark configuration (CSV or symbol)
+            benchmark_config = backtest_config.benchmark
+            
+            if benchmark_config.source == "csv":
+                # Load from CSV file
+                from ...trading_system.data.utils.benchmark_loader import load_benchmark_from_csv
+                
+                if not benchmark_config.csv_path:
+                    logger.warning("benchmark.csv_path not specified, skipping CSV benchmark")
+                else:
+                    try:
+                        benchmark_data = load_benchmark_from_csv(
+                            csv_path=benchmark_config.csv_path,
+                            start_date=start_date,
+                            end_date=end_date
+                        )
+                        if benchmark_data is not None:
+                            logger.info(f"Loaded benchmark from CSV: {benchmark_config.csv_path}")
+                        else:
+                            logger.warning(f"Failed to load benchmark from CSV: {benchmark_config.csv_path}")
+                    except Exception as e:
+                        logger.error(f"Error loading benchmark from CSV: {e}")
+                        
+            elif benchmark_config.source == "symbol":
+                # Use symbol from benchmark config or fallback to benchmark_symbol
+                benchmark_symbol = benchmark_config.symbol or backtest_config.benchmark_symbol
+                
+                if benchmark_symbol and benchmark_symbol in valid_symbols:
+                    benchmark_data = price_data[benchmark_symbol]
+                elif benchmark_symbol:
+                    # Fetch benchmark separately if not in universe
+                    benchmark_data_dict = self.data_provider.get_historical_data(
+                        symbols=[benchmark_symbol],
+                        start_date=start_date,
+                        end_date=end_date
+                    )
+                    benchmark_data = benchmark_data_dict.get(benchmark_symbol)
+                    
+        elif backtest_config.benchmark_symbol:
+            # Backward compatible: use benchmark_symbol string
+            benchmark_symbol = backtest_config.benchmark_symbol
+            if benchmark_symbol in valid_symbols:
+                benchmark_data = price_data[benchmark_symbol]
+            else:
+                # Fetch benchmark separately if not in universe
+                benchmark_data_dict = self.data_provider.get_historical_data(
+                    symbols=[benchmark_symbol],
+                    start_date=start_date,
+                    end_date=end_date
+                )
+                benchmark_data = benchmark_data_dict.get(benchmark_symbol)
 
         logger.info(f"Successfully fetched data for {len(price_data)} symbols")
         return price_data, benchmark_data

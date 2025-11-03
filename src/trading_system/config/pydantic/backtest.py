@@ -11,6 +11,36 @@ from pydantic import BaseModel, Field, field_validator
 from .base import BasePydanticConfig
 
 
+class BenchmarkConfig(BaseModel):
+    """
+    Benchmark configuration for backtesting.
+    
+    Supports loading benchmark from CSV file or using a symbol from data provider.
+    Similar pattern to universe configuration for consistency.
+    """
+    
+    source: Literal["csv", "symbol"] = Field(
+        description="Benchmark data source: 'csv' for CSV file, 'symbol' for data provider"
+    )
+    csv_path: Optional[str] = Field(
+        default=None,
+        description="Path to CSV file when source='csv'"
+    )
+    symbol: Optional[str] = Field(
+        default=None,
+        description="Symbol name when source='symbol' (falls back to benchmark_symbol if not set)"
+    )
+    
+    @field_validator('csv_path')
+    @classmethod
+    def validate_csv_path(cls, v, info):
+        """Validate csv_path is provided when source is 'csv'."""
+        if hasattr(info, 'data') and info.data.get('source') == 'csv':
+            if not v:
+                raise ValueError("csv_path is required when source='csv'")
+        return v
+
+
 class BacktestConfig(BasePydanticConfig):
     """
     Backtest configuration.
@@ -23,8 +53,15 @@ class BacktestConfig(BasePydanticConfig):
     end_date: datetime = Field(description="Backtest end date")
     initial_capital: float = Field(gt=0, description="Initial capital amount")
     
-    # Benchmark
-    benchmark_symbol: Optional[str] = Field(default=None, description="Benchmark symbol")
+    # Benchmark (backward compatible)
+    benchmark_symbol: Optional[str] = Field(
+        default=None,
+        description="Benchmark symbol (backward compatible, use 'benchmark' config for CSV support)"
+    )
+    benchmark: Optional[BenchmarkConfig] = Field(
+        default=None,
+        description="Benchmark configuration (CSV or symbol source). Takes precedence over benchmark_symbol"
+    )
     
     # Transaction costs
     commission_rate: float = Field(ge=0, le=0.01, default=0.001, description="Commission rate")

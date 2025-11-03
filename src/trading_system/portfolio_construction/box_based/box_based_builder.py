@@ -139,6 +139,9 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
         # Centralized constraints
         self.constraints = self.config.get('constraints', {})
 
+        # Allocation scope: 'within_box' (default, existing behavior) or 'global'
+        self.allocation_scope = self.config.get('allocation_scope', 'within_box')
+
     def _validate_configuration(self) -> None:
         """Validate builder configuration."""
         # Validate box weight manager
@@ -196,11 +199,16 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
             
             # Continue with available boxes instead of failing on partial coverage
 
-            # Step 3: Select stocks and allocate weights within boxes
+            # Step 3: Select stocks and allocate weights
             logger.info("[Step 3/4] Selecting stocks and allocating weights...")
-            final_weights, box_results = self._construct_from_boxes(
-                box_stocks, request.signals, request.price_data, request.date
-            )
+            if self.allocation_scope == 'global':
+                final_weights, box_results = self._construct_global_allocation(
+                    box_stocks, request.signals, request.price_data, request.date
+                )
+            else:
+                final_weights, box_results = self._construct_from_boxes(
+                    box_stocks, request.signals, request.price_data, request.date
+                )
             construction_log.extend(box_results['log'])
 
             # Step 4: Normalize final weights
@@ -347,6 +355,98 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
                                    f"selected {box_results['total_stocks_selected']} stocks")
 
         return final_weights, box_results
+
+    def _construct_global_allocation(self, box_stocks: Dict[BoxKey, List[str]],
+                                     signals: pd.Series, price_data: Dict[str, pd.DataFrame],
+                                     date: datetime) -> tuple[Dict[str, float], Dict[str, Any]]:
+        """
+        Box 仅用于筛选，汇总所有选中的股票后执行一次全局均值方差优化。
+        """
+        construction_log = []
+
+        # 1) 每个 box 内按已有 selector 选股（不在 box 内分配权重）
+        selected_all: List[str] = []
+        for box_key, candidates in box_stocks.items():
+            if len(candidates) < self.min_stocks_per_box:
+                construction_log.append(f"Skipped box {box_key}: insufficient stocks")
+                continue
+            selected = self.box_selector.select_stocks(candidates, signals, self.stocks_per_box)
+            if selected:
+                selected_all.extend(selected)
+                construction_log.append(f"Box {box_key}: selected {len(selected)} stocks")
+            else:
+                construction_log.append(f"Box {box_key}: no selection")
+
+        # 去重，保持顺序
+        if selected_all:
+            seen = set()
+            selected_all = [s for s in selected_all if not (s in seen or seen.add(s))]
+
+        if len(selected_all) < 2:
+            return {}, {'log': construction_log + ["Not enough stocks for global optimization"]}
+
+        # 2) 期望收益（用 signals）
+        import pandas as _pd
+        expected_returns = _pd.Series({s: signals.get(s, 0.0) for s in selected_all})
+
+        # 3) 简单协方差估计：从 price_data 计算历史收益协方差
+        returns_series_list = []
+        for s in selected_all:
+            df = price_data.get(s)
+            if df is None or df.empty:
+                continue
+            try:
+                px = df.sort_index()
+                # 兼容不同列名，优先使用 'Close'
+                if 'Close' in px.columns:
+                    ret = px['Close'].pct_change().dropna()
+                else:
+                    # 使用第一列作为价格列的保守回退
+                    first_col = px.columns[0]
+                    ret = px[first_col].pct_change().dropna()
+                returns_series_list.append(ret.rename(s))
+            except Exception:
+                continue
+
+        if not returns_series_list:
+            return {}, {'log': construction_log + ["No price data for covariance"]}
+
+        ret_df = _pd.concat(returns_series_list, axis=1).dropna()
+        if ret_df.shape[1] < 2:
+            return {}, {'log': construction_log + ["Insufficient assets for covariance"]}
+
+        cov = ret_df.cov()
+
+        # 对齐索引，避免不一致
+        common = expected_returns.index.intersection(cov.index)
+        if len(common) < 2:
+            return {}, {'log': construction_log + ["Insufficient overlapping assets for optimization"]}
+        expected_returns = expected_returns.loc[common]
+        cov = cov.loc[common, common]
+
+        # 4) 全局优化（无 box 权重约束）
+        from src.trading_system.optimization.optimizer import PortfolioOptimizer
+        risk_aversion = 2.0
+        alloc_cfg = self.config.get('allocation_config', {}) or {}
+        if isinstance(alloc_cfg, dict):
+            risk_aversion = alloc_cfg.get('risk_aversion', risk_aversion)
+
+        optimizer = PortfolioOptimizer({
+            'method': 'mean_variance',
+            'risk_aversion': risk_aversion,
+            'enable_short_selling': False,
+            'max_position_weight': self.constraints.get('max_position_weight')
+        })
+
+        constraints: List[Dict[str, Any]] = []
+        optimal = optimizer.optimize(
+            expected_returns=expected_returns,
+            cov_matrix=cov,
+            constraints=constraints
+        )
+
+        weights = optimal.to_dict()
+        return weights, {'log': construction_log + [f"Global MV optimized {len(weights)} positions"]}
 
     def _process_single_box(self, box_key: BoxKey, candidate_stocks: List[str],
                            signals: pd.Series, price_data: Dict[str, pd.DataFrame],
