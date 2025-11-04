@@ -156,6 +156,14 @@ class StrategyFactory:
         # Extract strategy-specific parameters
         strategy_params = cls._extract_strategy_params(strategy_type, config)
         
+        # Also include any remaining config parameters that weren't extracted
+        # This ensures alpha_significance and other configs are passed through
+        for key, value in config.items():
+            if key not in ['type', 'name', 'model_id', 'feature_config', 'position_sizing', 
+                          'investment_framework', 'model_config', 'model_registry_path', 
+                          'model_path', 'use_fitted_pipeline'] and key not in strategy_params:
+                strategy_params[key] = value
+        
         # Extract data providers from kwargs to pass to strategy
         # (providers dict was already extracted in Step 1)
         data_provider = providers.get('data_provider')
@@ -460,6 +468,9 @@ class StrategyFactory:
         elif strategy_type in ['fama_french_5', 'ff5_regression', 'fama_french_3', 'ff3_regression']:
             params['lookback_days'] = config.get('lookback_days', 252)
             params['risk_free_rate'] = config.get('risk_free_rate', 0.02)
+            # Extract alpha_significance config if present
+            if 'alpha_significance' in config:
+                params['alpha_significance'] = config['alpha_significance']
         
         return params
 

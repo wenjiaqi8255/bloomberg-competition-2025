@@ -46,6 +46,7 @@ class StrategyConfig(BasePydanticConfig):
     
     # Constraints and parameters
     constraints: Optional[Dict[str, Any]] = Field(default=None, description="Strategy constraints")
+    parameters: Dict[str, Any] = Field(default_factory=dict, description="Strategy parameters including alpha_significance")
     
     class Config:
         extra = "allow"  # Allow extra fields for backward compatibility
