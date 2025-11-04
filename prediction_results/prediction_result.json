@@ -1,0 +1,379 @@
+{
+  "metadata": {
+    "strategy_type": "fama_french_5",
+    "model_id": "ff5_regression_20251103_161033",
+    "prediction_date": "2025-08-28T00:00:00",
+    "total_positions": 8,
+    "portfolio_method": "box_based",
+    "is_meta_model": false
+  },
+  "model_info": {
+    "base_model_ids": null,
+    "model_weights": null
+  },
+  "recommendations": [
+    {
+      "symbol": "1969.HK",
+      "weight": 0.9999899999999982,
+      "signal_strength": 0.0958642301523715,
+      "risk_score": 0.04793211507618575,
+      "box_classification": "small_neutral_emerging"
+    },
+    {
+      "symbol": "PLTR",
+      "weight": 1.0000000001744706e-05,
+      "signal_strength": 0.04850505235324216,
+      "risk_score": 0.02425252617662108,
+      "box_classification": "mid_growth_developed"
+    },
+    {
+      "symbol": "NVDA",
+      "weight": 9.151025693777084e-17,
+      "signal_strength": 0.02241355845852467,
+      "risk_score": 0.011206779229262335,
+      "box_classification": "large_growth_developed"
+    },
+    {
+      "symbol": "3750.HK",
+      "weight": 2.8660577818371554e-17,
+      "signal_strength": 0.0,
+      "risk_score": 0.0,
+      "box_classification": "large_growth_emerging"
+    },
+    {
+      "symbol": "00680K.KS",
+      "weight": 1.099561578844127e-17,
+      "signal_strength": 0.01909299031509488,
+      "risk_score": 0.00954649515754744,
+      "box_classification": "large_growth_developed"
+    },
+    {
+      "symbol": "0272.HK",
+      "weight": 1.0533929727300746e-17,
+      "signal_strength": 0.0,
+      "risk_score": 0.0,
+      "box_classification": "small_value_emerging"
+    },
+    {
+      "symbol": "3968.HK",
+      "weight": 1.0192091415098685e-17,
+      "signal_strength": 0.016280280642525912,
+      "risk_score": 0.008140140321262956,
+      "box_classification": "mid_neutral_emerging"
+    },
+    {
+      "symbol": "BREN.JK",
+      "weight": 5.246380641356615e-18,
+      "signal_strength": 0.0,
+      "risk_score": 0.0,
+      "box_classification": "large_growth_emerging"
+    }
+  ],
+  "portfolio_weights": {
+    "NVDA": 9.151025693777084e-17,
+    "00680K.KS": 1.099561578844127e-17,
+    "PLTR": 1.0000000001744706e-05,
+    "3750.HK": 2.8660577818371554e-17,
+    "BREN.JK": 5.246380641356615e-18,
+    "3968.HK": 1.0192091415098685e-17,
+    "1969.HK": 0.9999899999999982,
+    "0272.HK": 1.0533929727300746e-17
+  },
+  "box_details": {
+    "box_allocations": {
+      "large_growth_developed": 1.0,
+      "large_growth_emerging": 1.0,
+      "large_neutral_developed": 1.0,
+      "large_neutral_emerging": 1.0,
+      "large_value_developed": 1.0,
+      "large_value_emerging": 1.0,
+      "mid_growth_developed": 1.0,
+      "mid_growth_emerging": 1.0,
+      "mid_neutral_developed": 1.0,
+      "mid_neutral_emerging": 1.0,
+      "mid_value_developed": 1.0,
+      "mid_value_emerging": 1.0,
+      "small_growth_developed": 1.0,
+      "small_growth_emerging": 1.0,
+      "small_neutral_developed": 1.0,
+      "small_neutral_emerging": 1.0,
+      "small_value_developed": 1.0,
+      "small_value_emerging": 1.0
+    },
+    "stocks_by_box": {
+      "large_growth_developed": [
+        "NVDA",
+        "MSFT",
+        "AAPL",
+        "GOOGL",
+        "GOOG",
+        "AMZN",
+        "META",
+        "2330.TW",
+        "034730.KS",
+        "024110.KS",
+        "00680K.KS"
+      ],
+      "large_neutral_developed": [
+        "AVGO",
+        "7203.T",
+        "8316.T",
+        "8411.T",
+        "8697.T",
+        "9532.T"
+      ],
+      "mid_growth_developed": [
+        "TSLA",
+        "ORCL",
+        "WMT",
+        "LLY",
+        "V",
+        "NFLX",
+        "MA",
+        "PLTR",
+        "COST",
+        "HD",
+        "SHEL.L",
+        "NG.L",
+        "BARC.L",
+        "LLOY.L",
+        "NWG.L",
+        "ATI",
+        "LITE",
+        "IONS",
+        "AAF.L",
+        "STRL",
+        "PCOR",
+        "QAN.AX",
+        "2455.TW",
+        "229640.KS",
+        "082640.KS"
+      ],
+      "mid_neutral_developed": [
+        "JNJ",
+        "CMCSA",
+        "TXRH",
+        "EXAS",
+        "JKHY",
+        "AYI",
+        "METSO.HE",
+        "MLI",
+        "COKE",
+        "DAY",
+        "JEF",
+        "0316.HK",
+        "AGNC",
+        "1303.TW",
+        "2467.TW",
+        "1514.TW",
+        "3778.T",
+        "9010.T",
+        "7611.T",
+        "6703.T",
+        "9068.T",
+        "073240.KS",
+        "2319.HK"
+      ],
+      "mid_value_developed": [
+        "C",
+        "TTE.PA",
+        "BNP.PA",
+        "DBK.DE",
+        "MBG.DE",
+        "BMW.DE",
+        "BMW3.DE",
+        "ACA.PA",
+        "RBI.VI",
+        "0019.HK",
+        "0087.HK",
+        "9104.T",
+        "3407.T",
+        "8388.T",
+        "8386.T",
+        "1314.TW",
+        "6804.T",
+        "2501.TW",
+        "9678.T"
+      ],
+      "small_growth_developed": [
+        "ORNBV.HE",
+        "DTL.AX",
+        "ALFA.L",
+        "007390.KS",
+        "TROAX.ST",
+        "060370.KS",
+        "096530.KS"
+      ],
+      "small_neutral_developed": [
+        "KNSL",
+        "POOL",
+        "FDS",
+        "LI.PA",
+        "MRNA",
+        "NAN.AX",
+        "MCAP.ST",
+        "SYNSAM.ST",
+        "NGVC",
+        "OSBC",
+        "SCSC",
+        "BHRB"
+      ],
+      "large_value_developed": [
+        "8593.T"
+      ],
+      "small_value_developed": [
+        "CA.PA",
+        "DWNI.DE",
+        "PR",
+        "IVZ",
+        "OPFI",
+        "SVEAF.ST",
+        "HMC.AX",
+        "EVH",
+        "AGR.VI",
+        "NEXA"
+      ],
+      "large_neutral_emerging": [
+        "0700.HK",
+        "600519.SS",
+        "300750.SZ",
+        "601857.SS",
+        "CLEO.JK"
+      ],
+      "large_growth_emerging": [
+        "3750.HK",
+        "BREN.JK",
+        "NICL.JK",
+        "INDY.JK"
+      ],
+      "mid_growth_emerging": [
+        "601138.SS",
+        "MELI",
+        "9633.HK",
+        "688041.SS",
+        "NU",
+        "688256.SS",
+        "600536.SS",
+        "300661.SZ",
+        "300857.SZ",
+        "688331.SS",
+        "9995.HK"
+      ],
+      "mid_neutral_emerging": [
+        "1810.HK",
+        "601899.SS",
+        "2899.HK",
+        "9999.HK",
+        "3968.HK",
+        "2628.HK",
+        "601318.SS",
+        "2318.HK",
+        "600588.SS",
+        "002517.SZ",
+        "601777.SS",
+        "688122.SS",
+        "300832.SZ",
+        "301236.SZ",
+        "0268.HK",
+        "2367.HK",
+        "601808.SS",
+        "601555.SS",
+        "600918.SS",
+        "600219.SS",
+        "600745.SS"
+      ],
+      "large_value_emerging": [
+        "601398.SS",
+        "1398.HK",
+        "601288.SS",
+        "1288.HK",
+        "601939.SS",
+        "0939.HK",
+        "601988.SS",
+        "3988.HK",
+        "0857.HK",
+        "AUTO.JK"
+      ],
+      "mid_value_emerging": [
+        "600036.SS",
+        "601658.SS",
+        "1658.HK",
+        "600028.SS",
+        "0386.HK",
+        "601328.SS",
+        "1099.HK",
+        "2883.HK",
+        "600061.SS"
+      ],
+      "small_growth_emerging": [
+        "INVP.L",
+        "2410.HK"
+      ],
+      "small_neutral_emerging": [
+        "9669.HK",
+        "1969.HK",
+        "3709.HK"
+      ],
+      "small_value_emerging": [
+        "1108.HK",
+        "0272.HK",
+        "QD"
+      ]
+    },
+    "construction_log": [
+      "Box-Based construction completed"
+    ]
+  },
+  "risk_metrics": {
+    "expected_return": 24.15766665326954,
+    "expected_risk": 0.19999800000999976,
+    "diversification_score": 0.8
+  },
+  "summary": {
+    "strategy_type": "fama_french_5",
+    "model_id": "ff5_regression_20251103_161033",
+    "prediction_date": "2025-08-28T00:00:00",
+    "total_positions": 8,
+    "portfolio_method": "box_based",
+    "expected_return": 24.15766665326954,
+    "expected_risk": 0.19999800000999976,
+    "diversification_score": 0.8,
+    "is_meta_model": false,
+    "base_model_ids": null,
+    "model_weights": null,
+    "box_allocations": {
+      "large_growth_developed": 1.0,
+      "large_growth_emerging": 1.0,
+      "large_neutral_developed": 1.0,
+      "large_neutral_emerging": 1.0,
+      "large_value_developed": 1.0,
+      "large_value_emerging": 1.0,
+      "mid_growth_developed": 1.0,
+      "mid_growth_emerging": 1.0,
+      "mid_neutral_developed": 1.0,
+      "mid_neutral_emerging": 1.0,
+      "mid_value_developed": 1.0,
+      "mid_value_emerging": 1.0,
+      "small_growth_developed": 1.0,
+      "small_growth_emerging": 1.0,
+      "small_neutral_developed": 1.0,
+      "small_neutral_emerging": 1.0,
+      "small_value_developed": 1.0,
+      "small_value_emerging": 1.0
+    },
+    "top_5_stocks": [
+      "1969.HK",
+      "PLTR",
+      "NVDA",
+      "3750.HK",
+      "00680K.KS"
+    ],
+    "top_5_weights": [
+      0.9999899999999982,
+      1.0000000001744706e-05,
+      9.151025693777084e-17,
+      2.8660577818371554e-17,
+      1.099561578844127e-17
+    ]
+  }
+}

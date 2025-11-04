@@ -1,0 +1,47 @@
+INVESTMENT PREDICTION SUMMARY REPORT
+==================================================
+
+Generated: 2025-11-03 19:10:12
+Strategy: fama_french_5
+Model ID: ff5_regression_20251103_161033
+Prediction Date: 2025-08-28
+Portfolio Method: box_based
+
+TOP 10 RECOMMENDATIONS:
+-------------------------
+ 1. 1969.HK  100.0% (signal:  0.096, risk: 0.05)
+ 2. PLTR       0.0% (signal:  0.049, risk: 0.02)
+ 3. NVDA       0.0% (signal:  0.022, risk: 0.01)
+ 4. 3750.HK    0.0% (signal:  0.000, risk: 0.00)
+ 5. 00680K.KS   0.0% (signal:  0.019, risk: 0.01)
+ 6. 0272.HK    0.0% (signal:  0.000, risk: 0.00)
+ 7. 3968.HK    0.0% (signal:  0.016, risk: 0.01)
+ 8. BREN.JK    0.0% (signal:  0.000, risk: 0.00)
+
+PORTFOLIO METRICS:
+------------------
+Total Positions: 8
+Expected Return: 2415.77%
+Expected Risk: 20.00%
+Diversification Score: 0.80
+
+BOX ALLOCATIONS:
+----------------
+large_growth_developed: 100.0%
+large_growth_emerging: 100.0%
+large_neutral_developed: 100.0%
+large_neutral_emerging: 100.0%
+large_value_developed: 100.0%
+large_value_emerging: 100.0%
+mid_growth_developed: 100.0%
+mid_growth_emerging: 100.0%
+mid_neutral_developed: 100.0%
+mid_neutral_emerging: 100.0%
+mid_value_developed: 100.0%
+mid_value_emerging: 100.0%
+small_growth_developed: 100.0%
+small_growth_emerging: 100.0%
+small_neutral_developed: 100.0%
+small_neutral_emerging: 100.0%
+small_value_developed: 100.0%
+small_value_emerging: 100.0%

@@ -1,0 +1,555 @@
+{
+  "metadata": {
+    "strategy_type": "fama_french_5",
+    "model_id": "ff5_regression_20251103_161033",
+    "prediction_date": "2025-08-28T00:00:00",
+    "total_positions": 30,
+    "portfolio_method": "box_based",
+    "is_meta_model": false
+  },
+  "model_info": {
+    "base_model_ids": null,
+    "model_weights": null
+  },
+  "recommendations": [
+    {
+      "symbol": "1969.HK",
+      "weight": 0.09999999999999998,
+      "signal_strength": 0.0958642301523715,
+      "risk_score": 0.04793211507618575,
+      "box_classification": "small_neutral_emerging"
+    },
+    {
+      "symbol": "PLTR",
+      "weight": 0.09999999999999996,
+      "signal_strength": 0.04850505235324216,
+      "risk_score": 0.02425252617662108,
+      "box_classification": "mid_growth_developed"
+    },
+    {
+      "symbol": "1810.HK",
+      "weight": 0.09999999999999992,
+      "signal_strength": 0.03051185541310077,
+      "risk_score": 0.015255927706550385,
+      "box_classification": "mid_neutral_emerging"
+    },
+    {
+      "symbol": "STRL",
+      "weight": 0.09999999999999988,
+      "signal_strength": 0.024671583225998626,
+      "risk_score": 0.012335791612999313,
+      "box_classification": "mid_growth_developed"
+    },
+    {
+      "symbol": "007390.KS",
+      "weight": 0.09999999999999988,
+      "signal_strength": 0.039869658697685634,
+      "risk_score": 0.019934829348842817,
+      "box_classification": "small_growth_developed"
+    },
+    {
+      "symbol": "OPFI",
+      "weight": 0.09999999999999985,
+      "signal_strength": 0.0356922254138659,
+      "risk_score": 0.01784611270693295,
+      "box_classification": "small_value_developed"
+    },
+    {
+      "symbol": "9995.HK",
+      "weight": 0.09999999999999983,
+      "signal_strength": 0.027011604213241135,
+      "risk_score": 0.013505802106620567,
+      "box_classification": "mid_growth_emerging"
+    },
+    {
+      "symbol": "060370.KS",
+      "weight": 0.0999999999999998,
+      "signal_strength": 0.02494192160512477,
+      "risk_score": 0.012470960802562384,
+      "box_classification": "small_growth_developed"
+    },
+    {
+      "symbol": "NGVC",
+      "weight": 0.09999999999999958,
+      "signal_strength": 0.024701865599722553,
+      "risk_score": 0.012350932799861276,
+      "box_classification": "small_neutral_developed"
+    },
+    {
+      "symbol": "2467.TW",
+      "weight": 0.059289472936224004,
+      "signal_strength": 0.02298655934005985,
+      "risk_score": 0.011493279670029924,
+      "box_classification": "mid_neutral_developed"
+    },
+    {
+      "symbol": "NVDA",
+      "weight": 0.040710527063776994,
+      "signal_strength": 0.02241355845852467,
+      "risk_score": 0.011206779229262335,
+      "box_classification": "large_growth_developed"
+    },
+    {
+      "symbol": "1514.TW",
+      "weight": 7.352444169462466e-17,
+      "signal_strength": 0.01169348644924767,
+      "risk_score": 0.005846743224623835,
+      "box_classification": "mid_neutral_developed"
+    },
+    {
+      "symbol": "KNSL",
+      "weight": 6.839658345154827e-17,
+      "signal_strength": 0.006409795771115141,
+      "risk_score": 0.0032048978855575704,
+      "box_classification": "small_neutral_developed"
+    },
+    {
+      "symbol": "MLI",
+      "weight": 6.02513653535947e-17,
+      "signal_strength": 0.011013887220674127,
+      "risk_score": 0.005506943610337063,
+      "box_classification": "mid_neutral_developed"
+    },
+    {
+      "symbol": "QD",
+      "weight": 5.83990828178526e-17,
+      "signal_strength": 0.009278698338297637,
+      "risk_score": 0.004639349169148818,
+      "box_classification": "small_value_emerging"
+    },
+    {
+      "symbol": "1398.HK",
+      "weight": 5.750043082212444e-17,
+      "signal_strength": 0.012498848844427979,
+      "risk_score": 0.006249424422213989,
+      "box_classification": "large_value_emerging"
+    },
+    {
+      "symbol": "2628.HK",
+      "weight": 5.210839454170305e-17,
+      "signal_strength": 0.017127446857671747,
+      "risk_score": 0.008563723428835874,
+      "box_classification": "mid_neutral_emerging"
+    },
+    {
+      "symbol": "3968.HK",
+      "weight": 4.797146364830395e-17,
+      "signal_strength": 0.016280280642525912,
+      "risk_score": 0.008140140321262956,
+      "box_classification": "mid_neutral_emerging"
+    },
+    {
+      "symbol": "LI.PA",
+      "weight": 4.6635256330812916e-17,
+      "signal_strength": 0.008591745729285095,
+      "risk_score": 0.004295872864642548,
+      "box_classification": "small_neutral_developed"
+    },
+    {
+      "symbol": "0272.HK",
+      "weight": 4.2183736048685675e-17,
+      "signal_strength": 0.0,
+      "risk_score": 0.0,
+      "box_classification": "small_value_emerging"
+    },
+    {
+      "symbol": "9669.HK",
+      "weight": 3.147486329564441e-17,
+      "signal_strength": 0.014393260201146283,
+      "risk_score": 0.007196630100573142,
+      "box_classification": "small_neutral_emerging"
+    },
+    {
+      "symbol": "3988.HK",
+      "weight": 2.8500435650941946e-17,
+      "signal_strength": 0.012155726073529419,
+      "risk_score": 0.0060778630367647095,
+      "box_classification": "large_value_emerging"
+    },
+    {
+      "symbol": "1658.HK",
+      "weight": 2.659202572643123e-17,
+      "signal_strength": 0.01107564105554034,
+      "risk_score": 0.00553782052777017,
+      "box_classification": "mid_value_emerging"
+    },
+    {
+      "symbol": "AVGO",
+      "weight": 2.4491055978308797e-17,
+      "signal_strength": 0.01940461002205245,
+      "risk_score": 0.009702305011026225,
+      "box_classification": "large_neutral_developed"
+    },
+    {
+      "symbol": "229640.KS",
+      "weight": 2.364279520154782e-17,
+      "signal_strength": 0.019576574854056804,
+      "risk_score": 0.009788287427028402,
+      "box_classification": "mid_growth_developed"
+    },
+    {
+      "symbol": "600519.SS",
+      "weight": 2.1310381722384116e-17,
+      "signal_strength": 0.0,
+      "risk_score": 0.0,
+      "box_classification": "large_neutral_emerging"
+    },
+    {
+      "symbol": "C",
+      "weight": 1.6876650281544138e-17,
+      "signal_strength": 0.009570964942530135,
+      "risk_score": 0.0047854824712650675,
+      "box_classification": "mid_value_developed"
+    },
+    {
+      "symbol": "BNP.PA",
+      "weight": 1.6478266611448665e-17,
+      "signal_strength": 0.007383887100082494,
+      "risk_score": 0.003691943550041247,
+      "box_classification": "mid_value_developed"
+    },
+    {
+      "symbol": "600036.SS",
+      "weight": 1.1266717658320939e-17,
+      "signal_strength": 0.0,
+      "risk_score": 0.0,
+      "box_classification": "mid_value_emerging"
+    },
+    {
+      "symbol": "1099.HK",
+      "weight": 6.618108764156003e-18,
+      "signal_strength": 0.0014899544755803719,
+      "risk_score": 0.0007449772377901859,
+      "box_classification": "mid_value_emerging"
+    }
+  ],
+  "portfolio_weights": {
+    "NVDA": 0.040710527063776994,
+    "AVGO": 2.4491055978308797e-17,
+    "PLTR": 0.09999999999999996,
+    "STRL": 0.09999999999999988,
+    "229640.KS": 2.364279520154782e-17,
+    "2467.TW": 0.059289472936224004,
+    "1514.TW": 7.352444169462466e-17,
+    "MLI": 6.02513653535947e-17,
+    "C": 1.6876650281544138e-17,
+    "BNP.PA": 1.6478266611448665e-17,
+    "007390.KS": 0.09999999999999988,
+    "060370.KS": 0.0999999999999998,
+    "NGVC": 0.09999999999999958,
+    "LI.PA": 4.6635256330812916e-17,
+    "KNSL": 6.839658345154827e-17,
+    "OPFI": 0.09999999999999985,
+    "600519.SS": 2.1310381722384116e-17,
+    "9995.HK": 0.09999999999999983,
+    "1810.HK": 0.09999999999999992,
+    "2628.HK": 5.210839454170305e-17,
+    "3968.HK": 4.797146364830395e-17,
+    "1398.HK": 5.750043082212444e-17,
+    "3988.HK": 2.8500435650941946e-17,
+    "1658.HK": 2.659202572643123e-17,
+    "1099.HK": 6.618108764156003e-18,
+    "600036.SS": 1.1266717658320939e-17,
+    "1969.HK": 0.09999999999999998,
+    "9669.HK": 3.147486329564441e-17,
+    "QD": 5.83990828178526e-17,
+    "0272.HK": 4.2183736048685675e-17
+  },
+  "box_details": {
+    "box_allocations": {
+      "large_growth_developed": 1.0,
+      "large_growth_emerging": 1.0,
+      "large_neutral_developed": 1.0,
+      "large_neutral_emerging": 1.0,
+      "large_value_developed": 1.0,
+      "large_value_emerging": 1.0,
+      "mid_growth_developed": 1.0,
+      "mid_growth_emerging": 1.0,
+      "mid_neutral_developed": 1.0,
+      "mid_neutral_emerging": 1.0,
+      "mid_value_developed": 1.0,
+      "mid_value_emerging": 1.0,
+      "small_growth_developed": 1.0,
+      "small_growth_emerging": 1.0,
+      "small_neutral_developed": 1.0,
+      "small_neutral_emerging": 1.0,
+      "small_value_developed": 1.0,
+      "small_value_emerging": 1.0
+    },
+    "stocks_by_box": {
+      "large_growth_developed": [
+        "NVDA",
+        "MSFT",
+        "AAPL",
+        "GOOGL",
+        "GOOG",
+        "AMZN",
+        "META",
+        "2330.TW",
+        "034730.KS",
+        "024110.KS",
+        "00680K.KS"
+      ],
+      "large_neutral_developed": [
+        "AVGO",
+        "7203.T",
+        "8316.T",
+        "8411.T",
+        "8697.T",
+        "9532.T"
+      ],
+      "mid_growth_developed": [
+        "TSLA",
+        "ORCL",
+        "WMT",
+        "LLY",
+        "V",
+        "NFLX",
+        "MA",
+        "PLTR",
+        "COST",
+        "HD",
+        "SHEL.L",
+        "NG.L",
+        "BARC.L",
+        "LLOY.L",
+        "NWG.L",
+        "ATI",
+        "LITE",
+        "IONS",
+        "AAF.L",
+        "STRL",
+        "PCOR",
+        "QAN.AX",
+        "2455.TW",
+        "229640.KS",
+        "082640.KS"
+      ],
+      "mid_neutral_developed": [
+        "JNJ",
+        "CMCSA",
+        "TXRH",
+        "EXAS",
+        "JKHY",
+        "AYI",
+        "METSO.HE",
+        "MLI",
+        "COKE",
+        "DAY",
+        "JEF",
+        "0316.HK",
+        "AGNC",
+        "1303.TW",
+        "2467.TW",
+        "1514.TW",
+        "3778.T",
+        "9010.T",
+        "7611.T",
+        "6703.T",
+        "9068.T",
+        "073240.KS",
+        "2319.HK"
+      ],
+      "mid_value_developed": [
+        "C",
+        "TTE.PA",
+        "BNP.PA",
+        "DBK.DE",
+        "MBG.DE",
+        "BMW.DE",
+        "BMW3.DE",
+        "ACA.PA",
+        "RBI.VI",
+        "0019.HK",
+        "0087.HK",
+        "9104.T",
+        "3407.T",
+        "8388.T",
+        "8386.T",
+        "1314.TW",
+        "6804.T",
+        "2501.TW",
+        "9678.T"
+      ],
+      "small_growth_developed": [
+        "ORNBV.HE",
+        "DTL.AX",
+        "ALFA.L",
+        "007390.KS",
+        "TROAX.ST",
+        "060370.KS",
+        "096530.KS"
+      ],
+      "small_neutral_developed": [
+        "KNSL",
+        "POOL",
+        "FDS",
+        "LI.PA",
+        "MRNA",
+        "NAN.AX",
+        "MCAP.ST",
+        "SYNSAM.ST",
+        "NGVC",
+        "OSBC",
+        "SCSC",
+        "BHRB"
+      ],
+      "large_value_developed": [
+        "8593.T"
+      ],
+      "small_value_developed": [
+        "CA.PA",
+        "DWNI.DE",
+        "PR",
+        "IVZ",
+        "OPFI",
+        "SVEAF.ST",
+        "HMC.AX",
+        "EVH",
+        "AGR.VI",
+        "NEXA"
+      ],
+      "large_neutral_emerging": [
+        "0700.HK",
+        "600519.SS",
+        "300750.SZ",
+        "601857.SS",
+        "CLEO.JK"
+      ],
+      "large_growth_emerging": [
+        "3750.HK",
+        "BREN.JK",
+        "NICL.JK",
+        "INDY.JK"
+      ],
+      "mid_growth_emerging": [
+        "601138.SS",
+        "MELI",
+        "9633.HK",
+        "688041.SS",
+        "NU",
+        "688256.SS",
+        "600536.SS",
+        "300661.SZ",
+        "300857.SZ",
+        "688331.SS",
+        "9995.HK"
+      ],
+      "mid_neutral_emerging": [
+        "1810.HK",
+        "601899.SS",
+        "2899.HK",
+        "9999.HK",
+        "3968.HK",
+        "2628.HK",
+        "601318.SS",
+        "2318.HK",
+        "600588.SS",
+        "002517.SZ",
+        "601777.SS",
+        "688122.SS",
+        "300832.SZ",
+        "301236.SZ",
+        "0268.HK",
+        "2367.HK",
+        "601808.SS",
+        "601555.SS",
+        "600918.SS",
+        "600219.SS",
+        "600745.SS"
+      ],
+      "large_value_emerging": [
+        "601398.SS",
+        "1398.HK",
+        "601288.SS",
+        "1288.HK",
+        "601939.SS",
+        "0939.HK",
+        "601988.SS",
+        "3988.HK",
+        "0857.HK",
+        "AUTO.JK"
+      ],
+      "mid_value_emerging": [
+        "600036.SS",
+        "601658.SS",
+        "1658.HK",
+        "600028.SS",
+        "0386.HK",
+        "601328.SS",
+        "1099.HK",
+        "2883.HK",
+        "600061.SS"
+      ],
+      "small_growth_emerging": [
+        "INVP.L",
+        "2410.HK"
+      ],
+      "small_neutral_emerging": [
+        "9669.HK",
+        "1969.HK",
+        "3709.HK"
+      ],
+      "small_value_emerging": [
+        "1108.HK",
+        "0272.HK",
+        "QD"
+      ]
+    },
+    "construction_log": [
+      "Box-Based construction completed"
+    ]
+  },
+  "risk_metrics": {
+    "expected_return": 9.437986765253584,
+    "expected_risk": 0.06170010976160918,
+    "diversification_score": 1.0
+  },
+  "summary": {
+    "strategy_type": "fama_french_5",
+    "model_id": "ff5_regression_20251103_161033",
+    "prediction_date": "2025-08-28T00:00:00",
+    "total_positions": 30,
+    "portfolio_method": "box_based",
+    "expected_return": 9.437986765253584,
+    "expected_risk": 0.06170010976160918,
+    "diversification_score": 1.0,
+    "is_meta_model": false,
+    "base_model_ids": null,
+    "model_weights": null,
+    "box_allocations": {
+      "large_growth_developed": 1.0,
+      "large_growth_emerging": 1.0,
+      "large_neutral_developed": 1.0,
+      "large_neutral_emerging": 1.0,
+      "large_value_developed": 1.0,
+      "large_value_emerging": 1.0,
+      "mid_growth_developed": 1.0,
+      "mid_growth_emerging": 1.0,
+      "mid_neutral_developed": 1.0,
+      "mid_neutral_emerging": 1.0,
+      "mid_value_developed": 1.0,
+      "mid_value_emerging": 1.0,
+      "small_growth_developed": 1.0,
+      "small_growth_emerging": 1.0,
+      "small_neutral_developed": 1.0,
+      "small_neutral_emerging": 1.0,
+      "small_value_developed": 1.0,
+      "small_value_emerging": 1.0
+    },
+    "top_5_stocks": [
+      "1969.HK",
+      "PLTR",
+      "1810.HK",
+      "STRL",
+      "007390.KS"
+    ],
+    "top_5_weights": [
+      0.09999999999999998,
+      0.09999999999999996,
+      0.09999999999999992,
+      0.09999999999999988,
+      0.09999999999999988
+    ]
+  }
+}

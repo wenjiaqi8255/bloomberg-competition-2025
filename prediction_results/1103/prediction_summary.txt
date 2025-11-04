@@ -1,0 +1,49 @@
+INVESTMENT PREDICTION SUMMARY REPORT
+==================================================
+
+Generated: 2025-11-03 19:02:11
+Strategy: fama_french_5
+Model ID: ff5_regression_20251103_161033
+Prediction Date: 2025-08-28
+Portfolio Method: box_based
+
+TOP 10 RECOMMENDATIONS:
+-------------------------
+ 1. 1969.HK   10.0% (signal:  0.096, risk: 0.05)
+ 2. PLTR      10.0% (signal:  0.049, risk: 0.02)
+ 3. 1810.HK   10.0% (signal:  0.031, risk: 0.02)
+ 4. STRL      10.0% (signal:  0.025, risk: 0.01)
+ 5. 007390.KS  10.0% (signal:  0.040, risk: 0.02)
+ 6. OPFI      10.0% (signal:  0.036, risk: 0.02)
+ 7. 9995.HK   10.0% (signal:  0.027, risk: 0.01)
+ 8. 060370.KS  10.0% (signal:  0.025, risk: 0.01)
+ 9. NGVC      10.0% (signal:  0.025, risk: 0.01)
+10. 2467.TW    5.9% (signal:  0.023, risk: 0.01)
+
+PORTFOLIO METRICS:
+------------------
+Total Positions: 30
+Expected Return: 943.80%
+Expected Risk: 6.17%
+Diversification Score: 1.00
+
+BOX ALLOCATIONS:
+----------------
+large_growth_developed: 100.0%
+large_growth_emerging: 100.0%
+large_neutral_developed: 100.0%
+large_neutral_emerging: 100.0%
+large_value_developed: 100.0%
+large_value_emerging: 100.0%
+mid_growth_developed: 100.0%
+mid_growth_emerging: 100.0%
+mid_neutral_developed: 100.0%
+mid_neutral_emerging: 100.0%
+mid_value_developed: 100.0%
+mid_value_emerging: 100.0%
+small_growth_developed: 100.0%
+small_growth_emerging: 100.0%
+small_neutral_developed: 100.0%
+small_neutral_emerging: 100.0%
+small_value_developed: 100.0%
+small_value_emerging: 100.0%

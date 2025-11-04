@@ -1,0 +1,9 @@
+symbol,weight,signal_strength,risk_score,box_classification,box_size,box_style,box_region,box_sector
+1969.HK,0.9999899999999982,0.0958642301523715,0.04793211507618575,small_neutral_emerging,small,neutral,emerging,
+PLTR,1.0000000001744706e-05,0.04850505235324216,0.02425252617662108,mid_growth_developed,mid,growth,developed,
+NVDA,9.151025693777084e-17,0.02241355845852467,0.011206779229262335,large_growth_developed,large,growth,developed,
+3750.HK,2.8660577818371554e-17,0.0,0.0,large_growth_emerging,large,growth,emerging,
+00680K.KS,1.099561578844127e-17,0.01909299031509488,0.00954649515754744,large_growth_developed,large,growth,developed,
+0272.HK,1.0533929727300746e-17,0.0,0.0,small_value_emerging,small,value,emerging,
+3968.HK,1.0192091415098685e-17,0.016280280642525912,0.008140140321262956,mid_neutral_emerging,mid,neutral,emerging,
+BREN.JK,5.246380641356615e-18,0.0,0.0,large_growth_emerging,large,growth,emerging,
