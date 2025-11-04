@@ -7,6 +7,7 @@ Import this module to ensure all models are available for creation.
 
 from .base.model_factory import ModelFactory
 from .implementations.ff5_model import FF5RegressionModel
+from .implementations.ff3_model import FF3RegressionModel
 from .implementations.fama_macbeth_model import FamaMacBethModel
 
 # Try to import ML models (optional dependencies)
@@ -33,6 +34,18 @@ def register_all_models():
         description="Fama-French 5-Factor regression model for baseline returns",
         default_config={
             "regularization": "none",
+            "alpha": 1.0,
+            "standardize": False
+        }
+    )
+
+    # Register FF3 Regression Model
+    ModelFactory.register(
+        model_type="ff3_regression",
+        model_class=FF3RegressionModel,
+        description="Fama-French 3-Factor regression model (MKT, SMB, HML)",
+        default_config={
+            "regularization": "ridge",
             "alpha": 1.0,
             "standardize": False
         }

@@ -318,8 +318,13 @@ class YFinanceProvider(PriceDataProvider):
                                     progress=False, timeout=self.request_timeout
                                 )
                             else:
+                                # yfinance uses end as an open interval; extend by +1 day and skip empty windows
+                                adj_end = (missing_end + pd.Timedelta(days=1)) if isinstance(missing_end, pd.Timestamp) else (missing_end + timedelta(days=1))
+                                if missing_start >= adj_end:
+                                    logger.debug(f"Skip empty missing range for {symbol}: {missing_start} to {missing_end}")
+                                    continue
                                 data = self._fetch_with_retry(
-                                    yf.download, resolved, start=missing_start, end=missing_end,
+                                    yf.download, resolved, start=missing_start, end=adj_end,
                                     progress=False, timeout=self.request_timeout
                                 )
                             if data is not None and not data.empty:

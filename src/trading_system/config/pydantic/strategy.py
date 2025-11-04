@@ -24,7 +24,7 @@ class StrategyConfig(BasePydanticConfig):
     """
     
     # Strategy identification
-    type: Literal["ml", "fama_french_5", "fama_macbeth", "dual_momentum", "core_satellite"] = Field(
+    type: Literal["ml", "fama_french_5", "fama_french_3", "fama_macbeth", "dual_momentum", "core_satellite"] = Field(
         description="Strategy type"
     )
     
@@ -129,8 +129,8 @@ class StrategyConfig(BasePydanticConfig):
     @model_validator(mode='after')
     def validate_strategy_requirements(self):
         """Validate strategy-specific requirements."""
-        # FF5 strategy validation
-        if self.type == 'fama_french_5':
+        # FF factor strategy validation
+        if self.type in ['fama_french_5', 'fama_french_3']:
             if self.portfolio_construction:
                 # Use isinstance for type-safe validation
                 if isinstance(self.portfolio_construction, BoxBasedPortfolioConfig):

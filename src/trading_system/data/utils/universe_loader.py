@@ -43,7 +43,63 @@ def _normalize_ticker(raw: Any) -> Optional[str]:
     s = s.upper()
     return s or None
 
+def _normalize_explicit_symbol(sym: str) -> Optional[str]:
+    if not sym:
+        return None
+    s = str(sym).strip().upper()
+    # 只保留字母、数字、点、连字符
+    s = re.sub(r"[^A-Z0-9.\-]", "", s)
 
+    # 如果没有后缀，直接返回
+    if "." not in s:
+        return s
+
+    base, suf = s.rsplit(".", 1)
+    suf = suf.upper()
+
+    # 常见 Bloomberg→Yahoo 后缀映射
+    suf_map = {
+        "LN": "L",   # London
+        "FP": "PA",  # Paris
+        "GR": "DE",  # Germany
+        "NA": "AS",  # Amsterdam
+        "JP": "T",   # Tokyo
+        "AU": "AX",  # Australia
+        "SP": "SI",  # Singapore
+        "AV": "VI",  # Vienna
+        "FH": "HE",  # Helsinki
+        "IJ": "JK",  # Jakarta
+    }
+
+    # 中国 A 股：.C1/.C2 → .SS/.SZ（根据首位判断 6=上交，其它=深交）
+    if suf in ("C1", "C2"):
+        if re.match(r"^6\d+$", base):
+            suf = "SS"
+        else:
+            suf = "SZ"
+    elif suf in suf_map:
+        suf = suf_map[suf]
+
+    # 瑞典误标：字母代码配 .SS（应为 .ST）
+    if suf == "SS" and re.match(r"^[A-Z\-]+$", base):
+        suf = "ST"
+
+    # 港股需要 4 位数字
+    if suf == "HK" and re.match(r"^\d+$", base):
+        base = base.zfill(4)
+
+    return f"{base}.{suf}"
+
+
+def _clean_symbol_text(sym: str) -> Optional[str]:
+    if not sym:
+        return None
+    # 标准化奇怪用法，如 NG/.LN → NG.LN
+    s = str(sym).strip().upper()
+    s = s.replace("/.", ".")
+    s = re.sub(r"[^A-Z0-9.\-]", "", s)
+    return s or None
+    
 def _resolve_symbol_minimal(ticker: str, country_code: Optional[str]) -> List[str]:
     """Compose Yahoo-ready symbol candidates from ticker and country/exchange code.
 
@@ -68,6 +124,7 @@ def _resolve_symbol_minimal(ticker: str, country_code: Optional[str]) -> List[st
     map_exact = {
         "UW": "", "UN": "", "US": "",
         "GR": ".DE", "FP": ".PA", "NA": ".AS",
+        "JP": ".T", "AU": ".AX", "SP": ".SI", "LN": ".L",
     }
 
     # Small set of alternates where markets commonly have multiple Yahoo suffixes
@@ -235,6 +292,8 @@ def load_universe_from_csv(csv_path: str, filters: Optional[Dict[str, Any]] = No
     seen = set()
 
     country_col = "country_code" if "country_code" in filtered.columns else None
+    # Prefer explicit Yahoo symbols if provided by CSV
+    yf_col = "yfinance_ticker" if "yfinance_ticker" in filtered.columns else None
 
     for _, row in filtered.iterrows():
         raw_ticker = row.get(_TICKER_COLUMN)
@@ -242,12 +301,33 @@ def load_universe_from_csv(csv_path: str, filters: Optional[Dict[str, Any]] = No
         if not t:
             continue
 
-        composed = None
-        if country_col:
-            candidates = _resolve_symbol_minimal(t, row.get(country_col))
-            if candidates:
-                composed = candidates[0]
-        final_symbol = composed or t
+        # 1) Use explicit yfinance_ticker when available and non-empty
+        yf_sym = None
+        if yf_col:
+            raw_yf = row.get(yf_col)
+            if pd.notna(raw_yf):
+                cleaned = _clean_symbol_text(raw_yf)
+                yf_sym = _normalize_explicit_symbol(cleaned) if cleaned else None
+
+        if yf_sym:
+            final_symbol = yf_sym
+        else:
+            # 回退：ticker + country_code 的最小规则，并补充更合理映射
+            composed = None
+            if country_col:
+                candidates = _resolve_symbol_minimal(t, row.get(country_col))
+                if candidates:
+                    # 港股数字补零
+                    _c0 = candidates[0]
+                    if _c0.endswith(".HK"):
+                        b = _c0[:-3]
+                        if re.match(r"^\d+$", b):
+                            _c0 = f"{b.zfill(4)}.HK"
+                    # 日本 JP → .T（Yahoo）
+                    if _c0.endswith(".JP"):
+                        _c0 = _c0[:-3] + ".T"
+                    composed = _c0
+            final_symbol = composed or t
 
         if final_symbol in seen:
             continue

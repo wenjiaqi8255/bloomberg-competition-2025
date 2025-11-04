@@ -24,6 +24,7 @@ from pathlib import Path
 from .base_strategy import BaseStrategy
 from .ml_strategy import MLStrategy
 from .fama_french_5 import FamaFrench5Strategy
+from .fama_french_3 import FamaFrench3Strategy
 
 from ..feature_engineering.pipeline import FeatureEngineeringPipeline
 from ..feature_engineering.models.data_types import FeatureConfig
@@ -55,6 +56,8 @@ class StrategyFactory:
         'fama_macbeth': MLStrategy,  # Fama-MacBeth uses ML strategy with custom features
         'fama_french_5': FamaFrench5Strategy,
         'ff5_regression': FamaFrench5Strategy,  # Map ff5_regression model to FF5 strategy
+        'fama_french_3': FamaFrench3Strategy,
+        'ff3_regression': FamaFrench3Strategy,
     }
     
     @classmethod
@@ -227,9 +230,9 @@ class StrategyFactory:
             logger.info(f"Using model-specific feature configuration for {strategy_type}")
             feature_config_dict = config['feature_config']
 
-            # Ensure essential defaults for FF5 models
-            if strategy_type in ['fama_french_5', 'ff5_regression']:
-                # Force FF5 models to only use factor data
+            # Ensure essential defaults for FF models (FF5/FF3)
+            if strategy_type in ['fama_french_5', 'ff5_regression', 'fama_french_3', 'ff3_regression']:
+                # Force FF models to only use factor data
                 feature_config_dict = {
                     'enabled_features': [],  # No technical features
                     'include_technical': False,
@@ -237,7 +240,7 @@ class StrategyFactory:
                     'include_theoretical': False,
                     **feature_config_dict  # Allow overrides but ensure FF5 basics
                 }
-                logger.info(f"FF5 Strategy: Enforced factor-only config (factors come from factor data provider)")
+                logger.info(f"FF Strategy: Enforced factor-only config (factors come from factor data provider)")
 
             feature_config = FeatureConfig(**feature_config_dict)
             return FeatureEngineeringPipeline(feature_config, model_type=strategy_type)
@@ -276,12 +279,11 @@ class StrategyFactory:
                 winsorize_percentile=0.01
             )
 
-        elif strategy_type in ['fama_french_5', 'ff5_regression']:
+        elif strategy_type in ['fama_french_5', 'ff5_regression', 'fama_french_3', 'ff3_regression']:
             # Fama-French: NO technical or cross-sectional features needed!
-            # FF5 model uses factor data directly from factor data provider
-            logger.info("FF5 Strategy: Using minimal feature config (factors come from factor data provider)")
+            logger.info("FF Strategy: Using minimal feature config (factors come from factor data provider)")
             feature_config = FeatureConfig(
-                enabled_features=[],  # No technical features for FF5
+                enabled_features=[],  # No technical features for FF models
                 include_cross_sectional=False,  # Explicitly disable cross-sectional
                 include_technical=False,
                 include_theoretical=False
@@ -426,7 +428,7 @@ class StrategyFactory:
         # e.g., 'ff5_regression_20251003_001418' -> 'ff5_regression'
         if '_' in base_part:
             # Try to match known model types
-            known_types = ['ff5_regression', 'momentum_ranking', 'xgboost', 'lstm']
+            known_types = ['ff5_regression', 'ff3_regression', 'momentum_ranking', 'xgboost', 'lstm']
             for model_type in known_types:
                 if base_part.startswith(model_type + '_'):
                     return model_type
@@ -455,7 +457,7 @@ class StrategyFactory:
             params['min_signal_strength'] = config.get('min_signal_strength', 0.1)
             
                     
-        elif strategy_type in ['fama_french_5', 'ff5_regression']:
+        elif strategy_type in ['fama_french_5', 'ff5_regression', 'fama_french_3', 'ff3_regression']:
             params['lookback_days'] = config.get('lookback_days', 252)
             params['risk_free_rate'] = config.get('risk_free_rate', 0.02)
         
