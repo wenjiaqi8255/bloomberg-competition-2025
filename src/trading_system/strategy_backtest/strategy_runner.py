@@ -392,6 +392,114 @@ class StrategyRunner:
         method = getattr(portfolio_construction_config, 'method', 'unknown')
         logger.info(f"✅ Initialized portfolio builder with method: {method}")
 
+    def _filter_signals_by_rebalance_frequency(self, strategy_signals: pd.DataFrame, rebalance_frequency: str) -> pd.DataFrame:
+        """
+        Filter strategy signals DataFrame based on rebalance frequency.
+        
+        Args:
+            strategy_signals: DataFrame with signals (dates as index)
+            rebalance_frequency: Frequency string ("weekly", "monthly", "quarterly")
+            
+        Returns:
+            Filtered DataFrame with only dates matching the rebalance frequency
+        """
+        if strategy_signals.empty:
+            return strategy_signals
+            
+        # Convert index to DatetimeIndex if not already
+        if not isinstance(strategy_signals.index, pd.DatetimeIndex):
+            strategy_signals.index = pd.to_datetime(strategy_signals.index)
+        
+        dates = strategy_signals.index
+        
+        if rebalance_frequency == "weekly":
+            # Select the last trading day of each week
+            # Group by year-week and take the last date in each week
+            # Use strftime('%Y-W%W') to get consistent week grouping
+            filtered_dates = []
+            current_week_key = None
+            current_week_dates = []
+            
+            for date in dates:
+                # Use year-week format for grouping (e.g., "2024-W01")
+                week_key = date.strftime('%Y-W%W')
+                
+                if current_week_key is None:
+                    current_week_key = week_key
+                    current_week_dates = [date]
+                elif week_key == current_week_key:
+                    current_week_dates.append(date)
+                else:
+                    # Week changed, keep the last date of previous week
+                    if current_week_dates:
+                        filtered_dates.append(current_week_dates[-1])
+                    current_week_key = week_key
+                    current_week_dates = [date]
+            
+            # Don't forget the last week
+            if current_week_dates:
+                filtered_dates.append(current_week_dates[-1])
+                
+        elif rebalance_frequency == "monthly":
+            # Select the last trading day of each month
+            filtered_dates = []
+            current_month = None
+            current_month_dates = []
+            
+            for date in dates:
+                year_month = (date.year, date.month)
+                
+                if current_month is None:
+                    current_month = year_month
+                    current_month_dates = [date]
+                elif year_month == current_month:
+                    current_month_dates.append(date)
+                else:
+                    # Month changed, keep the last date of previous month
+                    if current_month_dates:
+                        filtered_dates.append(current_month_dates[-1])
+                    current_month = year_month
+                    current_month_dates = [date]
+            
+            # Don't forget the last month
+            if current_month_dates:
+                filtered_dates.append(current_month_dates[-1])
+                
+        elif rebalance_frequency == "quarterly":
+            # Select the last trading day of each quarter
+            filtered_dates = []
+            current_quarter = None
+            current_quarter_dates = []
+            
+            for date in dates:
+                quarter = (date.year, (date.month - 1) // 3 + 1)  # Q1=1, Q2=2, Q3=3, Q4=4
+                
+                if current_quarter is None:
+                    current_quarter = quarter
+                    current_quarter_dates = [date]
+                elif quarter == current_quarter:
+                    current_quarter_dates.append(date)
+                else:
+                    # Quarter changed, keep the last date of previous quarter
+                    if current_quarter_dates:
+                        filtered_dates.append(current_quarter_dates[-1])
+                    current_quarter = quarter
+                    current_quarter_dates = [date]
+            
+            # Don't forget the last quarter
+            if current_quarter_dates:
+                filtered_dates.append(current_quarter_dates[-1])
+        else:
+            # Unknown frequency, return original
+            logger.warning(f"Unknown rebalance_frequency '{rebalance_frequency}', returning original signals")
+            return strategy_signals
+        
+        # Filter the DataFrame to only include selected dates
+        filtered_dates = pd.DatetimeIndex(filtered_dates)
+        filtered_signals = strategy_signals.loc[filtered_dates]
+        
+        return filtered_signals
+
     def _apply_portfolio_construction(self, strategy_signals: pd.DataFrame, price_data: Dict[str, pd.DataFrame], start_date: datetime) -> pd.DataFrame:
         """
         Apply portfolio construction to strategy signals.
@@ -541,6 +649,17 @@ class StrategyRunner:
                 start_date=backtest_config.start_date,
                 end_date=backtest_config.end_date
             )
+
+            # Step 4.5: Filter signals by rebalance frequency
+            if not strategy_signals.empty and backtest_config.rebalance_frequency != "daily":
+                original_count = len(strategy_signals)
+                strategy_signals = self._filter_signals_by_rebalance_frequency(
+                    strategy_signals, backtest_config.rebalance_frequency
+                )
+                logger.info(
+                    f"📅 Filtered signals by rebalance frequency '{backtest_config.rebalance_frequency}': "
+                    f"{original_count} → {len(strategy_signals)} dates"
+                )
 
             # Step 3.5: Apply portfolio construction if configured
             if self.portfolio_builder and not strategy_signals.empty:
@@ -735,47 +854,41 @@ class StrategyRunner:
                    end_date: datetime, backtest_config) -> tuple:
         """
         Fetch price data for asset universe and benchmark.
-
-        Args:
-            universe: List of asset tickers
-            start_date: Start date for data fetch
-            end_date: End date for data fetch
-            backtest_config: BacktestConfig object containing benchmark configuration
-
-        Returns:
-            Tuple of (price_data_dict, benchmark_dataframe)
         """
         logger.info(f"Fetching data from {start_date} to {end_date}")
 
-        # Validate symbols first
-        valid_symbols = []
-        for symbol in universe:
-            if self.data_provider.validate_symbol(symbol):
-                valid_symbols.append(symbol)
-            else:
-                logger.warning(f"Symbol {symbol} validation failed, excluding from universe")
-
-        if not valid_symbols:
-            raise ValueError("No valid symbols in asset universe")
-
-        logger.info(f"Valid symbols: {valid_symbols}")
-
+        # Remove the validate_symbol step - it's redundant and bypasses cache
+        # get_historical_data already handles errors and returns only successful symbols
+        
         # Fetch price data with additional historical data for momentum calculations
-        # Add lookback buffer based on strategy requirements
         lookback_buffer = getattr(self.strategy, 'lookback_days', 252)
         buffer_start_date = start_date - pd.Timedelta(days=lookback_buffer)
 
         logger.info(f"Fetching data from {buffer_start_date} to {end_date} "
                    f"(includes {lookback_buffer} days lookback buffer)")
 
+        # Directly fetch data - get_historical_data will:
+        # 1. Check L2 cache first (disk cache)
+        # 2. Check L1 cache (in-memory)
+        # 3. Only make network requests for cache misses
+        # 4. Return only successful symbols in the dictionary
         price_data = self.data_provider.get_historical_data(
-            symbols=valid_symbols,
+            symbols=universe,  # ✅ Pass all symbols directly
             start_date=buffer_start_date,
             end_date=end_date
         )
 
         if not price_data:
-            raise ValueError("Failed to fetch price data")
+            raise ValueError("Failed to fetch price data for any symbols")
+
+        # Log which symbols were successfully fetched
+        successful_symbols = list(price_data.keys())
+        failed_symbols = [s for s in universe if s not in successful_symbols]
+        
+        if failed_symbols:
+            logger.warning(f"Failed to fetch data for {len(failed_symbols)} symbols: {failed_symbols}")
+        
+        logger.info(f"Successfully fetched data for {len(successful_symbols)} symbols")
 
         # Fetch benchmark data
         # Priority: benchmark config > benchmark_symbol (backward compatible)
@@ -809,7 +922,7 @@ class StrategyRunner:
                 # Use symbol from benchmark config or fallback to benchmark_symbol
                 benchmark_symbol = benchmark_config.symbol or backtest_config.benchmark_symbol
                 
-                if benchmark_symbol and benchmark_symbol in valid_symbols:
+                if benchmark_symbol and benchmark_symbol in universe:
                     benchmark_data = price_data[benchmark_symbol]
                 elif benchmark_symbol:
                     # Fetch benchmark separately if not in universe
@@ -823,7 +936,7 @@ class StrategyRunner:
         elif backtest_config.benchmark_symbol:
             # Backward compatible: use benchmark_symbol string
             benchmark_symbol = backtest_config.benchmark_symbol
-            if benchmark_symbol in valid_symbols:
+            if benchmark_symbol in universe:
                 benchmark_data = price_data[benchmark_symbol]
             else:
                 # Fetch benchmark separately if not in universe
