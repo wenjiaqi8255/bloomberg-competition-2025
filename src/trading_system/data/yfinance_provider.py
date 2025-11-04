@@ -276,35 +276,48 @@ class YFinanceProvider(PriceDataProvider):
                         req_start = pd.to_datetime(start_date) if isinstance(start_date, str) else start_date
                         req_end = pd.to_datetime(end_date) if isinstance(end_date, str) else end_date
                         
-                        # Try to get cached data
+                        # Try to get cached data (already filtered to requested range)
                         cached_data = self.disk_cache.get(resolved, start_date=req_start, end_date=req_end)
                         
                         if cached_data is not None and not cached_data.empty:
-                            # Check if we have all the data needed
+                            # ✅ KISS: Directly check if cached_data covers the requested range
                             cached_start = cached_data.index.min()
                             cached_end = cached_data.index.max()
                             
-                            # Check for missing date ranges
-                            missing_ranges = self.disk_cache.get_missing_date_ranges(
-                                resolved, req_start, req_end
-                            )
-                            
-                            if not missing_ranges:
-                                # All data is in cache
+                            # ✅ Simple check: does cached_data cover the entire requested range?
+                            if cached_start <= req_start and cached_end >= req_end:
+                                # All data is in cache - complete hit
                                 logger.debug(f"L2 cache hit (complete) for {symbol} via {resolved}")
-                                # Validate and clean cached data
                                 cached_data = self._validate_and_clean_data(cached_data, resolved)
                                 cached_data = self.add_data_source_metadata(cached_data)
                                 results[symbol] = cached_data
-                                # Store in L1 cache
                                 self._store_in_cache(cache_key, cached_data)
                                 self._symbol_resolution_cache[f"{symbol.strip().upper()}|{(country_code or '').strip().upper()}"] = resolved
                                 fetch_success = True
                                 break
                             else:
-                                logger.info(f"L2 cache hit (partial) for {symbol}: need to fetch {len(missing_ranges)} missing range(s)")
-
+                                # Partial cache hit - determine what's missing
+                                missing_ranges = []
+                                if cached_start > req_start:
+                                    missing_ranges.append((req_start, cached_start - pd.Timedelta(days=1)))
+                                if cached_end < req_end:
+                                    missing_ranges.append((cached_end + pd.Timedelta(days=1), req_end))
+                                
+                                if missing_ranges:
+                                    logger.info(f"L2 cache hit (partial) for {symbol}: need to fetch {len(missing_ranges)} missing range(s)")
+                                else:
+                                    # This shouldn't happen, but handle it gracefully
+                                    logger.debug(f"L2 cache hit (complete) for {symbol} via {resolved}")
+                                    cached_data = self._validate_and_clean_data(cached_data, resolved)
+                                    cached_data = self.add_data_source_metadata(cached_data)
+                                    results[symbol] = cached_data
+                                    self._store_in_cache(cache_key, cached_data)
+                                    self._symbol_resolution_cache[f"{symbol.strip().upper()}|{(country_code or '').strip().upper()}"] = resolved
+                                    fetch_success = True
+                                    break
+                    
                     # Step 3: Fetch missing data from network
+                    # Initialize fetched_data_list here (after Step 2, before Step 3)
                     fetched_data_list = []
                     
                     if missing_ranges:
@@ -319,7 +332,7 @@ class YFinanceProvider(PriceDataProvider):
                                 )
                             else:
                                 # yfinance uses end as an open interval; extend by +1 day and skip empty windows
-                                adj_end = (missing_end + pd.Timedelta(days=1)) if isinstance(missing_end, pd.Timestamp) else (missing_end + timedelta(days=1))
+                                adj_end = missing_end + pd.Timedelta(days=1)
                                 if missing_start >= adj_end:
                                     logger.debug(f"Skip empty missing range for {symbol}: {missing_start} to {missing_end}")
                                     continue
@@ -331,8 +344,8 @@ class YFinanceProvider(PriceDataProvider):
                                 fetched_data_list.append(data)
                             else:
                                 logger.warning(f"Failed to fetch missing range for {symbol}: {missing_start} to {missing_end}")
-                    else:
-                        # No cache, fetch full range
+                    elif not cached_data or cached_data.empty:
+                        # No cache at all, fetch full range
                         if period:
                             data = self._fetch_with_retry(
                                 yf.download, resolved, period=period,
