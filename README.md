@@ -274,6 +274,42 @@ strategy:
 
 📖 **Detailed Documentation**: See `FF5_BOX_README.md` for comprehensive usage guide.
 
+## Alpha Significance Filtering (FF5 Strategy)
+
+The FF5 strategy now supports **statistical significance filtering** for alpha estimates. This helps prevent MVO from over-weighting stocks with noisy alpha estimates, addressing the "small-cap bias" problem.
+
+### Problem
+With limited data (e.g., 52 weekly observations for 252-day lookback), alpha estimates have high standard errors. MVO may treat noise as signal and allocate heavily to stocks with spurious positive alphas.
+
+### Solution
+Filter or shrink alphas based on their t-statistics:
+- **Hard threshold**: Zero out alphas with |t| < threshold
+- **Linear shrinkage**: Scale alpha by |t|/threshold (gradual decay)
+- **Sigmoid shrinkage**: Smooth transition around threshold
+
+### Usage
+
+1. **Generate t-statistics CSV**:
+```bash
+python examples/compute_alpha_tstats.py \
+    --config configs/active/single_experiment/ff5_box_based_experiment.yaml \
+    --output alpha_tstats.csv \
+    --lookback 252
+```
+
+2. **Enable in strategy config**:
+```yaml
+strategy:
+  parameters:
+    alpha_significance:
+      enabled: true
+      t_threshold: 2.0
+      method: "hard_threshold"  # or "linear_shrinkage", "sigmoid_shrinkage"
+      tstats_path: "./alpha_tstats.csv"
+```
+
+The filter automatically applies when generating predictions, logging detailed metrics about filtered alphas.
+
 ## MetaModel Strategy Combination
 
 The system includes a sophisticated MetaModel for combining multiple trading strategies:

@@ -1,18 +1,27 @@
 """
-Compute t-statistics for FF5 alpha estimates.
+Compute t-statistics for Fama-French (FF3/FF5) alpha estimates.
 
 This script computes alpha t-statistics by:
-1. Loading a trained FF5 model (by model_id)
+1. Loading a trained FF3 or FF5 model (by model_id)
 2. Extracting symbols from the model's alphas
 3. Reusing the training pipeline's data loading logic
-4. Computing t-stats using the same data that was used for training
+4. Computing t-stats using the same factors that were used for training
 
 This ensures consistency with training and follows DRY principles.
+The script automatically detects the model type (FF3 or FF5) and uses the
+appropriate factors (3 for FF3, 5 for FF5).
 
 Usage:
+    # For FF5 model:
     python examples/compute_alpha_tstats.py \
         --model-id ff5_regression_v1 \
         --output alpha_tstats.csv \
+        --lookback 252
+
+    # For FF3 model:
+    python examples/compute_alpha_tstats.py \
+        --model-id ff3_regression_20251106_000146 \
+        --output alpha_tstats_ff3.csv \
         --lookback 252
 
     # If you need to override training dates:
@@ -52,17 +61,21 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def compute_alpha_tstat(returns: pd.Series, factors: pd.DataFrame) -> Dict[str, Any]:
+def compute_alpha_tstat(returns: pd.Series, factors: pd.DataFrame, required_factors: List[str] = None) -> Dict[str, Any]:
     """
-    Run FF5 regression and return alpha and its t-stat.
+    Run Fama-French regression and return alpha and its t-stat.
     
     Args:
         returns: Stock excess returns (Series with date index)
-        factors: FF5 factor returns (DataFrame with columns: MKT, SMB, HML, RMW, CMA)
+        factors: Factor returns (DataFrame with columns: MKT, SMB, HML, [RMW, CMA])
+        required_factors: List of factor columns to use. Defaults to FF5 factors.
     
     Returns:
         Dictionary with 'alpha', 't_stat', 'p_value', 'r_squared', 'n_obs'
     """
+    # Default to FF5 factors if not specified
+    if required_factors is None:
+        required_factors = ['MKT', 'SMB', 'HML', 'RMW', 'CMA']
     # Ensure both have the same index (aligned dates)
     # Normalize index types to ensure proper intersection
     returns_index = returns.index
@@ -90,9 +103,6 @@ def compute_alpha_tstat(returns: pd.Series, factors: pd.DataFrame) -> Dict[str, 
             'r_squared': 0.0,
             'n_obs': len(common_index)
         }
-    
-    # Extract required factor columns (define before using)
-    required_factors = ['MKT', 'SMB', 'HML', 'RMW', 'CMA']
     
     # Align data by common dates - ensure we use the actual index from the series/dataframe
     # Reindex both to common_index to ensure perfect alignment
@@ -261,7 +271,7 @@ def create_data_providers_from_config(config_path: str):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Compute t-statistics for FF5 alpha estimates using trained model',
+        description='Compute t-statistics for Fama-French (FF3/FF5) alpha estimates using trained model',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__
     )
@@ -318,6 +328,26 @@ def main():
     if not model or not hasattr(model, 'get_symbol_alphas'):
         logger.error(f"Model {args.model_id} does not support get_symbol_alphas()")
         return 1
+    
+    # Step 1.5: Determine model type and required factors
+    model_type = getattr(model, 'model_type', None)
+    if model_type is None:
+        # Try to infer from model_id
+        if 'ff3' in args.model_id.lower():
+            model_type = 'ff3_regression'
+        elif 'ff5' in args.model_id.lower():
+            model_type = 'ff5_regression'
+        else:
+            logger.warning("Could not determine model type, defaulting to FF5")
+            model_type = 'ff5_regression'
+    
+    # Determine required factors based on model type
+    if model_type == 'ff3_regression':
+        required_factors = ['MKT', 'SMB', 'HML']
+        logger.info("Using FF3 factors: MKT, SMB, HML")
+    else:
+        required_factors = ['MKT', 'SMB', 'HML', 'RMW', 'CMA']
+        logger.info("Using FF5 factors: MKT, SMB, HML, RMW, CMA")
     
     # Step 2: Extract symbols from model alphas
     alphas = model.get_symbol_alphas()
@@ -391,11 +421,11 @@ def main():
     # Step 5: Create minimal TrainingPipeline for data loading (reuse _load_data method)
     logger.info("Creating training pipeline for data loading...")
     # We need feature_pipeline for TrainingPipeline, but we only use _load_data
-    # Create a minimal feature pipeline
-    feature_pipeline = FeatureEngineeringPipeline.from_config({}, model_type='ff5_regression')
+    # Create a minimal feature pipeline using the detected model type
+    feature_pipeline = FeatureEngineeringPipeline.from_config({}, model_type=model_type)
     
     train_pipeline = TrainingPipeline(
-        model_type='ff5_regression',
+        model_type=model_type,
         feature_pipeline=feature_pipeline,
         registry_path=args.model_registry_path
     )
@@ -421,7 +451,7 @@ def main():
     # Step 7: Compute t-stats for each symbol
     logger.info("Computing t-statistics...")
     results = []
-    required_factors = ['MKT', 'SMB', 'HML', 'RMW', 'CMA']
+    # required_factors already determined in Step 1.5
     
     for symbol in symbols:
         if symbol not in price_data:
@@ -527,7 +557,7 @@ def main():
             logger.warning(f"Symbol {symbol}: Only {len(common_before)} common dates after alignment. Returns: {len(returns_window)}, Factors: {len(factor_subset)}")
             continue
         
-        stats = compute_alpha_tstat(returns_window, factor_subset)
+        stats = compute_alpha_tstat(returns_window, factor_subset, required_factors=required_factors)
         
         # Log warning if all stats are zero (indicating a problem)
         if stats['t_stat'] == 0.0 and stats['r_squared'] == 0.0 and stats['n_obs'] > 0:
