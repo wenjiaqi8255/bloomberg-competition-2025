@@ -469,8 +469,11 @@ class StrategyFactory:
             params['lookback_days'] = config.get('lookback_days', 252)
             params['risk_free_rate'] = config.get('risk_free_rate', 0.02)
             # Extract alpha_significance config if present
+            # Check both config level and parameters level
             if 'alpha_significance' in config:
                 params['alpha_significance'] = config['alpha_significance']
+            elif 'parameters' in config and 'alpha_significance' in config['parameters']:
+                params['alpha_significance'] = config['parameters']['alpha_significance']
         
         return params
 

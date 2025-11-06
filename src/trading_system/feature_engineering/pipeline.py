@@ -729,11 +729,19 @@ class FeatureEngineeringPipeline:
         try:
             logger.info("Creating factor features (values only)...")
 
-            # 确保因子数据包含必要的FF5因子
-            factor_cols = ['MKT', 'SMB', 'HML', 'RMW', 'CMA']
+            # 根据模型类型选择因子
+            # FF3模型只需要3个因子：MKT, SMB, HML
+            # FF5模型需要5个因子：MKT, SMB, HML, RMW, CMA
+            if self.model_type and self.model_type.lower() in ['ff3_regression', 'fama_french_3']:
+                factor_cols = ['MKT', 'SMB', 'HML']  # FF3只用3个因子
+                logger.info("Using FF3 factors: MKT, SMB, HML")
+            else:
+                factor_cols = ['MKT', 'SMB', 'HML', 'RMW', 'CMA']  # FF5用5个因子
+                logger.info("Using FF5 factors: MKT, SMB, HML, RMW, CMA")
+            
             missing_factors = [col for col in factor_cols if col not in factor_data.columns]
             if missing_factors:
-                logger.error(f"Missing FF5 factors in factor_data: {missing_factors}")
+                logger.error(f"Missing required factors in factor_data: {missing_factors}. Required: {factor_cols}")
                 return pd.DataFrame()
 
             # 只选择数值型的因子数据

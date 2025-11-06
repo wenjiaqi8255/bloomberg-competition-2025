@@ -68,6 +68,7 @@ from ...trading_system.config.system import SystemConfig
 from ...trading_system.data.base_data_provider import BaseDataProvider
 from ...trading_system.experiment_tracking.wandb_adapter import WandBExperimentTracker
 from ...trading_system.experiment_tracking.interface import ExperimentTrackerInterface
+from ...trading_system.models.model_persistence import ModelRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -180,69 +181,214 @@ class ExperimentOrchestrator:
         training_tracker = parent_tracker.create_child_run("training")
         backtest_tracker = parent_tracker.create_child_run("backtest")
 
-        # --- Part 1: Run the Training Pipeline ---
-        training_setup = self.full_config.get('training_setup', {})
-        if not training_setup:
-            raise ValueError("Config must contain a 'training_setup' section.")
-
-        # Dynamically create data providers
-        data_provider_config = self.full_config.get('data_provider')
-        if not data_provider_config:
-            raise ValueError("Config must contain a 'data_provider' section.")
-        data_provider = _create_data_provider(data_provider_config)
-
-        # Create factor data provider if specified
-        factor_data_provider = None
-        factor_data_config = self.full_config.get('factor_data_provider')
-        if factor_data_config:
-            logger.info(f"🔧 DEBUG: Creating factor data provider from config: {factor_data_config}")
-            factor_data_provider = _create_factor_data_provider(factor_data_config)
-            logger.info(f"🔧 DEBUG: Factor data provider created: {type(factor_data_provider)}")
+        # Check if using a pre-trained model
+        pretrained_model_id = None
+        if isinstance(self.full_config, dict):
+            pretrained_model_id = self.full_config.get('pretrained_model_id')
         else:
-            logger.warning("🔧 DEBUG: No factor data provider configured in experiment config")
-
-        # Setup FeatureEngineering and Training Pipelines
-        model_config = training_setup.get('model', {})
-        feature_config = training_setup.get('feature_engineering', {})
-        training_params = training_setup.get('parameters', {})
-        model_type = model_config.get('model_type')
-
-        feature_pipeline = FeatureEngineeringPipeline.from_config(feature_config, model_type=model_type)
-
-        train_pipeline = TrainingPipeline(
-            model_type=model_type,
-            feature_pipeline=feature_pipeline,
-            registry_path="./models/",  # Use the correct relative path from project root
-            model_config=model_config,  # Pass model-specific config for LSTM, etc.
-            experiment_tracker=training_tracker
-        )
-        logger.info(f"🔧 DEBUG: Configuring training pipeline with providers:")
-        logger.info(f"🔧 DEBUG:   data_provider: {type(data_provider)}")
-        logger.info(f"🔧 DEBUG:   factor_data_provider: {type(factor_data_provider) if factor_data_provider else None}")
-        train_pipeline.configure_data(data_provider=data_provider, factor_data_provider=factor_data_provider)
+            # If using Pydantic config, try to get attribute
+            pretrained_model_id = getattr(self.full_config, 'pretrained_model_id', None)
         
-        # Resolve training symbols from config via thin UniverseProvider (CSV or inline)
-        try:
-            from ...trading_system.data.utils.universe_loader import UniverseProvider
-            resolved_symbols = UniverseProvider.resolve_symbols(self.full_config)
-            training_params = {**training_params, 'symbols': resolved_symbols}
-            logger.info(f"Resolved training universe via UniverseProvider: {len(resolved_symbols)} symbols")
-        except Exception as e:
-            logger.warning(f"UniverseProvider resolution failed or not configured; proceeding with provided symbols. Reason: {e}")
+        # If pretrained_model_id is None or empty string, treat as not provided
+        if not pretrained_model_id:
+            pretrained_model_id = None
 
-        logger.info("Executing training pipeline...")
-        training_results = train_pipeline.run_pipeline(**training_params)
+        # --- Part 1: Run the Training Pipeline OR Load Pre-trained Model ---
+        if pretrained_model_id:
+            logger.info(f"Using pre-trained model: {pretrained_model_id}")
+            logger.info("Skipping training pipeline...")
+            
+            # Load pre-trained model and artifacts
+            registry_path = "./models/"
+            registry = ModelRegistry(registry_path)
+            
+            # Check if model exists
+            model_dir = Path(registry_path) / pretrained_model_id
+            if not model_dir.exists():
+                raise FileNotFoundError(
+                    f"Pre-trained model not found: {pretrained_model_id}\n"
+                    f"Expected path: {model_dir}\n"
+                    f"Please verify the model_id is correct and the model was saved successfully."
+                )
+            
+            # Load model and artifacts
+            loaded = registry.load_model_with_artifacts(pretrained_model_id)
+            if loaded is None:
+                raise RuntimeError(
+                    f"Failed to load pre-trained model: {pretrained_model_id}\n"
+                    f"Model directory exists but loading failed. Please check the model files."
+                )
+            
+            model, artifacts = loaded
+            model_id = pretrained_model_id
+            
+            # Extract feature pipeline from artifacts
+            feature_pipeline = artifacts.get('feature_pipeline')
+            if feature_pipeline is None:
+                logger.warning(
+                    f"Feature pipeline not found in artifacts for model {pretrained_model_id}. "
+                    f"Attempting to create feature pipeline from config..."
+                )
+                # Fallback: try to create feature pipeline from config
+                if isinstance(self.full_config, dict):
+                    training_setup = self.full_config.get('training_setup', {})
+                else:
+                    training_setup = getattr(self.full_config, 'training_setup', None)
+                    if training_setup and hasattr(training_setup, 'dict'):
+                        training_setup = training_setup.dict()
+                
+                if not training_setup:
+                    raise ValueError(
+                        f"Feature pipeline not found in model artifacts and 'training_setup' "
+                        f"not provided in config. Cannot proceed without feature pipeline."
+                    )
+                
+                if isinstance(training_setup, dict):
+                    feature_config = training_setup.get('feature_engineering', {})
+                    model_config = training_setup.get('model', {})
+                    model_type = model_config.get('model_type') if isinstance(model_config, dict) else getattr(model_config, 'model_type', None)
+                else:
+                    feature_eng = getattr(training_setup, 'feature_engineering', None)
+                    feature_config = feature_eng.dict() if feature_eng and hasattr(feature_eng, 'dict') else (feature_eng if feature_eng else {})
+                    model_obj = getattr(training_setup, 'model', None)
+                    model_type = getattr(model_obj, 'model_type', None) if model_obj else None
+                
+                if not model_type:
+                    raise ValueError(
+                        f"Feature pipeline not found in artifacts and model_type not specified. "
+                        f"Cannot create feature pipeline."
+                    )
+                feature_pipeline = FeatureEngineeringPipeline.from_config(
+                    feature_config, model_type=model_type
+                )
+                logger.warning(
+                    f"Created unfitted feature pipeline from config. "
+                    f"Feature consistency may be affected."
+                )
+            else:
+                logger.info(f"Successfully loaded feature pipeline from model artifacts")
+            
+            # Create mock training results for consistency with rest of the code
+            training_results = {
+                'pipeline_info': {
+                    'model_id': model_id,
+                    'status': 'loaded_from_pretrained'
+                }
+            }
+            
+            # Still need data providers for backtest
+            if isinstance(self.full_config, dict):
+                data_provider_config = self.full_config.get('data_provider')
+                factor_data_config = self.full_config.get('factor_data_provider')
+                training_setup = self.full_config.get('training_setup', {})
+            else:
+                data_provider_config = getattr(self.full_config, 'data_provider', None)
+                factor_data_config = getattr(self.full_config, 'factor_data_provider', None)
+                training_setup = getattr(self.full_config, 'training_setup', None)
+                if training_setup:
+                    training_setup = training_setup.dict() if hasattr(training_setup, 'dict') else training_setup
+            
+            if not data_provider_config:
+                raise ValueError("Config must contain a 'data_provider' section for backtesting.")
+            data_provider = _create_data_provider(data_provider_config)
+            
+            # Create factor data provider if specified
+            factor_data_provider = None
+            if factor_data_config:
+                logger.info(f"Creating factor data provider from config: {factor_data_config}")
+                factor_data_provider = _create_factor_data_provider(factor_data_config)
+            
+            # Resolve training symbols for universe (needed for backtest)
+            # Note: We skip data availability check for pre-trained models - let backtest handle it
+            training_params = {}
+            try:
+                from ...trading_system.data.utils.universe_loader import UniverseProvider
+                resolved_symbols = UniverseProvider.resolve_symbols(self.full_config)
+                training_params = {'symbols': resolved_symbols}
+                logger.info(f"Resolved backtest universe via UniverseProvider: {len(resolved_symbols)} symbols")
+            except Exception as e:
+                logger.warning(f"UniverseProvider resolution failed; may need symbols from config. Reason: {e}")
+                # Try to get symbols from training_setup if available
+                if training_setup:
+                    if isinstance(training_setup, dict):
+                        training_params = training_setup.get('parameters', {})
+                    else:
+                        training_params = getattr(training_setup, 'parameters', {})
+                        if training_params and hasattr(training_params, 'dict'):
+                            training_params = training_params.dict()
+            
+            logger.info(f"Pre-trained model loaded successfully. Model ID: {model_id}")
+            logger.info("Skipping data availability check for pre-trained model - backtest will handle data fetching")
         
-        model_id = training_results.get('pipeline_info', {}).get('model_id')
-        if not model_id:
-            raise RuntimeError("Training pipeline did not return a valid model_id.")
-        
-        logger.info(f"Training complete. New model_id: {model_id}")
+        else:
+            # Normal training flow
+            logger.info("No pre-trained model specified. Proceeding with training...")
+            
+            training_setup = self.full_config.get('training_setup', {})
+            if not training_setup:
+                raise ValueError("Config must contain a 'training_setup' section.")
 
-        # --- Part 2: Run the Backtest with the new model ---
-        # IMPORTANT: Reuse the fitted feature_pipeline from training
+            # Dynamically create data providers
+            data_provider_config = self.full_config.get('data_provider')
+            if not data_provider_config:
+                raise ValueError("Config must contain a 'data_provider' section.")
+            data_provider = _create_data_provider(data_provider_config)
+
+            # Create factor data provider if specified
+            factor_data_provider = None
+            factor_data_config = self.full_config.get('factor_data_provider')
+            if factor_data_config:
+                logger.info(f"🔧 DEBUG: Creating factor data provider from config: {factor_data_config}")
+                factor_data_provider = _create_factor_data_provider(factor_data_config)
+                logger.info(f"🔧 DEBUG: Factor data provider created: {type(factor_data_provider)}")
+            else:
+                logger.warning("🔧 DEBUG: No factor data provider configured in experiment config")
+
+            # Setup FeatureEngineering and Training Pipelines
+            model_config = training_setup.get('model', {})
+            feature_config = training_setup.get('feature_engineering', {})
+            training_params = training_setup.get('parameters', {})
+            model_type = model_config.get('model_type')
+
+            feature_pipeline = FeatureEngineeringPipeline.from_config(feature_config, model_type=model_type)
+
+            train_pipeline = TrainingPipeline(
+                model_type=model_type,
+                feature_pipeline=feature_pipeline,
+                registry_path="./models/",  # Use the correct relative path from project root
+                model_config=model_config,  # Pass model-specific config for LSTM, etc.
+                experiment_tracker=training_tracker
+            )
+            logger.info(f"🔧 DEBUG: Configuring training pipeline with providers:")
+            logger.info(f"🔧 DEBUG:   data_provider: {type(data_provider)}")
+            logger.info(f"🔧 DEBUG:   factor_data_provider: {type(factor_data_provider) if factor_data_provider else None}")
+            train_pipeline.configure_data(data_provider=data_provider, factor_data_provider=factor_data_provider)
+            
+            # Resolve training symbols from config via thin UniverseProvider (CSV or inline)
+            try:
+                from ...trading_system.data.utils.universe_loader import UniverseProvider
+                resolved_symbols = UniverseProvider.resolve_symbols(self.full_config)
+                training_params = {**training_params, 'symbols': resolved_symbols}
+                logger.info(f"Resolved training universe via UniverseProvider: {len(resolved_symbols)} symbols")
+            except Exception as e:
+                logger.warning(f"UniverseProvider resolution failed or not configured; proceeding with provided symbols. Reason: {e}")
+
+            logger.info("Executing training pipeline...")
+            training_results = train_pipeline.run_pipeline(**training_params)
+            
+            model_id = training_results.get('pipeline_info', {}).get('model_id')
+            if not model_id:
+                raise RuntimeError("Training pipeline did not return a valid model_id.")
+            
+            logger.info(f"Training complete. New model_id: {model_id}")
+
+        # --- Part 2: Run the Backtest with the model (trained or pre-trained) ---
+        # IMPORTANT: Reuse the fitted feature_pipeline from training or load from artifacts
         # This ensures feature consistency between training and prediction
-        logger.info("Using fitted feature pipeline from training for backtest")
+        if pretrained_model_id:
+            logger.info("Using feature pipeline from pre-trained model artifacts for backtest")
+        else:
+            logger.info("Using fitted feature pipeline from training for backtest")
         
         # Create provider instances to be passed down to the backtesting components
         # Include the fitted feature pipeline in providers
@@ -257,9 +403,14 @@ class ExperimentOrchestrator:
             logger.warning("🔧 DEBUG: No factor_data_provider to add to backtest providers")
 
         # Load backtest and strategy configs
-        # Use Pydantic objects directly (simplified)
-        strategy_config_obj = self.full_config.get('strategy')
-        backtest_config_obj = self.full_config.get('backtest')
+        # Handle both dict and Pydantic config objects
+        if isinstance(self.full_config, dict):
+            strategy_config_obj = self.full_config.get('strategy')
+            backtest_config_obj = self.full_config.get('backtest')
+        else:
+            # Pydantic object - use getattr
+            strategy_config_obj = getattr(self.full_config, 'strategy', None)
+            backtest_config_obj = getattr(self.full_config, 'backtest', None)
         
         # Validate key fields exist
         if strategy_config_obj is None:
@@ -282,22 +433,28 @@ class ExperimentOrchestrator:
         training_symbols = training_params.get('symbols', [])
         if training_symbols:
             # Phase 2: Check data availability before creating strategy
-            logger.info(f"Checking data availability for {len(training_symbols)} training symbols...")
-            available_data = data_provider.get_historical_data(
-                symbols=training_symbols,
-                start_date=training_params.get('start_date'),
-                end_date=training_params.get('end_date')
-            )
+            # Skip this check for pre-trained models - backtest will handle data fetching
+            if pretrained_model_id:
+                logger.info(f"Using {len(training_symbols)} symbols from config for pre-trained model backtest")
+                logger.info("Skipping pre-backtest data availability check - backtest runner will fetch data as needed")
+            else:
+                # Only do data availability check for newly trained models
+                logger.info(f"Checking data availability for {len(training_symbols)} training symbols...")
+                available_data = data_provider.get_historical_data(
+                    symbols=training_symbols,
+                    start_date=training_params.get('start_date'),
+                    end_date=training_params.get('end_date')
+                )
 
-            # Use actually available symbols
-            available_symbols = list(available_data.keys())
-            if len(available_symbols) < len(training_symbols):
-                logger.warning(f"Data availability check: {len(available_symbols)}/{len(training_symbols)} symbols available")
-                logger.info(f"Using available symbols for training: {len(available_symbols)} symbols")
+                # Use actually available symbols
+                available_symbols = list(available_data.keys())
+                if len(available_symbols) < len(training_symbols):
+                    logger.warning(f"Data availability check: {len(available_symbols)}/{len(training_symbols)} symbols available")
+                    logger.info(f"Using available symbols for training: {len(available_symbols)} symbols")
 
-                # Update training_symbols to only include available symbols
-                training_symbols = available_symbols
-                logger.info(f"Updated training universe to {len(training_symbols)} available symbols")
+                    # Update training_symbols to only include available symbols
+                    training_symbols = available_symbols
+                    logger.info(f"Updated training universe to {len(training_symbols)} available symbols")
 
             logger.info(f"Injecting training universe ({len(training_symbols)} symbols) into strategy config.")
             # Set universe as both attribute and in parameters dict for compatibility

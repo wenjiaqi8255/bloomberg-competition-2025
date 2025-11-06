@@ -1,0 +1,52 @@
+# Fama-French 3-Factor Strategy Configuration Template
+
+experiment:
+  name: "ff3_strategy_experiment"
+  description: "Fama-French 3-factor model trading strategy"
+  tags: ["fama_french", "ff3", "factor_model"]
+  log_to_wandb: false
+  project_name: "bloomberg-competition"
+
+data_provider:
+  type: "YFinanceProvider"
+  parameters:
+    cache_enabled: true
+
+factor_data_provider:
+  type: "FF5DataProvider"  # reuse and subset to MKT, SMB, HML
+  parameters:
+    data_frequency: "monthly"
+    cache_enabled: true
+
+feature_engineering:
+  enabled_features: []   # factors provided by provider
+  include_technical: false
+  include_cross_sectional: false
+  include_theoretical: false
+
+strategy:
+  name: "FF3_Factor_Strategy"
+  type: "fama_french_3"
+  model_id: "ff3_regression_v1"
+  lookback_days: 252
+  risk_free_rate: 0.02
+
+parameters:
+  model_config:
+    regularization: "ridge"
+    alpha: 1.0
+    standardize: false
+
+portfolio_construction:
+  method: "quantitative"
+  target_volatility: 0.15
+  max_position_weight: 0.10
+  turnover_limit: 0.5
+
+backtest:
+  start_date: "2018-01-01"
+  end_date: "2022-12-31"
+  initial_capital: 1000000
+  transaction_cost_bps: 2
+
+

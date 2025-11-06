@@ -119,21 +119,26 @@ class FF5DataProvider(FactorDataProvider):
             if cached_data is not None:
                 return cached_data
 
-            # Determine data file based on frequency
-            if self.data_frequency == "daily":
-                file_url = f"{self.BASE_URL}ftp/F-F_Research_Data_5_Factors_2x3_daily_TXT.zip"
-                filename = "F-F_Research_Data_5_Factors_2x3_daily.txt"
+            # If file_path is provided, load from local CSV file
+            if self.file_path is not None:
+                logger.info(f"Loading FF5 data from local file: {self.file_path}")
+                raw_data = self._load_from_csv(self.file_path)
             else:
-                file_url = f"{self.BASE_URL}ftp/F-F_Research_Data_5_Factors_2x3_TXT.zip"
-                filename = "F-F_Research_Data_5_Factors_2x3.txt"
+                # Determine data file based on frequency
+                if self.data_frequency == "daily":
+                    file_url = f"{self.BASE_URL}ftp/F-F_Research_Data_5_Factors_2x3_daily_TXT.zip"
+                    filename = "F-F_Research_Data_5_Factors_2x3_daily.txt"
+                else:
+                    file_url = f"{self.BASE_URL}ftp/F-F_Research_Data_5_Factors_2x3_TXT.zip"
+                    filename = "F-F_Research_Data_5_Factors_2x3.txt"
 
-            # Fetch and parse data with retry logic
-            raw_data = self._fetch_with_retry(
-                self._fetch_and_parse_data, file_url, filename
-            )
+                # Fetch and parse data with retry logic
+                raw_data = self._fetch_with_retry(
+                    self._fetch_and_parse_data, file_url, filename
+                )
 
-            if raw_data is None:
-                raise DataValidationError("Failed to fetch FF5 data")
+                if raw_data is None:
+                    raise DataValidationError("Failed to fetch FF5 data")
 
             # Clean and validate data using base class method
             clean_data = self.validate_factor_data(raw_data)
@@ -245,6 +250,76 @@ class FF5DataProvider(FactorDataProvider):
                 aligned_equity_data[symbol] = aligned_data
 
         return aligned_factor_data, aligned_equity_data
+
+    def _load_from_csv(self, file_path: str) -> pd.DataFrame:
+        """
+        Load FF5 factor data from a local CSV file.
+
+        Args:
+            file_path: Path to the CSV file containing FF5 data
+
+        Returns:
+            DataFrame with columns: ['MKT', 'SMB', 'HML', 'RMW', 'CMA', 'RF']
+            Index: Dates (DatetimeIndex)
+
+        Raises:
+            DataValidationError: If file cannot be read or data format is invalid
+        """
+        try:
+            import os
+            from pathlib import Path
+
+            # Resolve file path (handle relative paths)
+            if not os.path.isabs(file_path):
+                # Try to resolve relative to current working directory or project root
+                resolved_path = Path(file_path).resolve()
+                if not resolved_path.exists():
+                    # Try relative to the module's directory
+                    module_dir = Path(__file__).parent.parent.parent
+                    resolved_path = module_dir / file_path
+            else:
+                resolved_path = Path(file_path)
+
+            if not resolved_path.exists():
+                raise FileNotFoundError(f"FF5 data file not found: {file_path}")
+
+            logger.info(f"Reading FF5 data from CSV file: {resolved_path}")
+
+            # Read CSV file
+            # Date column should be the first column and will be used as index
+            df = pd.read_csv(resolved_path, index_col=0, parse_dates=True)
+
+            # Ensure index is DatetimeIndex
+            if not isinstance(df.index, pd.DatetimeIndex):
+                df.index = pd.to_datetime(df.index)
+
+            # Validate required columns
+            required_cols = ['MKT', 'SMB', 'HML', 'RMW', 'CMA', 'RF']
+            missing_cols = [col for col in required_cols if col not in df.columns]
+            if missing_cols:
+                raise ValueError(f"Missing required columns in CSV file: {missing_cols}")
+
+            # Select only required columns and ensure correct order
+            df = df[required_cols]
+
+            # Sort by date
+            df = df.sort_index()
+
+            # Remove any rows with NaN values
+            df = df.dropna()
+
+            logger.info(f"Successfully loaded {len(df)} rows from CSV file")
+            logger.debug(f"Date range: {df.index.min()} to {df.index.max()}")
+            logger.debug(f"Columns: {list(df.columns)}")
+
+            return df
+
+        except FileNotFoundError as e:
+            logger.error(f"FF5 CSV file not found: {e}")
+            raise DataValidationError(f"FF5 CSV file not found: {e}")
+        except Exception as e:
+            logger.error(f"Failed to load FF5 data from CSV file: {e}")
+            raise DataValidationError(f"Failed to load FF5 data from CSV: {e}")
 
     def _fetch_and_parse_data(self, file_url: str, filename: str) -> pd.DataFrame:
         """Fetch and parse raw FF5 data from web."""

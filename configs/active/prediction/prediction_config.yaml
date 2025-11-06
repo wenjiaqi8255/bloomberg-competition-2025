@@ -14,11 +14,11 @@ strategy:
 
   # For single model strategies (ff5, ml)
   parameters:
-    model_id: "ff5_regression_20251024_020851"  # Trained model ID
+    model_id: "ff5_regression_20251103_161033"  # Trained model ID 20251027_011643
     model_registry_path: "./models/"
     use_fitted_pipeline: true  # Use the fitted feature pipeline stored with the model
     lookback_days: 252
-    min_signal_strength: 0.00001
+    min_signal_strength: 0.0000000001
     enable_normalization: true
     normalization_method: "minmax"
     enable_short_selling: false
@@ -40,11 +40,16 @@ factor_data_provider:
 universe:
   # Uncomment to load symbols from CSV instead of inline list
   source: "csv"
-  csv_path: "./data/universes/merged_tickers.csv"
+  csv_path: "./data/universes/complete_stock_data_converted.csv"
   filters:
-    min_market_cap: 1000000000
+    min_market_cap: 100
     max_stocks: 500
     # exclude_sectors: ["Real Estate"]
+    # Ensure hard box coverage at input (uses CSV column `source_sheet`)
+    include_boxes: ["DM_LG","DM_MG","DM_SG","DM_LV","DM_MV","DM_SV","EM_LG","EM_MG","EM_SG","EM_LV","EM_MV","EM_SV"]
+    per_box_top_n: 20
+    per_box_min_n: 1
+    # fail_fast omitted → defaults to true in code
   symbols: []
   
   # symbols:
@@ -73,10 +78,17 @@ portfolio_construction:
   method: "box_based"  # Factory determines which builder: 'box_based' or 'quantitative'
   
   # Box-based configuration (if method: box_based)
-  stocks_per_box: 1
-  min_stocks_per_box: 1
-  allocation_method: "equal"
-  allocation_config: {}
+  stocks_per_box: 3
+  min_stocks_per_box: 3
+  # allocation_method: "equal"
+  # allocation_config: {}
+  allocation_method: "mean_variance"  # Use mean-variance optimization
+  allocation_scope: "global"  # Use global mean-variance across all selected stocks
+  allocation_config:
+    risk_aversion: 2.0  # Risk aversion parameter (higher = more risk-averse)
+    lookback_days: 252  # Lookback period for covariance estimation
+    covariance_method: "ledoit_wolf"  # Use factor model covariance
+    min_regression_obs: 24  # Minimum observations for factor model regression
 
   # Box weight configuration
   box_weights:
@@ -91,7 +103,8 @@ portfolio_construction:
 
   # Stock classifier configuration - use technical indicators for classification
   classifier:
-    method: "technical"  # Use technical indicators that are already computed
+    # method: "technical"  # Use technical indicators that are already computed
+    method: "four_factor"
     cache_enabled: true
     # size_config:
     #   thresholds:
@@ -105,9 +118,9 @@ portfolio_construction:
 
   # Centralized constraints for both methods
   constraints:
-    max_position_weight: 0.10
+    max_position_weight: 0.99999
     max_leverage: 1.0
-    min_position_weight: 0.02
+    min_position_weight: 0.0
   
   # Alternative: Quantitative configuration (if method: quantitative)
   # optimizer:
