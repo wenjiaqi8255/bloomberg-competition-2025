@@ -20,6 +20,8 @@ from typing import Dict, List, Any, Literal
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize, LinearConstraint, Bounds
+from .constraint_applier import ConstraintApplier
+from src.trading_system.portfolio_construction.utils.weight_utils import WeightUtils
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +55,7 @@ class PortfolioOptimizer:
         self.top_n = config.get('top_n', 10)
         self.enable_short_selling = config.get('enable_short_selling', False)
         self.max_position_weight = config.get('max_position_weight', None)
+        self.config = config
 
         # Validate method
         valid_methods = ['mean_variance', 'equal_weight', 'top_n']
@@ -63,7 +66,7 @@ class PortfolioOptimizer:
             )
             self.method = 'mean_variance'
 
-        logger.info(f"PortfolioOptimizer initialized with method='{self.method}', short_selling={self.enable_short_selling}")
+        logger.info(f"PortfolioOptimizer initialized with method='{self.method}'")
 
     def optimize(self,
                  expected_returns: pd.Series,
@@ -80,52 +83,48 @@ class PortfolioOptimizer:
         Returns:
             A Series containing the optimal weights for each asset.
         """
+        # Align inputs to ensure consistent ordering
+        common_symbols = expected_returns.index.intersection(cov_matrix.index)
+        expected_returns = expected_returns.loc[common_symbols]
+        cov_matrix = cov_matrix.loc[common_symbols, common_symbols]
+
+        if expected_returns.empty:
+            logger.warning("Cannot optimize with empty expected returns.")
+            return pd.Series(dtype=float)
+
         # Dispatch to appropriate method
         if self.method == 'mean_variance':
             return self._optimize_mean_variance(expected_returns, cov_matrix, constraints)
         elif self.method == 'equal_weight':
-            return self._optimize_equal_weight(expected_returns, constraints)
+            return self._optimize_equal_weight(expected_returns, cov_matrix, constraints)
         elif self.method == 'top_n':
-            return self._optimize_top_n(expected_returns, constraints)
+            return self._optimize_top_n(expected_returns, cov_matrix, constraints)
         else:
-            # Fallback (should not reach here due to validation in __init__)
-            logger.error(f"Unknown method '{self.method}', falling back to equal weight")
-            return self._optimize_equal_weight(expected_returns, constraints)
+            logger.error(f"Unknown method '{self.method}', falling back to mean-variance")
+            return self._optimize_mean_variance(expected_returns, cov_matrix, constraints)
 
     def _optimize_mean_variance(self,
                                 expected_returns: pd.Series,
                                 cov_matrix: pd.DataFrame,
                                 constraints: List[Dict[str, Any]]) -> pd.Series:
         """
-        Traditional mean-variance optimization (Markowitz).
+        Performs classic mean-variance optimization (Markowitz).
         
         Maximizes: E[R] - (λ/2) * Variance
-        where λ is the risk aversion parameter.
         """
         num_assets = len(expected_returns)
         initial_weights = np.ones(num_assets) / num_assets
 
-        # Objective function to maximize: w^T μ - (λ/2) w^T Σ w
-        # Minimizing the negative of this function is equivalent.
+        # Objective function: Minimize the negative utility
         def objective_function(weights):
             portfolio_return = np.dot(weights, expected_returns)
             portfolio_variance = weights.T @ cov_matrix @ weights
             return -(portfolio_return - 0.5 * self.risk_aversion * portfolio_variance)
 
-        # Build constraints for the solver
-        scipy_constraints = self._build_scipy_constraints(constraints, num_assets, expected_returns.index)
-
-        # Bounds for each weight based on short selling configuration and max position weight
-        if self.enable_short_selling:
-            # Allow short positions: -max_w <= w_i <= max_w
-            upper = self.max_position_weight if self.max_position_weight is not None else 1
-            bounds = Bounds(-upper, upper)
-            logger.debug(f"Using short selling bounds: [-{upper}, {upper}]")
-        else:
-            # Long-only: 0 <= w_i <= max_w
-            upper = self.max_position_weight if self.max_position_weight is not None else 1
-            bounds = Bounds(0, upper)
-            logger.debug(f"Using long-only bounds: [0, {upper}]")
+        # Build constraints using the new applier
+        applier = ConstraintApplier(self.config, num_assets, expected_returns.index)
+        scipy_constraints = applier.get_linear_constraints(constraints)
+        bounds = applier.get_bounds()
 
         # Perform optimization
         result = minimize(
@@ -134,214 +133,110 @@ class PortfolioOptimizer:
             method='SLSQP',
             bounds=bounds,
             constraints=scipy_constraints,
-            options={'disp': False}
+            options={'disp': False, 'maxiter': 1000}
         )
 
         if result.success:
             optimal_weights = pd.Series(result.x, index=expected_returns.index)
-            logger.info(f"Mean-variance optimization successful")
-            return optimal_weights / optimal_weights.sum()
+            logger.debug("Mean-variance optimization successful.")
+            # Normalize to handle potential floating point inaccuracies from solver
+            return WeightUtils.normalize_weights(optimal_weights)
         else:
-            logger.error(f"Mean-variance optimization failed: {result.message}")
-            # Fallback to equal weight if optimization fails, but apply constraints
-            fallback_weights = pd.Series(initial_weights, index=expected_returns.index)
-            return self._cap_weights_by_asset_limit(fallback_weights)
+            logger.warning(f"Mean-variance optimization failed: {result.message}. Returning empty weights.")
+            return pd.Series(dtype=float)
     
     def _optimize_equal_weight(self,
                                expected_returns: pd.Series,
+                               cov_matrix: pd.DataFrame,
                                constraints: List[Dict[str, Any]]) -> pd.Series:
         """
-        Simple 1/N equal weighting strategy.
-
-        This is a naive yet robust approach that:
-        - Avoids estimation error in mean-variance optimization
-        - Provides maximum diversification
-        - Has been shown to outperform mean-variance in many practical settings
-
-        Reference: DeMiguel et al. (2009) "Optimal Versus Naive Diversification"
-
-        When short selling is enabled, this method still produces equal positive weights.
-        For short selling strategies, use mean_variance optimization instead.
+        Finds the portfolio that is closest to equal-weight while satisfying all constraints.
+        This is a quadratic programming problem that minimizes tracking error from a 1/N portfolio.
         """
         num_assets = len(expected_returns)
         equal_weights = np.ones(num_assets) / num_assets
-        weights = pd.Series(equal_weights, index=expected_returns.index)
 
-        # Apply box constraints if any (e.g., sector limits)
-        weights = self._apply_constraints_to_weights(weights, constraints)
+        # Objective: Minimize (w - w_equal)^T * I * (w - w_equal), which simplifies to sum((w_i - 1/N)^2)
+        # This finds the solution that is closest to the equal weight vector.
+        def objective_function(weights):
+            return np.sum((weights - equal_weights)**2)
+
+        # Build constraints using the new applier
+        applier = ConstraintApplier(self.config, num_assets, expected_returns.index)
+        scipy_constraints = applier.get_linear_constraints(constraints)
         
-        # Apply per-asset weight cap
-        weights = self._cap_weights_by_asset_limit(weights)
+        # Equal weight is inherently a long-only strategy
+        bounds_config = self.config.copy()
+        bounds_config['enable_short_selling'] = False
+        long_only_applier = ConstraintApplier(bounds_config, num_assets, expected_returns.index)
+        bounds = long_only_applier.get_bounds()
 
-        short_selling_info = " (short selling enabled)" if self.enable_short_selling else " (long-only)"
-        logger.info(f"Equal weight optimization{short_selling_info}: {num_assets} assets, weight={1/num_assets:.4f} each")
+        # Perform optimization
+        result = minimize(
+            fun=objective_function,
+            x0=equal_weights,
+            method='SLSQP',
+            bounds=bounds,
+            constraints=scipy_constraints,
+            options={'disp': False, 'maxiter': 1000}
+        )
 
-        # If short selling is enabled, warn that equal_weight method doesn't produce short positions
-        if self.enable_short_selling:
-            logger.warning("Equal weight method produces only positive weights. Use mean_variance for short positions.")
-
-        return weights
+        if result.success:
+            optimal_weights = pd.Series(result.x, index=expected_returns.index)
+            logger.debug("Constrained equal-weight optimization successful.")
+            return WeightUtils.normalize_weights(optimal_weights)
+        else:
+            logger.warning(f"Constrained equal-weight optimization failed: {result.message}. Returning empty weights.")
+            return pd.Series(dtype=float)
     
     def _optimize_top_n(self,
                        expected_returns: pd.Series,
+                       cov_matrix: pd.DataFrame,
                        constraints: List[Dict[str, Any]]) -> pd.Series:
         """
-        Top-N equal weighting strategy.
-
-        Selects the N assets with highest expected returns and allocates
-        equal weight (1/N) to each. This combines:
-        - Signal selectivity (only invest in best opportunities)
-        - Simplicity (equal weight among selected assets)
-        - Risk control (diversification across N assets)
-
-        This approach is commonly used by practitioners who want to
-        capture alpha signals while avoiding over-concentration.
-
-        When short selling is enabled and expected returns can be negative,
-        this method will select the most positive expected returns.
-        For short positions, use mean_variance optimization.
+        Selects top N assets by signal and finds the portfolio closest to equal-weight
+        among them, subject to constraints.
         """
-        # Select top N assets by expected return
         n = min(self.top_n, len(expected_returns))
+        top_assets = expected_returns.nlargest(n).index
+        num_assets = len(expected_returns)
 
-        if self.enable_short_selling:
-            # When short selling is enabled, we might consider both positive and negative returns
-            # For now, select top N by absolute expected return to capture both long and short opportunities
-            abs_returns = expected_returns.abs()
-            top_assets = abs_returns.nlargest(n).index
-            logger.info(f"Top-{n} optimization with short selling: Selected by absolute expected returns")
+        # Target is 1/n for top assets, 0 for others
+        target_weights = pd.Series(0.0, index=expected_returns.index)
+        target_weights.loc[top_assets] = 1.0 / n
+
+        # Objective: Minimize deviation from this target vector
+        def objective_function(weights):
+            return np.sum((weights - target_weights.values)**2)
+
+        # Build constraints using the new applier
+        applier = ConstraintApplier(self.config, num_assets, expected_returns.index)
+        scipy_constraints = applier.get_linear_constraints(constraints)
+
+        # Top-N is inherently a long-only strategy
+        bounds_config = self.config.copy()
+        bounds_config['enable_short_selling'] = False
+        long_only_applier = ConstraintApplier(bounds_config, num_assets, expected_returns.index)
+        bounds = long_only_applier.get_bounds()
+
+        # Perform optimization
+        result = minimize(
+            fun=objective_function,
+            x0=target_weights.values,
+            method='SLSQP',
+            bounds=bounds,
+            constraints=scipy_constraints,
+            options={'disp': False, 'maxiter': 1000}
+        )
+
+        if result.success:
+            optimal_weights = pd.Series(result.x, index=expected_returns.index)
+            logger.debug(f"Constrained top-{n} optimization successful.")
+            return WeightUtils.normalize_weights(optimal_weights)
         else:
-            # Long-only: select highest positive expected returns
-            top_assets = expected_returns.nlargest(n).index
-            logger.info(f"Top-{n} optimization long-only: Selected by expected returns")
-
-        # Allocate equal weight to top N assets
-        weights = pd.Series(0.0, index=expected_returns.index)
-        weights[top_assets] = 1.0 / n
-
-        # Apply box constraints if any
-        weights = self._apply_constraints_to_weights(weights, constraints)
-        
-        # Apply per-asset weight cap
-        weights = self._cap_weights_by_asset_limit(weights)
-
-        # If short selling is enabled and any selected assets have negative expected returns,
-        # we could potentially assign negative weights, but for simplicity keep positive weights
-        if self.enable_short_selling:
-            logger.warning("Top-N method produces only positive weights. Use mean_variance for short positions.")
-
-        logger.info(
-            f"Top-{n} optimization: Selected {n} assets from {len(expected_returns)}, "
-            f"weight={1/n:.4f} each"
-        )
-        return weights
-    
-    def _apply_constraints_to_weights(self,
-                                     weights: pd.Series,
-                                     constraints: List[Dict[str, Any]]) -> pd.Series:
-        """
-        Apply box constraints to weights by proportionally scaling down
-        over-allocated sectors/boxes and redistributing to other assets.
-        
-        This is a simplified constraint enforcement for equal_weight and top_n methods.
-        For strict constraint enforcement, use mean_variance method.
-        """
-        adjusted_weights = weights.copy()
-        
-        # Iterate through constraints and adjust if violated
-        for const in constraints:
-            if const['type'] == 'box':
-                assets_in_box = const['assets']
-                max_weight = const['max_weight']
-                
-                # Calculate current allocation to this box
-                box_mask = adjusted_weights.index.isin(assets_in_box)
-                box_allocation = adjusted_weights[box_mask].sum()
-                
-                # If over-allocated, scale down and redistribute
-                if box_allocation > max_weight:
-                    # Scale down box assets to meet constraint
-                    scale_factor = max_weight / box_allocation
-                    excess_weight = box_allocation - max_weight
-                    
-                    # Reduce weights in the constrained box
-                    adjusted_weights[box_mask] *= scale_factor
-                    
-                    # Redistribute excess to assets outside the box
-                    non_box_mask = ~box_mask
-                    non_box_weights = adjusted_weights[non_box_mask]
-                    
-                    if non_box_weights.sum() > 0:
-                        # Proportionally increase non-box assets
-                        redistribution_factor = 1 + (excess_weight / non_box_weights.sum())
-                        adjusted_weights[non_box_mask] *= redistribution_factor
-                    
-                    logger.info(
-                        f"Adjusted box constraint '{const.get('description', 'N/A')}': "
-                        f"{box_allocation:.2%} → {max_weight:.2%}, "
-                        f"redistributed {excess_weight:.2%} to other assets"
-                    )
-        
-        return adjusted_weights
-    
-    def _cap_weights_by_asset_limit(self, weights: pd.Series) -> pd.Series:
-        """Cap individual asset weights by max_position_weight constraint."""
-        if self.max_position_weight is None:
-            return weights
-        
-        # Cap weights to max_position_weight
-        capped = weights.clip(upper=self.max_position_weight)
-        
-        # If any weights were capped, we need to redistribute the excess
-        excess = weights.sum() - capped.sum()
-        if excess > 0:
-            # Find assets that weren't capped
-            uncapped_mask = weights <= self.max_position_weight
-            if uncapped_mask.any():
-                # Redistribute excess proportionally to uncapped assets
-                uncapped_weights = capped[uncapped_mask]
-                if uncapped_weights.sum() > 0:
-                    redistribution = excess * (uncapped_weights / uncapped_weights.sum())
-                    capped[uncapped_mask] += redistribution
-                else:
-                    # If all assets were capped, keep them at the cap (don't normalize)
-                    pass
-            else:
-                # All assets were capped, keep them at the cap (don't normalize)
-                pass
-        
-        return capped
+            logger.warning(f"Constrained top-{n} optimization failed: {result.message}. Returning empty weights.")
+            return pd.Series(dtype=float)
             
-    def _build_scipy_constraints(self, custom_constraints: List, num_assets: int, asset_names: pd.Index) -> List:
-        """
-        Convert a list of custom constraint dicts into a format used by SciPy.
-        """
-        # 1. Full investment constraint: sum(weights) = 1
-        full_investment_constraint = LinearConstraint(
-            np.ones(num_assets), 
-            lb=1.0, 
-            ub=1.0
-        )
-        
-        scipy_constraints = [full_investment_constraint]
-        
-        # 2. Add custom constraints (e.g., box constraints)
-        for const in custom_constraints:
-            if const['type'] == 'box':
-                mask = [1 if asset in const['assets'] else 0 for asset in asset_names]
-                box_constraint = LinearConstraint(
-                    mask,
-                    lb=const.get('min_weight', 0),
-                    ub=const.get('max_weight', 1)
-                )
-                scipy_constraints.append(box_constraint)
-            elif const['type'] == 'asset':
-                # Individual asset constraints can be handled by bounds,
-                # but can also be added here if more complex.
-                pass
-                
-        return scipy_constraints
-
     @staticmethod
     def build_box_constraints(
         classifications: Dict[str, Dict[str, str]],
@@ -349,34 +244,7 @@ class PortfolioOptimizer:
     ) -> List[Dict[str, Any]]:
         """
         Builds a list of box constraint dictionaries for the optimizer.
-
-        Args:
-            classifications: A dict mapping symbols to their box classifications,
-                             e.g., {'AAPL': {'sector': 'Tech', 'size': 'Large'}, ...}
-            box_limits: A dict defining the max weight for each box,
-                        e.g., {'sector': {'Tech': 0.3, 'Finance': 0.25}, ...}
-
-        Returns:
-            A list of constraint dictionaries formatted for the optimizer.
-        """
-        constraints = []
-        all_assets = list(classifications.keys())
-
-        for dimension, limits in box_limits.items(): # e.g., dimension='sector', limits={'Tech': 0.3}
-            for box_value, max_weight in limits.items(): # e.g., box_value='Tech', max_weight=0.3
-                
-                assets_in_box = [
-                    asset for asset in all_assets
-                    if classifications[asset].get(dimension) == box_value
-                ]
-                
-                if assets_in_box:
-                    constraints.append({
-                        'type': 'box',
-                        'assets': assets_in_box,
-                        'max_weight': max_weight,
-                        'description': f"{dimension}:{box_value} <= {max_weight:.1%}"
-                    })
         
-        logger.info(f"Built {len(constraints)} box constraints.")
-        return constraints
+        Delegates to the ConstraintApplier.
+        """
+        return ConstraintApplier.build_box_constraints_from_config(classifications, box_limits)

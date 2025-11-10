@@ -18,6 +18,7 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from ..types import PortfolioSnapshot as Portfolio, Position
+from collections import OrderedDict
 
 logger = logging.getLogger(__name__)
 
@@ -1046,3 +1047,94 @@ class FactorModelCovarianceEstimator(CovarianceEstimator):
         if hasattr(self, '_last_specific_risks'):
             return pd.Series(self._last_specific_risks)
         return pd.Series()
+
+
+class CachedCovarianceEstimator(CovarianceEstimator):
+    """
+    Wrapper for CovarianceEstimator that adds caching functionality.
+    
+    This decorator pattern allows any CovarianceEstimator to be cached
+    without modifying the original estimator implementation. It now manages
+    its own LRU cache internally.
+    
+    The cache key includes:
+    - Date
+    - Sorted list of symbols
+    - Estimator method type (to distinguish simple/ledoit_wolf/factor_model)
+    """
+    
+    def __init__(self, estimator: CovarianceEstimator, max_cache_size: int = 50):
+        """
+        Initialize cached covariance estimator.
+        
+        Args:
+            estimator: The underlying CovarianceEstimator to wrap
+            max_cache_size: Maximum number of cached covariance matrices
+        """
+        self.estimator = estimator
+        self.max_cache_size = max_cache_size
+        self._cache: OrderedDict[Tuple, pd.DataFrame] = OrderedDict()
+        self._hits = 0
+        self._misses = 0
+
+        # Determine estimator method type for cache key
+        if isinstance(estimator, SimpleCovarianceEstimator):
+            self.method_type = 'simple'
+        elif isinstance(estimator, LedoitWolfCovarianceEstimator):
+            self.method_type = 'ledoit_wolf'
+        elif isinstance(estimator, FactorModelCovarianceEstimator):
+            self.method_type = 'factor_model'
+        else:
+            self.method_type = 'unknown'
+        
+        logger.debug(f"CachedCovarianceEstimator initialized with method_type={self.method_type}, "
+                    f"max_cache_size={max_cache_size}")
+
+    def estimate(self, price_data: Dict[str, pd.DataFrame], date: datetime) -> pd.DataFrame:
+        """
+        Estimate covariance matrix with caching support.
+        
+        Args:
+            price_data: Dictionary of historical price data for multiple symbols
+            date: The date as of which to perform the estimation
+            
+        Returns:
+            A pandas DataFrame representing the annualized N × N covariance matrix
+        """
+        symbols = sorted([s for s in price_data.keys() if price_data[s] is not None and not price_data[s].empty])
+        
+        if len(symbols) < 2:
+            return self.estimator.estimate(price_data, date)
+            
+        cache_key = (date, self.method_type, tuple(symbols))
+
+        if cache_key in self._cache:
+            self._hits += 1
+            logger.debug(f"Covariance cache hit for {len(symbols)} symbols on {date.date()}")
+            self._cache.move_to_end(cache_key)
+            return self._cache[cache_key].copy()
+
+        # Cache miss
+        self._misses += 1
+        logger.debug(f"Covariance cache miss for {len(symbols)} symbols on {date.date()}. Computing...")
+        cov_matrix = self.estimator.estimate(price_data, date)
+
+        # Store in cache
+        if len(self._cache) >= self.max_cache_size:
+            self._cache.popitem(last=False)  # LRU eviction
+        
+        self._cache[cache_key] = cov_matrix
+        return cov_matrix
+
+    def get_cache_stats(self) -> Dict[str, any]:
+        """Get cache statistics including hit rate."""
+        total_requests = self._hits + self._misses
+        hit_rate = self._hits / total_requests if total_requests > 0 else 0.0
+        
+        return {
+            'cached_items': len(self._cache),
+            'max_size': self.max_cache_size,
+            'hits': self._hits,
+            'misses': self._misses,
+            'hit_rate': hit_rate,
+        }

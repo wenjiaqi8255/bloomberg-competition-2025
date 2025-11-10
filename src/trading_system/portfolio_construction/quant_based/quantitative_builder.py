@@ -19,12 +19,8 @@ from src.trading_system.portfolio_construction.models.exceptions import (
     ClassificationError, InvalidConfigError
 )
 from src.trading_system.optimization.optimizer import PortfolioOptimizer
-from src.trading_system.data.stock_classifier import StockClassifier
-from src.trading_system.utils.risk import (
-    LedoitWolfCovarianceEstimator,
-    SimpleCovarianceEstimator,
-    FactorModelCovarianceEstimator
-)
+from src.trading_system.portfolio_construction.utils.component_factory import ComponentFactory
+from src.trading_system.portfolio_construction.utils.weight_utils import WeightUtils
 from src.trading_system.data.box_sampling_provider import BoxSamplingProvider
 
 logger = logging.getLogger(__name__)
@@ -56,6 +52,7 @@ class QuantitativePortfolioBuilder(IPortfolioBuilder):
         """
         self.config = config
         self.factor_data_provider = factor_data_provider
+        
         self._initialize_components()
         self._validate_configuration()
 
@@ -65,41 +62,24 @@ class QuantitativePortfolioBuilder(IPortfolioBuilder):
         """Initialize all sub-components."""
         # Core optimization parameters
         self.universe_size = self.config.get('universe_size', 100)
-        self.enable_short_selling = self.config.get('enable_short_selling', False)
 
-        # Portfolio optimizer - pass constraints
+        # Portfolio optimizer
         optimizer_config = self.config.get('optimizer', {}).copy()
         max_position_weight = self.config.get('constraints', {}).get('max_position_weight')
         if max_position_weight is not None:
             optimizer_config['max_position_weight'] = max_position_weight
         self.optimizer = PortfolioOptimizer(optimizer_config)
 
-        # Covariance estimator
-        cov_config = self.config.get('covariance', {})
-        lookback_days = cov_config.get('lookback_days', 252)
-        covariance_method = cov_config.get('method', 'ledoit_wolf')
-        
-        if covariance_method == 'factor_model':
-            if self.factor_data_provider is None:
-                logger.warning("factor_model requires factor_data_provider, falling back to ledoit_wolf")
-                self.covariance_estimator = LedoitWolfCovarianceEstimator(lookback_days=lookback_days)
-            else:
-                min_regression_obs = cov_config.get('min_regression_obs', 24)
-                self.covariance_estimator = FactorModelCovarianceEstimator(
-                    factor_data_provider=self.factor_data_provider,
-                    lookback_days=lookback_days,
-                    min_regression_obs=min_regression_obs
-                )
-                logger.info(f"Using FactorModelCovarianceEstimator with {lookback_days} days lookback")
-        elif covariance_method == 'simple':
-            self.covariance_estimator = SimpleCovarianceEstimator(lookback_days=lookback_days)
-        else:
-            # Default to Ledoit-Wolf
-            self.covariance_estimator = LedoitWolfCovarianceEstimator(lookback_days=lookback_days)
+        # Covariance estimator (created via factory)
+        covariance_config = self.config.get('covariance', {})
+        self.covariance_estimator = ComponentFactory.create_covariance_estimator(
+            covariance_config, self.factor_data_provider
+        )
 
-        # Stock classifier for box constraints
-        classifier_config = self.config.get('classifier', {})
-        self.stock_classifier = StockClassifier(classifier_config)
+        # Stock classifier for box constraints (created via factory)
+        self.stock_classifier = ComponentFactory.create_stock_classifier(
+            self.config.get('classifier', {})
+        )
 
         # Box constraints
         self.box_limits = self.config.get('box_limits', {})
@@ -185,6 +165,11 @@ class QuantitativePortfolioBuilder(IPortfolioBuilder):
             # Step 7: Portfolio optimization
             weights = self._optimize_portfolio(top_signals, cov_matrix, box_constraints)
 
+            # Final validation and normalization
+            weights = WeightUtils.normalize_weights(weights)
+            if not WeightUtils.validate_weights(weights):
+                raise PortfolioConstructionError("Final weights failed validation.")
+
             logger.info(f"Quantitative portfolio construction completed: {len(weights)} positions")
             return weights
 
@@ -251,19 +236,42 @@ class QuantitativePortfolioBuilder(IPortfolioBuilder):
             Filtered list of liquid stocks
         """
         liquid_stocks = []
+        skipped_no_data = 0
+        skipped_insufficient_history = 0
+        data_point_counts = []
+
+        logger.info(f"Filtering {len(universe)} stocks for liquidity (min_history_days={self.min_history_days})")
+        logger.info(f"Filter date: {date.date()}")
 
         for symbol in universe:
             if symbol not in price_data or price_data[symbol] is None:
+                skipped_no_data += 1
                 continue
 
             stock_data = price_data[symbol]
             data_up_to_date = stock_data[stock_data.index <= date]
+            data_point_count = len(data_up_to_date)
+            data_point_counts.append(data_point_count)
 
             # Check minimum data history
-            if len(data_up_to_date) >= self.min_history_days:
+            if data_point_count >= self.min_history_days:
                 liquid_stocks.append(symbol)
+            else:
+                skipped_insufficient_history += 1
 
-        logger.debug(f"Liquidity filter: {len(liquid_stocks)}/{len(universe)} stocks")
+        if data_point_counts:
+            logger.info(f"Liquidity filter results:")
+            logger.info(f"  ✅ Passed: {len(liquid_stocks)}/{len(universe)} stocks")
+            logger.info(f"  ❌ Skipped (no data): {skipped_no_data}")
+            logger.info(f"  ❌ Skipped (insufficient history): {skipped_insufficient_history}")
+            logger.info(f"  📊 Data points range: {min(data_point_counts)} - {max(data_point_counts)} (required: {self.min_history_days})")
+            if len(liquid_stocks) > 0:
+                logger.info(f"  ✅ Sample liquid stocks: {liquid_stocks[:5]}")
+            else:
+                logger.warning(f"  ⚠️ No stocks passed liquidity filter! This may indicate min_history_days ({self.min_history_days}) is too high.")
+        else:
+            logger.warning(f"No data points found for any stocks in universe")
+
         return liquid_stocks
 
     def _select_top_signals(self, signals: pd.Series) -> pd.Series:

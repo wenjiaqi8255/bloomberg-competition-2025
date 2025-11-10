@@ -13,6 +13,8 @@ import pandas as pd
 from src.trading_system.portfolio_construction.interface.interfaces import IWithinBoxAllocator
 from src.trading_system.portfolio_construction.models.exceptions import WeightAllocationError
 from src.trading_system.optimization.optimizer import PortfolioOptimizer
+from src.trading_system.utils.risk import CovarianceEstimator
+from src.trading_system.portfolio_construction.utils.weight_utils import WeightUtils
 
 logger = logging.getLogger(__name__)
 
@@ -139,47 +141,6 @@ class SignalProportionalAllocator(IWithinBoxAllocator):
         return weights
 
 
-class OptimizedAllocator(IWithinBoxAllocator):
-    """
-    Performs mini-optimization within a box.
-
-    Placeholder for future implementation of box-level optimization
-    strategies that consider risk and return within the box.
-    """
-
-    def __init__(self, config: Dict[str, Any] = None):
-        """
-        Initialize optimized allocator.
-
-        Args:
-            config: Configuration for optimization parameters
-        """
-        self.config = config or {}
-        self.fallback_allocator = SignalProportionalAllocator()
-
-    def allocate(self, stocks: List[str], total_weight: float,
-                signals: pd.Series,
-                price_data: Optional[Dict[str, pd.DataFrame]] = None,
-                date: Optional[datetime] = None) -> Dict[str, float]:
-        """
-        Perform mini-optimization within the box.
-
-        Args:
-            stocks: List of selected stocks in the box
-            total_weight: Total weight allocated to this box
-            signals: Signal strengths for all stocks
-            price_data: Optional price data (unused in optimized allocation)
-            date: Optional date (unused in optimized allocation)
-
-        Returns:
-            Dictionary mapping stock symbols to optimized weights
-        """
-        # For now, fall back to signal proportional allocation
-        # TODO: Implement box-level optimization
-        logger.info("Box-level optimization not yet implemented, using signal proportional allocation")
-        return self.fallback_allocator.allocate(stocks, total_weight, signals, price_data, date)
-
-
 class MeanVarianceAllocator(IWithinBoxAllocator):
     """
     Allocates weights using mean-variance optimization within a box.
@@ -188,7 +149,7 @@ class MeanVarianceAllocator(IWithinBoxAllocator):
     tradeoff for stocks within a box.
     """
     
-    def __init__(self, config: Dict[str, Any] = None, factor_data_provider=None):
+    def __init__(self, config: Dict[str, Any], covariance_estimator: CovarianceEstimator):
         """
         Initialize mean-variance allocator.
         
@@ -198,13 +159,12 @@ class MeanVarianceAllocator(IWithinBoxAllocator):
                 - lookback_days: Lookback period for covariance (default: 252)
                 - covariance_method: 'simple', 'ledoit_wolf', or 'factor_model' (default: 'ledoit_wolf')
                 - min_regression_obs: Minimum observations for factor model (default: 24)
-            factor_data_provider: Optional factor data provider for factor model covariance
+            covariance_estimator: A CovarianceEstimator instance.
         """
         self.config = config or {}
         self.risk_aversion = self.config.get('risk_aversion', 2.0)
         self.lookback_days = self.config.get('lookback_days', 252)
-        self.covariance_method = self.config.get('covariance_method', 'ledoit_wolf')
-        self.factor_data_provider = factor_data_provider
+        self.covariance_estimator = covariance_estimator
         
         # Initialize optimizer
         optimizer_config = {
@@ -215,33 +175,12 @@ class MeanVarianceAllocator(IWithinBoxAllocator):
         }
         self.optimizer = PortfolioOptimizer(optimizer_config)
         
-        # Initialize covariance estimator
-        if self.covariance_method == 'factor_model':
-            if self.factor_data_provider is None:
-                logger.warning("factor_model requires factor_data_provider, falling back to ledoit_wolf")
-                from src.trading_system.utils.risk import LedoitWolfCovarianceEstimator
-                self.covariance_estimator = LedoitWolfCovarianceEstimator(lookback_days=self.lookback_days)
-            else:
-                from src.trading_system.utils.risk import FactorModelCovarianceEstimator
-                min_regression_obs = self.config.get('min_regression_obs', 24)
-                self.covariance_estimator = FactorModelCovarianceEstimator(
-                    factor_data_provider=self.factor_data_provider,
-                    lookback_days=self.lookback_days,
-                    min_regression_obs=min_regression_obs
-                )
-                logger.info(f"Using FactorModelCovarianceEstimator with {self.lookback_days} days lookback")
-        elif self.covariance_method == 'ledoit_wolf':
-            from src.trading_system.utils.risk import LedoitWolfCovarianceEstimator
-            self.covariance_estimator = LedoitWolfCovarianceEstimator(lookback_days=self.lookback_days)
-        else:
-            from src.trading_system.utils.risk import SimpleCovarianceEstimator
-            self.covariance_estimator = SimpleCovarianceEstimator(lookback_days=self.lookback_days)
-        
         # Fallback allocator (default to equal weight)
         self.fallback_allocator = EqualWeightAllocator()
         
         logger.info(f"Initialized MeanVarianceAllocator with risk_aversion={self.risk_aversion}, "
-                   f"lookback_days={self.lookback_days}, method={self.covariance_method}")
+                   f"lookback_days={self.lookback_days}, "
+                   f"cache_enabled={hasattr(self.covariance_estimator, '_cache')}")
     
     def allocate(self, stocks: List[str], total_weight: float,
                 signals: pd.Series,
@@ -273,90 +212,60 @@ class MeanVarianceAllocator(IWithinBoxAllocator):
             return self.fallback_allocator.allocate(stocks, total_weight, signals, price_data, date)
         
         # Filter stocks to those with price data
-        available_stocks = [s for s in stocks if s in price_data and price_data[s] is not None]
-        if len(available_stocks) < 2:
-            logger.warning(f"Need at least 2 stocks with price data for mean-variance, "
-                         f"got {len(available_stocks)}, falling back to equal weight")
-            return self.fallback_allocator.allocate(stocks, total_weight, signals, price_data, date)
+        available_stocks = [s for s in stocks if s in signals.index and s in price_data and not price_data[s].empty]
+
+        if not available_stocks:
+            logger.warning(f"No valid data for any stocks in {stocks}, cannot allocate.")
+            return {}
+
+        # Estimate covariance matrix using the provided estimator
+        cov_matrix = self.covariance_estimator.estimate(
+            {s: price_data[s] for s in available_stocks}, date
+        )
+
+        if cov_matrix.empty or not all(s in cov_matrix.columns for s in available_stocks):
+            logger.warning(f"Covariance matrix is empty or does not contain all stocks for box. "
+                         f"Falling back to equal weight for stocks: {available_stocks}")
+            return {stock: total_weight / len(available_stocks) for stock in available_stocks}
         
+        # Align signals and covariance matrix
+        aligned_signals = signals.loc[available_stocks]
+        aligned_cov = cov_matrix.loc[available_stocks, available_stocks]
+
+        # Perform optimization
         try:
-            # Estimate covariance matrix
-            relevant_price_data = {s: price_data[s] for s in available_stocks}
-            cov_matrix = self.covariance_estimator.estimate(relevant_price_data, date)
+            # Use an empty list for constraints as box-level optimization
+            # typically does not have complex constraints.
+            weights = self.optimizer.optimize(aligned_signals, aligned_cov, [])
             
-            if cov_matrix.empty or len(cov_matrix) < 2:
-                logger.warning("Covariance estimation failed, falling back to equal weight")
-                return self.fallback_allocator.allocate(stocks, total_weight, signals, price_data, date)
-            
-            # Use signals as expected returns
-            expected_returns = pd.Series({s: signals.get(s, 0.0) for s in available_stocks})
-            
-            # Run optimization with no additional constraints (box-level constraints already applied)
-            optimized_weights = self.optimizer.optimize(
-                expected_returns=expected_returns,
-                cov_matrix=cov_matrix,
-                constraints=[]  # No box-level constraints needed here
-            )
-            
-            # Scale to box's total weight
-            scaled_weights = {stock: weight * total_weight 
-                            for stock, weight in optimized_weights.items()}
-            
-            # Handle stocks not in optimized weights (shouldn't happen, but safety check)
-            for stock in stocks:
-                if stock not in scaled_weights:
-                    scaled_weights[stock] = 0.0
-            
-            logger.debug(f"Mean-variance optimization allocated weights to {len(scaled_weights)} stocks")
+            # Scale weights to the total allocated weight for the box
+            scaled_weights = (weights * total_weight).to_dict()
             return scaled_weights
             
         except Exception as e:
-            logger.error(f"Mean-variance optimization failed: {e}, falling back to equal weight")
-            return self.fallback_allocator.allocate(stocks, total_weight, signals, price_data, date)
+            logger.error(f"Mean-variance allocation failed for stocks {available_stocks}: {e}. "
+                         f"Falling back to equal weight.")
+            return {stock: total_weight / len(available_stocks) for stock in available_stocks}
 
 
 class WeightAllocatorFactory:
-    """
-    Factory for creating weight allocators based on configuration.
-
-    Provides a clean interface for creating different allocation
-    strategies while maintaining consistency.
-    """
+    """Factory for creating weight allocators."""
 
     @staticmethod
-    def create_allocator(allocation_method: str, config: Dict[str, Any] = None,
-                        factor_data_provider=None) -> IWithinBoxAllocator:
+    def create_allocator(method: str, config: Dict[str, Any]) -> IWithinBoxAllocator:
         """
-        Create weight allocator based on method.
-
+        Create a weight allocator based on the specified method.
+        
         Args:
-            allocation_method: Allocation method name
-            config: Optional configuration for the allocator
-            factor_data_provider: Optional factor data provider for factor model covariance
-
+            method: Allocation method ('equal', 'signal_proportional', etc.)
+            config: Configuration for the allocator
+            
         Returns:
-            Configured weight allocator
+            An instance of a weight allocator.
         """
-        config = config or {}
-
-        if allocation_method == 'equal':
+        if method == 'equal':
             return EqualWeightAllocator()
-        elif allocation_method == 'signal_proportional':
-            min_threshold = config.get('min_signal_threshold', 1e-6)
-            return SignalProportionalAllocator(min_threshold)
-        elif allocation_method == 'mean_variance':
-            return MeanVarianceAllocator(config, factor_data_provider=factor_data_provider)
-        elif allocation_method == 'optimized':
-            return OptimizedAllocator(config)
+        elif method == 'signal_proportional':
+            return SignalProportionalAllocator()
         else:
-            raise ValueError(f"Unknown allocation method: {allocation_method}")
-
-    @staticmethod
-    def get_available_methods() -> List[str]:
-        """Get list of available allocation methods."""
-        return ['equal', 'signal_proportional', 'mean_variance', 'optimized']
-
-    @staticmethod
-    def validate_method(allocation_method: str) -> bool:
-        """Validate allocation method name."""
-        return allocation_method in WeightAllocatorFactory.get_available_methods()
+            raise ValueError(f"Unknown or unsupported allocation method for this factory: {method}")

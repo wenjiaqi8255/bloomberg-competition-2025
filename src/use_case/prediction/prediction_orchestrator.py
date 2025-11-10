@@ -420,10 +420,19 @@ class PredictionOrchestrator:
         # Get latest signals as Series
         latest_signals = signals.iloc[-1] if not signals.empty else pd.Series()
         
-        # Get price data for portfolio construction
+        # Get lookback days from config for data fetching (covariance estimation needs more data)
+        # Always use covariance.lookback_days for data fetching to ensure sufficient history
+        # min_history_days is only used for filtering, not for data fetching
+        cov_lookback = portfolio_config.get('covariance', {}).get('lookback_days', 252)
+        data_lookback_days = cov_lookback  # Always fetch enough data for covariance estimation
+        
+        logger.info(f"Fetching {data_lookback_days} days of price data for portfolio construction")
+        logger.info(f"Note: min_history_days ({portfolio_config.get('min_history_days', 'not set')}) is only used for filtering, not data fetching")
+        
+        # Get price data for portfolio construction (need enough data for covariance estimation)
         price_data = self.data_provider.get_historical_data(
             symbols=universe,
-            start_date=prediction_date - timedelta(days=30),  # Shorter lookback for portfolio
+            start_date=prediction_date - timedelta(days=data_lookback_days),
             end_date=prediction_date
         )
         

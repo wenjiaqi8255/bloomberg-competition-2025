@@ -8,18 +8,27 @@ configured strategies.
 
 import logging
 from typing import Dict, List, Any
+from collections import OrderedDict
 import pandas as pd
 from datetime import datetime
 
 from src.trading_system.portfolio_construction.interface.interfaces import IPortfolioBuilder, IBoxSelector
 from src.trading_system.portfolio_construction.models.types import PortfolioConstructionRequest, BoxConstructionResult, BoxKey
 from src.trading_system.portfolio_construction.box_based.box_weight_manager import BoxWeightManager
-from src.trading_system.portfolio_construction.box_based.weight_allocator import WeightAllocatorFactory
+from src.trading_system.portfolio_construction.box_based.weight_allocator import (
+    WeightAllocatorFactory, MeanVarianceAllocator
+)
 from src.trading_system.portfolio_construction.utils.adapters import ClassificationAdapter
+from src.trading_system.portfolio_construction.utils.component_factory import ComponentFactory
+from src.trading_system.portfolio_construction.utils.weight_utils import WeightUtils
 from src.trading_system.portfolio_construction.models.exceptions import (
     PortfolioConstructionError, ClassificationError, WeightAllocationError, InvalidConfigError
 )
+from src.trading_system.portfolio_construction.box_based.services import (
+    ClassificationService, StockSelectionService
+)
 from src.trading_system.data.stock_classifier import StockClassifier
+from src.trading_system.data.offline_stock_metadata_provider import OfflineStockMetadataProvider
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +101,7 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
         """
         self.config = config
         self.factor_data_provider = factor_data_provider
+        
         self._initialize_components()
         self._validate_configuration()
 
@@ -99,43 +109,55 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
 
     def _initialize_components(self) -> None:
         """Initialize all sub-components."""
-        # Stock classifier
-        classifier_config = self.config.get('classifier', {})
+        # Stock classifier (created via factory)
+        stock_classifier = ComponentFactory.create_stock_classifier(
+            self.config.get('classifier', {})
+        )
         
-        # Check if sector should be included based on box_weights configuration
-        box_weights_config = self.config.get('box_weights', {})
-        dimensions = box_weights_config.get('dimensions', {})
-        sector_dimension = dimensions.get('sector', [])
-        
-        # If sector dimension is empty, don't include sector in classification
-        include_sector = len(sector_dimension) > 0
-        classifier_config['include_sector'] = include_sector
-        
-        logger.info(f"StockClassifier configured with include_sector={include_sector}")
-        self.stock_classifier = StockClassifier(classifier_config)
+        # Classification Service
+        self.classification_service = ClassificationService(
+            stock_classifier,
+            max_cache_size=self.config.get('classification_cache_size', 100)
+        )
 
         # Box weight manager
-        self.box_weight_manager = BoxWeightManager(box_weights_config)
+        self.box_weight_manager = BoxWeightManager(self.config.get('box_weights', {}))
 
-        # Selection parameters
-        self.stocks_per_box = self.config.get('stocks_per_box', 3)
-        self.min_stocks_per_box = self.config.get('min_stocks_per_box', 1)
+        # Box selector (can be overridden via config)
+        box_selector = SignalBasedBoxSelector()
+        
+        # Stock Selection Service
+        self.stock_selection_service = StockSelectionService(
+            box_selector=box_selector,
+            stocks_per_box=self.config.get('stocks_per_box', 3),
+            min_stocks_per_box=self.config.get('min_stocks_per_box', 1)
+        )
 
         # Weight allocation
         allocation_method = self.config.get('allocation_method', 'equal')
         allocation_config = self.config.get('allocation_config', {}) or {}
-        # Convert Pydantic model to dict if needed
+        
         if hasattr(allocation_config, 'model_dump'):
             allocation_config = allocation_config.model_dump()
         elif not isinstance(allocation_config, dict):
             allocation_config = {}
-        self.weight_allocator = WeightAllocatorFactory.create_allocator(
-            allocation_method, allocation_config, factor_data_provider=self.factor_data_provider
-        )
-
-        # Box selector (can be overridden via config)
-        self.box_selector = SignalBasedBoxSelector()
         
+        # Create allocator, potentially with a covariance estimator for mean_variance
+        if allocation_method == 'mean_variance':
+            # MeanVarianceAllocator needs a covariance estimator, which we create via the factory
+            covariance_config = self.config.get('covariance', {})
+            covariance_estimator = ComponentFactory.create_covariance_estimator(
+                covariance_config, self.factor_data_provider
+            )
+            self.weight_allocator = MeanVarianceAllocator(
+                allocation_config, 
+                covariance_estimator=covariance_estimator
+            )
+        else:
+            self.weight_allocator = WeightAllocatorFactory.create_allocator(
+                allocation_method, allocation_config
+            )
+
         # Centralized constraints
         self.constraints = self.config.get('constraints', {})
 
@@ -152,21 +174,13 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
                 config_section='box_weights'
             )
 
-        # Validate numeric parameters
-        if self.stocks_per_box <= 0:
-            raise InvalidConfigError("stocks_per_box must be positive")
-
-        if self.min_stocks_per_box <= 0:
-            raise InvalidConfigError("min_stocks_per_box must be positive")
-
-        if self.min_stocks_per_box > self.stocks_per_box:
-            raise InvalidConfigError("min_stocks_per_box cannot exceed stocks_per_box")
-
         logger.info("Box-based builder configuration validation passed")
 
     def build_portfolio(self, request: PortfolioConstructionRequest) -> pd.Series:
         """
         Build portfolio using Box-First methodology.
+        
+        ✅ 简化：直接使用 request.constraints，不需要临时覆盖
 
         Args:
             request: Portfolio construction request
@@ -175,70 +189,55 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
             Series of portfolio weights
         """
         logger.info(f"Building Box-Based portfolio for {request.date.date()}")
-        construction_log = []
+        
+        constraints = request.constraints or self.constraints
 
-        try:
-            # Step 1: Classify stocks into boxes
-            logger.info("[Step 1/4] Classifying stocks into boxes...")
-            classifications = self._classify_stocks(request.universe, request.price_data, request.date)
-            construction_log.append(f"Classified {len(classifications)} stocks into boxes")
+        # Step 1: Classify stocks into boxes
+        logger.info("[Step 1/3] Classifying stocks into boxes...")
+        classifications = self.classification_service.classify_stocks(
+            request.universe, request.price_data, request.date
+        )
 
-            # Step 2: Group stocks by boxes and analyze coverage
-            logger.info("[Step 2/4] Analyzing box coverage...")
-            box_stocks = ClassificationAdapter.group_stocks_by_box(request.universe, classifications)
-            
-            # Check if we have any stocks to work with
-            if not box_stocks:
-                raise PortfolioConstructionError("No stocks available for portfolio construction")
-            
-            # Analyze coverage for logging purposes
-            coverage_info = self.box_weight_manager.get_coverage_info(list(box_stocks.keys()))
-            construction_log.append(f"Box coverage: {coverage_info['coverage_ratio']:.1%} "
-                                   f"({coverage_info['covered_boxes']}/{coverage_info['total_target_boxes']})")
-            construction_log.append(f"Using {len(box_stocks)} available boxes for portfolio construction")
-            
-            # Continue with available boxes instead of failing on partial coverage
+        # Step 2: Group stocks by boxes
+        logger.info("[Step 2/3] Grouping stocks by boxes...")
+        box_stocks = ClassificationAdapter.group_stocks_by_box(request.universe, classifications)
+        
+        if not box_stocks:
+            raise PortfolioConstructionError("No stocks available for portfolio construction")
 
-            # Step 3: Select stocks and allocate weights
-            logger.info("[Step 3/4] Selecting stocks and allocating weights...")
-            if self.allocation_scope == 'global':
-                final_weights, box_results = self._construct_global_allocation(
-                    box_stocks, request.signals, request.price_data, request.date
-                )
-            else:
-                final_weights, box_results = self._construct_from_boxes(
-                    box_stocks, request.signals, request.price_data, request.date
-                )
-            construction_log.extend(box_results['log'])
+        # Step 3: Select stocks and allocate weights
+        logger.info("[Step 3/3] Selecting stocks and allocating weights...")
+        if self.allocation_scope == 'global':
+            weights = self._construct_global_allocation(
+                box_stocks, request.signals, request.price_data, request.date
+            )
+        else:
+            weights, _ = self._construct_from_boxes(
+                box_stocks, request.signals, request.price_data, request.date
+            )
 
-            # Step 4: Normalize final weights
-            logger.info("[Step 4/4] Normalizing final weights...")
-            normalized_weights = self._normalize_weights(final_weights)
-            construction_log.append(f"Final portfolio: {len(normalized_weights)} positions")
+        # Apply constraints and normalize weights
+        weights = self._apply_constraints_and_normalize(pd.Series(weights), constraints)
 
-            # Step 5: Apply constraints
-            logger.info("[Step 5/5] Applying constraints...")
-            constrained_weights = self._apply_constraints(normalized_weights)
-            construction_log.append(f"Applied constraints: max_position_weight={self.constraints.get('max_position_weight', 'None')}, max_leverage={self.constraints.get('max_leverage', 'None')}")
+        # Log final portfolio summary
+        logger.info("🎯 FINAL PORTFOLIO SUMMARY:")
+        logger.info(f"   📊 Total positions: {len(weights)}")
+        logger.info(f"   💰 Total weight: {sum(weights.values()):.4f}")
+        
+        # Final validation
+        final_weights = pd.Series(weights)
+        if not WeightUtils.validate_weights(final_weights):
+            raise PortfolioConstructionError("Final weights failed validation.")
 
-            # Log final portfolio summary
-            logger.info("🎯 FINAL PORTFOLIO SUMMARY:")
-            logger.info(f"   📊 Total positions: {len(constrained_weights)}")
-            logger.info(f"   💰 Total weight: {sum(constrained_weights.values()):.4f}")
-            
-            # Log top positions
-            sorted_positions = sorted(constrained_weights.items(), key=lambda x: x[1], reverse=True)
-            top_positions = sorted_positions[:10]  # Top 10 positions
+        if weights:
+            sorted_positions = sorted(weights.items(), key=lambda x: x[1], reverse=True)
+            top_positions = sorted_positions[:10]
             logger.info("   🏆 Top positions:")
             for stock, weight in top_positions:
                 logger.info(f"      {stock}: {weight:.4f} ({weight*100:.2f}%)")
 
-            logger.info(f"✅ Box-Based portfolio construction completed: {len(constrained_weights)} positions")
-            return pd.Series(constrained_weights)
-
-        except Exception as e:
-            logger.error(f"Box-Based portfolio construction failed: {e}")
-            raise PortfolioConstructionError(f"Box-Based construction failed: {e}")
+        logger.info(f"✅ Box-Based portfolio construction completed: {len(weights)} positions")
+        return pd.Series(weights)
 
     def build_portfolio_with_result(self, request: PortfolioConstructionRequest) -> BoxConstructionResult:
         """
@@ -254,7 +253,9 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
         weights = self.build_portfolio(request)
 
         # Get detailed construction information
-        classifications = self._classify_stocks(request.universe, request.price_data, request.date)
+        classifications = self.classification_service.classify_stocks(
+            request.universe, request.price_data, request.date
+        )
         box_stocks = ClassificationAdapter.group_stocks_by_box(request.universe, classifications)
         coverage_info = self.box_weight_manager.get_coverage_info(list(box_stocks.keys()))
 
@@ -273,34 +274,6 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
             target_weights={str(k): v for k, v in self.box_weight_manager.get_all_weights().items()},
             construction_log=["Box-Based construction completed"]
         )
-
-    def _classify_stocks(self, universe: List[str], price_data: Dict[str, pd.DataFrame],
-                        as_of_date: datetime) -> Dict[str, BoxKey]:
-        """
-        Classify stocks into boxes.
-
-        Args:
-            universe: List of stocks to classify
-            price_data: Price data for classification
-            as_of_date: Classification date
-
-        Returns:
-            Dictionary mapping symbols to BoxKey objects
-        """
-        try:
-            investment_boxes = self.stock_classifier.classify_stocks(
-                universe, price_data, as_of_date=as_of_date
-            )
-            box_keys = ClassificationAdapter.convert_investment_boxes_to_box_keys(
-                investment_boxes, 
-                include_sector=self.stock_classifier.include_sector
-            )
-
-            logger.debug(f"Classified {len(box_keys)} stocks into boxes")
-            return box_keys
-
-        except Exception as e:
-            raise ClassificationError("Stock classification failed", str(e))
 
     def _construct_from_boxes(self, box_stocks: Dict[BoxKey, List[str]],
                             signals: pd.Series, price_data: Dict[str, pd.DataFrame],
@@ -326,14 +299,17 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
             'log': construction_log
         }
 
-        # Use available boxes instead of target boxes
-        available_boxes = list(box_stocks.keys())
-        logger.info(f"Processing {len(available_boxes)} available boxes for portfolio construction")
+        # Use the StockSelectionService to select stocks for each box
+        selected_stocks_by_box = self.stock_selection_service.select_stocks_for_boxes(
+            box_stocks, signals
+        )
+        
+        logger.info(f"Processing {len(selected_stocks_by_box)} boxes with sufficient stocks for portfolio construction")
 
-        for box_key in available_boxes:
+        for box_key, selected_stocks in selected_stocks_by_box.items():
             try:
                 box_result = self._process_single_box(
-                    box_key, box_stocks.get(box_key, []), signals, price_data, date
+                    box_key, selected_stocks, signals, price_data, date
                 )
 
                 if box_result['weights']:
@@ -358,24 +334,20 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
 
     def _construct_global_allocation(self, box_stocks: Dict[BoxKey, List[str]],
                                      signals: pd.Series, price_data: Dict[str, pd.DataFrame],
-                                     date: datetime) -> tuple[Dict[str, float], Dict[str, Any]]:
+                                     date: datetime) -> Dict[str, float]:
         """
+        ✅ 简化：复用 MeanVarianceAllocator 而不是重复实现优化逻辑
+        
         Box 仅用于筛选，汇总所有选中的股票后执行一次全局均值方差优化。
         """
-        construction_log = []
-
-        # 1) 每个 box 内按已有 selector 选股（不在 box 内分配权重）
+        # 1) 每个 box 内按已有 selector 选股
+        selected_stocks_by_box = self.stock_selection_service.select_stocks_for_boxes(
+            box_stocks, signals
+        )
+        
         selected_all: List[str] = []
-        for box_key, candidates in box_stocks.items():
-            if len(candidates) < self.min_stocks_per_box:
-                construction_log.append(f"Skipped box {box_key}: insufficient stocks")
-                continue
-            selected = self.box_selector.select_stocks(candidates, signals, self.stocks_per_box)
-            if selected:
-                selected_all.extend(selected)
-                construction_log.append(f"Box {box_key}: selected {len(selected)} stocks")
-            else:
-                construction_log.append(f"Box {box_key}: no selection")
+        for stocks in selected_stocks_by_box.values():
+            selected_all.extend(stocks)
 
         # 去重，保持顺序
         if selected_all:
@@ -383,102 +355,35 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
             selected_all = [s for s in selected_all if not (s in seen or seen.add(s))]
 
         if len(selected_all) < 2:
-            return {}, {'log': construction_log + ["Not enough stocks for global optimization"]}
+            logger.warning("Not enough stocks for global optimization")
+            return {}
 
-        # 2) 期望收益（用 signals）
-        import pandas as _pd
-        expected_returns = _pd.Series({s: signals.get(s, 0.0) for s in selected_all})
-
-        # 3) 简单协方差估计：从 price_data 计算历史收益协方差
-        returns_series_list = []
-        for s in selected_all:
-            df = price_data.get(s)
-            if df is None or df.empty:
-                continue
-            try:
-                px = df.sort_index()
-                # 兼容不同列名，优先使用 'Close'
-                if 'Close' in px.columns:
-                    ret = px['Close'].pct_change().dropna()
-                else:
-                    # 使用第一列作为价格列的保守回退
-                    first_col = px.columns[0]
-                    ret = px[first_col].pct_change().dropna()
-                returns_series_list.append(ret.rename(s))
-            except Exception:
-                continue
-
-        if not returns_series_list:
-            return {}, {'log': construction_log + ["No price data for covariance"]}
-
-        ret_df = _pd.concat(returns_series_list, axis=1).dropna()
-        if ret_df.shape[1] < 2:
-            return {}, {'log': construction_log + ["Insufficient assets for covariance"]}
-
-        cov = ret_df.cov()
-
-        # 对齐索引，避免不一致
-        common = expected_returns.index.intersection(cov.index)
-        if len(common) < 2:
-            return {}, {'log': construction_log + ["Insufficient overlapping assets for optimization"]}
-        expected_returns = expected_returns.loc[common]
-        cov = cov.loc[common, common]
-
-        # 4) 全局优化（无 box 权重约束）
-        from src.trading_system.optimization.optimizer import PortfolioOptimizer
-        risk_aversion = 2.0
-        alloc_cfg = self.config.get('allocation_config', {}) or {}
-        if isinstance(alloc_cfg, dict):
-            risk_aversion = alloc_cfg.get('risk_aversion', risk_aversion)
-
-        optimizer = PortfolioOptimizer({
-            'method': 'mean_variance',
-            'risk_aversion': risk_aversion,
-            'enable_short_selling': False,
-            'max_position_weight': self.constraints.get('max_position_weight')
-        })
-
-        constraints: List[Dict[str, Any]] = []
-        optimal = optimizer.optimize(
-            expected_returns=expected_returns,
-            cov_matrix=cov,
-            constraints=constraints
+        # ✅ 简化：复用已在 _initialize_components 中创建的 weight_allocator
+        if not isinstance(self.weight_allocator, MeanVarianceAllocator):
+            raise PortfolioConstructionError(
+                "Global allocation requires 'mean_variance' allocation method."
+            )
+        
+        # 使用 allocator 分配权重（总权重为1.0，后续会归一化）
+        weights = self.weight_allocator.allocate(
+            selected_all,
+            total_weight=1.0,  # 全局分配，总权重为1.0
+            signals=signals,
+            price_data=price_data,
+            date=date
         )
+        
+        logger.info(f"Global MV optimized {len(weights)} positions")
+        return weights
 
-        weights = optimal.to_dict()
-        return weights, {'log': construction_log + [f"Global MV optimized {len(weights)} positions"]}
-
-    def _process_single_box(self, box_key: BoxKey, candidate_stocks: List[str],
+    def _process_single_box(self, box_key: BoxKey, selected_stocks: List[str],
                            signals: pd.Series, price_data: Dict[str, pd.DataFrame],
                            date: datetime) -> Dict[str, Any]:
         """
-        Process a single box: select stocks and allocate weights.
-
-        Args:
-            box_key: Box to process
-            candidate_stocks: Available stocks in the box
-            signals: Signal strengths for all stocks
-            price_data: Price data for all stocks
-            date: Construction date
-
-        Returns:
-            Dictionary with processing results
+        Process a single box: allocate weights to pre-selected stocks.
         """
-        # Check minimum stock requirement
-        if len(candidate_stocks) < self.min_stocks_per_box:
-            return {
-                'weights': {},
-                'reason': f"Insufficient stocks ({len(candidate_stocks)} < {self.min_stocks_per_box})"
-            }
-
-        # Select stocks within the box
-        selected_stocks = self.box_selector.select_stocks(
-            candidate_stocks, signals, self.stocks_per_box
-        )
-
         # Log detailed stock selection information
         logger.info(f"📦 Box {box_key}:")
-        logger.info(f"   📊 Available stocks: {len(candidate_stocks)} ({', '.join(candidate_stocks[:5])}{'...' if len(candidate_stocks) > 5 else ''})")
         logger.info(f"   🎯 Selected stocks: {len(selected_stocks)} ({', '.join(selected_stocks)})")
         
         # Log signal strengths for selected stocks
@@ -490,10 +395,10 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
             logger.info(f"   📈 Signal strengths: {', '.join(signal_info)}")
 
         if not selected_stocks:
-            logger.warning(f"   ❌ No stocks selected from box {box_key}")
+            logger.warning(f"   ❌ No stocks to allocate from box {box_key}")
             return {
                 'weights': {},
-                'reason': "No stocks selected from box"
+                'reason': "No stocks to allocate from box"
             }
 
         # Get target weight for this box
@@ -522,7 +427,7 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
                 'reason': None,
                 'box_weight': target_weight,
                 'selected_stocks': selected_stocks,
-                'log': f"Box {box_key}: {len(selected_stocks)} stocks selected, weight {target_weight:.4f}"
+                'log': f"Box {box_key}: {len(selected_stocks)} stocks allocated, weight {target_weight:.4f}"
             }
 
         except Exception as e:
@@ -532,84 +437,52 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
                 'reason': f"Weight allocation failed: {str(e)}"
             }
 
-    def _normalize_weights(self, weights: Dict[str, float]) -> Dict[str, float]:
+    def _apply_constraints_and_normalize(self, weights: pd.Series, 
+                                         constraints: Dict[str, Any]) -> Dict[str, float]:
         """
-        Normalize weights to sum to 1.0.
-
-        Args:
-            weights: Raw weights dictionary
-
-        Returns:
-            Normalized weights dictionary
-        """
-        if not weights:
-            return {}
-
-        total_weight = sum(weights.values())
-        if total_weight <= 0:
-            raise WeightAllocationError("Total weight is non-positive", "portfolio_normalization", str(total_weight))
-
-        normalized = {symbol: weight / total_weight for symbol, weight in weights.items()}
-
-        # Validate normalization
-        normalized_total = sum(normalized.values())
-        if abs(normalized_total - 1.0) > 1e-6:
-            logger.warning(f"Weight normalization result: {normalized_total:.8f} (expected 1.0)")
-
-        return normalized
-
-    def _apply_constraints(self, weights: Dict[str, float]) -> Dict[str, float]:
-        """
-        Apply constraints to portfolio weights.
+        Apply constraints and normalize weights using WeightUtils.
         
         Args:
-            weights: Dictionary of stock weights
+            weights: Series of stock weights
+            constraints: Constraints dictionary
             
         Returns:
-            Constrained weights dictionary
+            Normalized and constrained weights dictionary.
         """
-        if not weights:
-            return weights
-            
-        max_w = self.constraints.get('max_position_weight')
-        max_leverage = self.constraints.get('max_leverage', 1.0)
-        min_w = self.constraints.get('min_position_weight', 0.0)
+        if weights.empty:
+            return {}
+        
+        # NOTE: This is a temporary implementation. The full constraint application logic
+        # will be centralized in a separate task. For now, we focus on normalization.
 
-        # Apply per-asset cap
-        if max_w is not None:
-            weights = {k: min(v, max_w) for k, v in weights.items()}
-            logger.debug(f"Applied max_position_weight constraint: {max_w}")
-
-        # Apply minimum weight threshold (zero out small positions)
+        # Apply min_position_weight constraint
+        min_w = constraints.get('min_position_weight', 0.0)
         if min_w > 0:
-            weights = {k: v if v >= min_w else 0.0 for k, v in weights.items()}
+            weights = weights[weights >= min_w]
             logger.debug(f"Applied min_position_weight constraint: {min_w}")
 
-        # Remove zero weights
-        weights = {k: v for k, v in weights.items() if v > 0}
-
-        if not weights:
-            logger.warning("All weights were zeroed out by constraints")
-            return {}
-
-        total = sum(weights.values())
-        if total <= 0:
-            logger.warning("Total weight is non-positive after constraints")
-            return {}
-
-        # Apply leverage cap: if total weight > max_leverage, scale down
-        if max_leverage is not None and total > max_leverage:
-            scale = max_leverage / total
-            weights = {k: v * scale for k, v in weights.items()}
-            total = sum(weights.values())
+        # Apply max_leverage constraint by scaling
+        max_leverage = constraints.get('max_leverage', 1.0)
+        total_weight = weights.sum()
+        if max_leverage is not None and total_weight > max_leverage:
+            scale = max_leverage / total_weight
+            weights *= scale
             logger.debug(f"Applied max_leverage constraint: {max_leverage}, scaled by {scale:.4f}")
+        
+        # Normalize weights using the centralized utility
+        normalized_weights = WeightUtils.normalize_weights(weights)
+        
+        # Simple cap for max_position_weight (a more robust solution will be in ConstraintApplier)
+        max_w = constraints.get('max_position_weight')
+        if max_w is not None:
+            if any(normalized_weights > max_w):
+                 logger.warning("Post-normalization capping needed for max_position_weight. "
+                                "This is a temporary solution.")
+                 normalized_weights = normalized_weights.clip(upper=max_w)
+                 # Re-normalize after capping
+                 normalized_weights = WeightUtils.normalize_weights(normalized_weights)
 
-        # Normalize to sum to 1.0
-        if total > 0:
-            weights = {k: v / total for k, v in weights.items()}
-
-        logger.debug(f"Final constrained weights sum: {sum(weights.values()):.6f}")
-        return weights
+        return normalized_weights.to_dict()
 
     def get_method_name(self) -> str:
         """Get the method name."""
@@ -635,10 +508,10 @@ class BoxBasedPortfolioBuilder(IPortfolioBuilder):
             'method_type': self.__class__.__name__,
             'description': "Box-First portfolio construction with systematic box-based allocation",
             'configuration': {
-                'stocks_per_box': self.stocks_per_box,
-                'min_stocks_per_box': self.min_stocks_per_box,
+                'stocks_per_box': self.stock_selection_service.stocks_per_box,
+                'min_stocks_per_box': self.stock_selection_service.min_stocks_per_box,
                 'allocation_method': self.weight_allocator.__class__.__name__,
-                'box_selector': self.box_selector.__class__.__name__
+                'box_selector': self.stock_selection_service.box_selector.__class__.__name__
             },
             'box_information': {
                 'total_boxes': len(target_boxes),

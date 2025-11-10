@@ -325,26 +325,63 @@ class ModelPredictor:
         for i, symbol in enumerate(symbols, 1):
             try:
                 # Extract symbol-specific features
+                # After date extraction in BaseStrategy, features should have symbol as index
                 if isinstance(features.index, pd.MultiIndex):
-                    symbol_features = features.xs(symbol, level='symbol')
+                    # MultiIndex: extract by symbol level
+                    if 'symbol' in features.index.names:
+                        try:
+                            symbol_features = features.xs(symbol, level='symbol')
+                        except KeyError:
+                            logger.warning(f"Symbol {symbol} not found in MultiIndex, skipping")
+                            predictions[symbol] = 0.0
+                            continue
+                    else:
+                        logger.error(f"MultiIndex features don't have 'symbol' level: {features.index.names}")
+                        predictions[symbol] = 0.0
+                        continue
                 else:
-                    # Assume features are already for this symbol
-                    symbol_features = features
+                    # Single index: should be symbol list after date extraction
+                    if symbol in features.index:
+                        # Index contains symbols - extract this symbol's row
+                        symbol_features = features.loc[[symbol]]
+                    else:
+                        logger.warning(f"Symbol {symbol} not found in features index (available: {len(features.index)} symbols)")
+                        predictions[symbol] = 0.0
+                        continue
                 
-                # Convert to ndarray
-                X = symbol_features.values
+                # Ensure symbol_features is a DataFrame with at least one row
+                if isinstance(symbol_features, pd.Series):
+                    symbol_features = symbol_features.to_frame().T
                 
-                # Predict
-                pred = self._current_model.predict(X)
+                if symbol_features.empty:
+                    logger.warning(f"No features found for symbol {symbol} after extraction")
+                    predictions[symbol] = 0.0
+                    continue
                 
-                # Extract prediction value (take last if multiple dates)
-                predictions[symbol] = float(pred[-1] if len(pred) > 0 else 0.0)
+                # Ensure it's a DataFrame for model prediction
+                if not isinstance(symbol_features, pd.DataFrame):
+                    symbol_features = pd.DataFrame(symbol_features)
+                
+                # Predict - model expects DataFrame
+                pred = self._current_model.predict(symbol_features)
+                
+                # Extract prediction value
+                if isinstance(pred, np.ndarray):
+                    # Take the first (or only) prediction value
+                    pred_value = float(pred[0] if len(pred) > 0 else 0.0)
+                elif isinstance(pred, (int, float)):
+                    pred_value = float(pred)
+                else:
+                    logger.warning(f"Unexpected prediction type for {symbol}: {type(pred)}")
+                    pred_value = 0.0
+                
+                predictions[symbol] = pred_value
                 
                 if i % 10 == 0:
                     logger.debug(f"Predicted {i}/{len(symbols)} symbols")
                 
             except Exception as e:
-                logger.warning(f"Prediction failed for {symbol}: {e}")
+                logger.warning(f"Prediction failed for {symbol}: {e}", exc_info=True)
                 predictions[symbol] = 0.0
         
         logger.info(f"[Independent Mode] Successfully predicted {len(predictions)} symbols")

@@ -105,18 +105,29 @@ class StockClassifier(ClassificationProvider):
     def __init__(self, config: Dict[str, Any],
                  yfinance_provider: YFinanceProvider = None,
                  max_retries: int = 3, retry_delay: float = 1.0,
-                 request_timeout: int = 30, cache_enabled: bool = True):
+                 request_timeout: int = 30, cache_enabled: bool = True,
+                 offline_metadata_provider=None):
         """
         Initialize stock classifier.
 
         Args:
             config: Configuration dictionary for classification rules.
+                Can contain 'cache_enabled' key which will override the parameter if present.
             yfinance_provider: YFinance provider instance
             max_retries: Maximum number of retry attempts
             retry_delay: Delay between retries in seconds
             request_timeout: Request timeout in seconds
-            cache_enabled: Whether to enable caching
+            cache_enabled: Whether to enable caching (can be overridden by config dict)
+            offline_metadata_provider: Optional offline metadata provider for fast Market Cap/P/B lookups
         """
+        # Allow config dict to override cache_enabled parameter (for flexibility)
+        # Create a copy to avoid mutating the original config dict
+        config_for_load = config.copy() if isinstance(config, dict) else config
+        if isinstance(config, dict) and 'cache_enabled' in config:
+            cache_enabled = config.get('cache_enabled', cache_enabled)
+            # Remove from config copy to avoid passing it to _load_config
+            config_for_load.pop('cache_enabled', None)
+        
         super().__init__(
             max_retries=max_retries,
             retry_delay=retry_delay,
@@ -126,11 +137,21 @@ class StockClassifier(ClassificationProvider):
         )
         
         self.yfinance_provider = yfinance_provider or YFinanceProvider()
+        self.offline_metadata_provider = offline_metadata_provider
         self.market_cap_cache = {}
         self.sector_cache = {}
+        
+        # Classification result cache: key = (date_week, tuple(sorted(symbols))), value = Dict[str, InvestmentBox]
+        # Using date_week (year-week) to allow sharing classification within the same week
+        from collections import OrderedDict
+        self._classification_result_cache: OrderedDict[tuple, Dict[str, InvestmentBox]] = OrderedDict()
+        self._max_classification_cache_size = config.get('classification_cache_size', 50) if isinstance(config, dict) else 50
 
         # Load configuration for classification rules
-        self._load_config(config)
+        self._load_config(config_for_load)
+        
+        if self.offline_metadata_provider:
+            logger.info("StockClassifier initialized with offline metadata provider for fast lookups")
 
     def _load_config(self, config: Dict[str, Any]):
         """Load classification rules from config."""
@@ -232,6 +253,10 @@ class StockClassifier(ClassificationProvider):
                        as_of_date: datetime = None) -> Dict[str, InvestmentBox]:
         """
         Classify stocks into investment boxes using percentile-based classification.
+        
+        Uses caching to avoid redundant computation:
+        - Results are cached by week (same week shares same classification)
+        - Batch fetching of metadata when offline provider is available
 
         Args:
             symbols: List of stock symbols to classify
@@ -239,10 +264,22 @@ class StockClassifier(ClassificationProvider):
             as_of_date: Date for classification (default: today)
 
         Returns:
-            Dictionary mapping box keys to InvestmentBox objects
+            Dictionary mapping symbols to InvestmentBox objects
         """
         if as_of_date is None:
             as_of_date = datetime.now()
+
+        # Create cache key using week (year-week) to allow sharing within same week
+        # This is a reasonable approximation since classification doesn't change daily
+        date_week = as_of_date.strftime('%Y-W%W')
+        cache_key = (date_week, tuple(sorted(symbols)))
+        
+        # Check cache first
+        if cache_key in self._classification_result_cache:
+            logger.debug(f"Classification cache hit for week {date_week}, {len(symbols)} stocks")
+            # Move to end (most recently used)
+            self._classification_result_cache.move_to_end(cache_key)
+            return self._classification_result_cache[cache_key].copy()
 
         logger.info(f"Classifying {len(symbols)} stocks as of {as_of_date}")
 
@@ -255,16 +292,41 @@ class StockClassifier(ClassificationProvider):
             )
 
         # Pass 1: Collect metrics for all valid stocks
-        stock_metrics = {}
-        for symbol in symbols:
+        # Optimize: Use batch fetching if offline provider is available
+        valid_symbols = [s for s in symbols if s in price_data and price_data[s] is not None]
+        
+        # Batch fetch market caps and P/B ratios if offline provider is available
+        batch_market_caps = {}
+        batch_pb_ratios = {}
+        
+        if self.offline_metadata_provider and valid_symbols:
             try:
-                if symbol not in price_data or price_data[symbol] is None:
-                    logger.debug(f"No price data for {symbol}")
-                    continue
-
-                # Get market cap and P/B ratio
-                market_cap = self._get_market_cap(symbol, price_data[symbol])
-                pb_ratio = self._get_pb_ratio(symbol)
+                # Batch fetch from offline provider
+                batch_market_caps = self.offline_metadata_provider.get_market_caps_batch(valid_symbols, as_of_date)
+                batch_pb_ratios = self.offline_metadata_provider.get_pb_ratios_batch(valid_symbols, as_of_date)
+                
+                # Update cache with batch results
+                for symbol, market_cap in batch_market_caps.items():
+                    if market_cap is not None:
+                        self.market_cap_cache[symbol] = market_cap
+                
+                logger.debug(f"Batch fetched {len(batch_market_caps)} market caps and {len(batch_pb_ratios)} P/B ratios from offline provider")
+            except Exception as e:
+                logger.debug(f"Batch fetch from offline provider failed: {e}")
+        
+        stock_metrics = {}
+        for symbol in valid_symbols:
+            try:
+                # Use batch-fetched data if available, otherwise fall back to individual lookup
+                if symbol in batch_market_caps and batch_market_caps[symbol] is not None:
+                    market_cap = batch_market_caps[symbol]
+                else:
+                    market_cap = self._get_market_cap(symbol, price_data[symbol])
+                
+                if symbol in batch_pb_ratios and batch_pb_ratios[symbol] is not None:
+                    pb_ratio = batch_pb_ratios[symbol]
+                else:
+                    pb_ratio = self._get_pb_ratio(symbol)
                 
                 if market_cap and market_cap > 0:  # Only require market cap
                     stock_metrics[symbol] = {
@@ -389,7 +451,34 @@ class StockClassifier(ClassificationProvider):
             logger.info(f"    Top stocks: {details['top_stocks']}")
         logger.info("=" * 60)
         
+        # Store in cache (cache key already created at method start)
+        self._store_classification_in_cache(cache_key, boxes)
+        
         return boxes
+    
+    def _store_classification_in_cache(self, cache_key: tuple, boxes: Dict[str, InvestmentBox]) -> None:
+        """
+        Store classification result in cache with FIFO eviction.
+        
+        Args:
+            cache_key: Cache key (date_week, sorted_symbols_tuple)
+            boxes: Classification result to cache (Dict[box_key, InvestmentBox])
+        """
+        # If cache key already exists, move it to end (most recently used)
+        if cache_key in self._classification_result_cache:
+            self._classification_result_cache.move_to_end(cache_key)
+        else:
+            # If cache is full, remove oldest entry (FIFO)
+            if len(self._classification_result_cache) >= self._max_classification_cache_size:
+                oldest_key, _ = self._classification_result_cache.popitem(last=False)
+                logger.debug(f"Classification result cache evicted oldest entry (cache size limit: {self._max_classification_cache_size})")
+            
+            # Store new entry (adds to end of OrderedDict)
+            # Create a deep copy to avoid mutation issues
+            import copy
+            self._classification_result_cache[cache_key] = copy.deepcopy(boxes)
+        
+        logger.debug(f"Classification result cached: {len(self._classification_result_cache)}/{self._max_classification_cache_size} entries")
 
     def _classify_single_stock(self, symbol: str, price_data: pd.DataFrame,
                               as_of_date: datetime) -> Optional[Dict]:
@@ -697,7 +786,19 @@ class StockClassifier(ClassificationProvider):
             if symbol in self.market_cap_cache:
                 return self.market_cap_cache[symbol]
 
-            # Try to get from yfinance
+            # Priority 1: Try offline metadata provider (fastest)
+            if self.offline_metadata_provider:
+                try:
+                    offline_data = self.offline_metadata_provider.get_market_caps_batch([symbol])
+                    if symbol in offline_data and offline_data[symbol] is not None:
+                        market_cap = offline_data[symbol]
+                        self.market_cap_cache[symbol] = market_cap
+                        logger.debug(f"Market cap from offline provider for {symbol}: {market_cap:.2f}B")
+                        return market_cap
+                except Exception as e:
+                    logger.debug(f"Offline provider failed for {symbol}: {e}")
+
+            # Priority 2: Try to get from yfinance
             try:
                 ticker = yf.Ticker(symbol)
                 info = ticker.info
@@ -708,7 +809,7 @@ class StockClassifier(ClassificationProvider):
             except:
                 pass
 
-            # Estimate from price data and typical share counts
+            # Priority 3: Estimate from price data and typical share counts
             if len(price_data) > 0:
                 current_price = price_data['Close'].iloc[-1]
 
@@ -735,12 +836,28 @@ class StockClassifier(ClassificationProvider):
             return 5.0  # Default to mid-cap range
 
     def _get_pb_ratio(self, symbol: str) -> Optional[float]:
-        """Get P/B ratio from yfinance."""
+        """Get P/B ratio from available sources."""
         try:
-            ticker = yf.Ticker(symbol)
-            info = ticker.info
-            pb_ratio = info.get('priceToBook')
-            return pb_ratio if pb_ratio and pb_ratio > 0 else None
+            # Priority 1: Try offline metadata provider (fastest)
+            if self.offline_metadata_provider:
+                try:
+                    offline_data = self.offline_metadata_provider.get_pb_ratios_batch([symbol])
+                    if symbol in offline_data and offline_data[symbol] is not None:
+                        pb_ratio = offline_data[symbol]
+                        logger.debug(f"P/B ratio from offline provider for {symbol}: {pb_ratio:.2f}")
+                        return pb_ratio
+                except Exception as e:
+                    logger.debug(f"Offline provider failed for {symbol}: {e}")
+
+            # Priority 2: Try to get from yfinance
+            try:
+                ticker = yf.Ticker(symbol)
+                info = ticker.info
+                pb_ratio = info.get('priceToBook')
+                return pb_ratio if pb_ratio and pb_ratio > 0 else None
+            except Exception as e:
+                logger.debug(f"P/B ratio fetch failed for {symbol}: {e}")
+                return None
         except Exception as e:
             logger.debug(f"P/B ratio fetch failed for {symbol}: {e}")
             return None
