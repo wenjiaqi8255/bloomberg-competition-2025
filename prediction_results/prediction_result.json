@@ -1,9 +1,9 @@
 {
   "metadata": {
     "strategy_type": "fama_french_5",
-    "model_id": "ff5_regression_20251103_161033",
+    "model_id": "ff5_regression_20251104_202303",
     "prediction_date": "2025-08-28T00:00:00",
-    "total_positions": 8,
+    "total_positions": 16,
     "portfolio_method": "box_based",
     "is_meta_model": false
   },
@@ -13,311 +13,519 @@
   },
   "recommendations": [
     {
-      "symbol": "1969.HK",
-      "weight": 0.9999899999999982,
-      "signal_strength": 0.0958642301523715,
-      "risk_score": 0.04793211507618575,
-      "box_classification": "small_neutral_emerging"
+      "symbol": "0019.HK",
+      "weight": 0.13222265784134146,
+      "signal_strength": 0.020997932080484793,
+      "risk_score": 0.010498966040242396,
+      "box_classification": "mid_value_developed_Industrials"
+    },
+    {
+      "symbol": "0087.HK",
+      "weight": 0.10901844621129773,
+      "signal_strength": 0.02040724872031263,
+      "risk_score": 0.010203624360156314,
+      "box_classification": "mid_value_developed_Industrials"
+    },
+    {
+      "symbol": "601988.SS",
+      "weight": 0.08954773999172896,
+      "signal_strength": 0.014455231463838553,
+      "risk_score": 0.007227615731919277,
+      "box_classification": "large_value_emerging_Financial Services"
+    },
+    {
+      "symbol": "3778.T",
+      "weight": 0.0872499402860172,
+      "signal_strength": 0.06516954151009893,
+      "risk_score": 0.032584770755049466,
+      "box_classification": "mid_neutral_developed_Technology"
+    },
+    {
+      "symbol": "9104.T",
+      "weight": 0.08517072146682803,
+      "signal_strength": 0.025567632049693662,
+      "risk_score": 0.012783816024846831,
+      "box_classification": "mid_value_developed_Industrials"
+    },
+    {
+      "symbol": "601939.SS",
+      "weight": 0.07403793383831525,
+      "signal_strength": 0.007023069915982913,
+      "risk_score": 0.0035115349579914563,
+      "box_classification": "large_value_emerging_Financial Services"
+    },
+    {
+      "symbol": "600028.SS",
+      "weight": 0.06937843664313569,
+      "signal_strength": 0.015589782158438757,
+      "risk_score": 0.007794891079219378,
+      "box_classification": "mid_value_emerging_Energy"
+    },
+    {
+      "symbol": "JKHY",
+      "weight": 0.05438987072263516,
+      "signal_strength": 0.0,
+      "risk_score": 0.0,
+      "box_classification": "mid_neutral_developed_Technology"
+    },
+    {
+      "symbol": "DWNI.DE",
+      "weight": 0.05046349020079359,
+      "signal_strength": -0.0,
+      "risk_score": 0.0,
+      "box_classification": "small_value_developed_Real Estate"
     },
     {
       "symbol": "PLTR",
-      "weight": 1.0000000001744706e-05,
-      "signal_strength": 0.04850505235324216,
-      "risk_score": 0.02425252617662108,
-      "box_classification": "mid_growth_developed"
+      "weight": 0.047532728357988586,
+      "signal_strength": 0.02148997525393344,
+      "risk_score": 0.01074498762696672,
+      "box_classification": "mid_growth_developed_Technology"
     },
     {
-      "symbol": "NVDA",
-      "weight": 9.151025693777084e-17,
-      "signal_strength": 0.02241355845852467,
-      "risk_score": 0.011206779229262335,
-      "box_classification": "large_growth_developed"
+      "symbol": "601328.SS",
+      "weight": 0.041097599976111225,
+      "signal_strength": 0.012604598723749168,
+      "risk_score": 0.006302299361874584,
+      "box_classification": "mid_value_emerging_Financial Services"
     },
     {
-      "symbol": "3750.HK",
-      "weight": 2.8660577818371554e-17,
+      "symbol": "MCAP.ST",
+      "weight": 0.04043648475024839,
+      "signal_strength": 0.027419588644802154,
+      "risk_score": 0.013709794322401077,
+      "box_classification": "small_neutral_developed_Healthcare"
+    },
+    {
+      "symbol": "301236.SZ",
+      "weight": 0.03620763074963086,
+      "signal_strength": 0.034730682791575096,
+      "risk_score": 0.017365341395787548,
+      "box_classification": "mid_neutral_emerging_Technology"
+    },
+    {
+      "symbol": "688041.SS",
+      "weight": 0.0335106605262621,
+      "signal_strength": 0.030143687269578025,
+      "risk_score": 0.015071843634789013,
+      "box_classification": "mid_growth_emerging_Technology"
+    },
+    {
+      "symbol": "601398.SS",
+      "weight": 0.026654198236242755,
+      "signal_strength": 0.00556684054187137,
+      "risk_score": 0.002783420270935685,
+      "box_classification": "large_value_emerging_Financial Services"
+    },
+    {
+      "symbol": "V",
+      "weight": 0.023081460201423,
       "signal_strength": 0.0,
       "risk_score": 0.0,
-      "box_classification": "large_growth_emerging"
-    },
-    {
-      "symbol": "00680K.KS",
-      "weight": 1.099561578844127e-17,
-      "signal_strength": 0.01909299031509488,
-      "risk_score": 0.00954649515754744,
-      "box_classification": "large_growth_developed"
-    },
-    {
-      "symbol": "0272.HK",
-      "weight": 1.0533929727300746e-17,
-      "signal_strength": 0.0,
-      "risk_score": 0.0,
-      "box_classification": "small_value_emerging"
-    },
-    {
-      "symbol": "3968.HK",
-      "weight": 1.0192091415098685e-17,
-      "signal_strength": 0.016280280642525912,
-      "risk_score": 0.008140140321262956,
-      "box_classification": "mid_neutral_emerging"
-    },
-    {
-      "symbol": "BREN.JK",
-      "weight": 5.246380641356615e-18,
-      "signal_strength": 0.0,
-      "risk_score": 0.0,
-      "box_classification": "large_growth_emerging"
+      "box_classification": "mid_growth_developed_Financial Services"
     }
   ],
   "portfolio_weights": {
-    "NVDA": 9.151025693777084e-17,
-    "00680K.KS": 1.099561578844127e-17,
-    "PLTR": 1.0000000001744706e-05,
-    "3750.HK": 2.8660577818371554e-17,
-    "BREN.JK": 5.246380641356615e-18,
-    "3968.HK": 1.0192091415098685e-17,
-    "1969.HK": 0.9999899999999982,
-    "0272.HK": 1.0533929727300746e-17
+    "PLTR": 0.047532728357988586,
+    "V": 0.023081460201423,
+    "3778.T": 0.0872499402860172,
+    "JKHY": 0.05438987072263516,
+    "9104.T": 0.08517072146682803,
+    "0019.HK": 0.13222265784134146,
+    "0087.HK": 0.10901844621129773,
+    "DWNI.DE": 0.05046349020079359,
+    "MCAP.ST": 0.04043648475024839,
+    "688041.SS": 0.0335106605262621,
+    "301236.SZ": 0.03620763074963086,
+    "601988.SS": 0.08954773999172896,
+    "601939.SS": 0.07403793383831525,
+    "601398.SS": 0.026654198236242755,
+    "601328.SS": 0.041097599976111225,
+    "600028.SS": 0.06937843664313569
   },
   "box_details": {
     "box_allocations": {
-      "large_growth_developed": 1.0,
-      "large_growth_emerging": 1.0,
-      "large_neutral_developed": 1.0,
-      "large_neutral_emerging": 1.0,
-      "large_value_developed": 1.0,
-      "large_value_emerging": 1.0,
-      "mid_growth_developed": 1.0,
-      "mid_growth_emerging": 1.0,
-      "mid_neutral_developed": 1.0,
-      "mid_neutral_emerging": 1.0,
-      "mid_value_developed": 1.0,
-      "mid_value_emerging": 1.0,
+      "large_growth_developed": 0.0,
+      "large_growth_emerging": 0.0,
+      "large_neutral_developed": 0.0,
+      "large_neutral_emerging": 0.0,
+      "large_value_developed": 0.0,
+      "large_value_emerging": 0.0,
+      "mid_growth_developed": 0.0,
+      "mid_growth_emerging": 0.0,
+      "mid_neutral_developed": 0.0,
+      "mid_neutral_emerging": 0.0,
+      "mid_value_developed": 0.0,
+      "mid_value_emerging": 0.0,
       "small_growth_developed": 1.0,
-      "small_growth_emerging": 1.0,
-      "small_neutral_developed": 1.0,
-      "small_neutral_emerging": 1.0,
-      "small_value_developed": 1.0,
-      "small_value_emerging": 1.0
+      "small_growth_emerging": 0.0,
+      "small_neutral_developed": 0.0,
+      "small_neutral_emerging": 0.0,
+      "small_value_developed": 0.0,
+      "small_value_emerging": 0.0
     },
     "stocks_by_box": {
-      "large_growth_developed": [
+      "large_growth_developed_Technology": [
         "NVDA",
         "MSFT",
         "AAPL",
         "GOOGL",
-        "GOOG",
-        "AMZN",
+        "2330.TW"
+      ],
+      "large_growth_developed_Communication Services": [
+        "GOOG"
+      ],
+      "large_neutral_developed_Consumer Discretionary": [
+        "AMZN"
+      ],
+      "mid_growth_developed_Technology": [
         "META",
-        "2330.TW",
-        "034730.KS",
-        "024110.KS",
-        "00680K.KS"
-      ],
-      "large_neutral_developed": [
-        "AVGO",
-        "7203.T",
-        "8316.T",
-        "8411.T",
-        "8697.T",
-        "9532.T"
-      ],
-      "mid_growth_developed": [
         "TSLA",
         "ORCL",
-        "WMT",
-        "LLY",
-        "V",
-        "NFLX",
-        "MA",
         "PLTR",
-        "COST",
-        "HD",
-        "SHEL.L",
-        "NG.L",
+        "LITE",
+        "PCOR",
+        "2455.TW"
+      ],
+      "large_neutral_developed_Technology": [
+        "AVGO"
+      ],
+      "mid_growth_developed_Consumer Staples": [
+        "WMT",
+        "COST"
+      ],
+      "mid_growth_developed_Healthcare": [
+        "LLY",
+        "IONS"
+      ],
+      "mid_growth_developed_Financial Services": [
+        "V",
+        "MA",
         "BARC.L",
         "LLOY.L",
         "NWG.L",
-        "ATI",
-        "LITE",
-        "IONS",
-        "AAF.L",
-        "STRL",
-        "PCOR",
-        "QAN.AX",
-        "2455.TW",
-        "229640.KS",
         "082640.KS"
       ],
-      "mid_neutral_developed": [
+      "mid_growth_developed_Communication Services": [
+        "NFLX",
+        "AAF.L"
+      ],
+      "mid_neutral_developed_Healthcare": [
         "JNJ",
-        "CMCSA",
-        "TXRH",
-        "EXAS",
+        "EXAS"
+      ],
+      "mid_growth_developed_Consumer Discretionary": [
+        "HD"
+      ],
+      "large_neutral_developed_Consumer Cyclical": [
+        "7203.T"
+      ],
+      "mid_growth_developed_Energy": [
+        "SHEL.L"
+      ],
+      "mid_value_developed_Financials": [
+        "C"
+      ],
+      "mid_value_developed_Energy": [
+        "TTE.PA",
+        "PR"
+      ],
+      "mid_value_developed_Communication Services": [
+        "CMCSA"
+      ],
+      "large_neutral_developed_Financial Services": [
+        "8316.T",
+        "8411.T",
+        "8697.T"
+      ],
+      "mid_value_developed_Financial Services": [
+        "BNP.PA",
+        "DBK.DE",
+        "ACA.PA",
+        "RBI.VI",
+        "8388.T",
+        "8386.T"
+      ],
+      "mid_growth_developed_Utilities": [
+        "NG.L"
+      ],
+      "mid_value_developed_Consumer Cyclical": [
+        "MBG.DE",
+        "BMW.DE",
+        "BMW3.DE"
+      ],
+      "mid_growth_developed_Industrials": [
+        "ATI",
+        "STRL",
+        "QAN.AX",
+        "229640.KS"
+      ],
+      "small_neutral_developed_Consumer Cyclical": [
+        "TXRH"
+      ],
+      "small_growth_developed_Healthcare": [
+        "ORNBV.HE"
+      ],
+      "mid_neutral_developed_Technology": [
         "JKHY",
+        "DAY",
+        "3778.T",
+        "6703.T"
+      ],
+      "mid_neutral_developed_Industrials": [
         "AYI",
         "METSO.HE",
         "MLI",
-        "COKE",
-        "DAY",
-        "JEF",
         "0316.HK",
-        "AGNC",
-        "1303.TW",
         "2467.TW",
         "1514.TW",
-        "3778.T",
         "9010.T",
-        "7611.T",
-        "6703.T",
-        "9068.T",
-        "073240.KS",
-        "2319.HK"
+        "9068.T"
       ],
-      "mid_value_developed": [
-        "C",
-        "TTE.PA",
-        "BNP.PA",
-        "DBK.DE",
-        "MBG.DE",
-        "BMW.DE",
-        "BMW3.DE",
-        "ACA.PA",
-        "RBI.VI",
+      "small_neutral_developed_Financial Services": [
+        "KNSL",
+        "FDS",
+        "OPFI",
+        "OSBC",
+        "BHRB"
+      ],
+      "small_neutral_developed_Industrials": [
+        "POOL"
+      ],
+      "mid_growth_developed_Consumer Defensive": [
+        "COKE"
+      ],
+      "large_value_developed_Financial Services": [
+        "8593.T"
+      ],
+      "large_growth_developed_Industrials": [
+        "034730.KS"
+      ],
+      "small_value_developed_Consumer Defensive": [
+        "CA.PA",
+        "AGR.VI"
+      ],
+      "mid_neutral_developed_Financial Services": [
+        "JEF"
+      ],
+      "small_neutral_developed_Real Estate": [
+        "LI.PA"
+      ],
+      "mid_value_developed_Industrials": [
         "0019.HK",
         "0087.HK",
         "9104.T",
-        "3407.T",
-        "8388.T",
-        "8386.T",
-        "1314.TW",
         "6804.T",
-        "2501.TW",
         "9678.T"
       ],
-      "small_growth_developed": [
-        "ORNBV.HE",
+      "large_neutral_developed_Utilities": [
+        "9532.T"
+      ],
+      "small_value_developed_Real Estate": [
+        "DWNI.DE",
+        "SVEAF.ST",
+        "HMC.AX"
+      ],
+      "large_growth_developed_Financial Services": [
+        "024110.KS",
+        "00680K.KS"
+      ],
+      "small_value_developed_Healthcare": [
+        "MRNA",
+        "EVH"
+      ],
+      "large_value_developed_Industrials": [
+        "3407.T"
+      ],
+      "mid_neutral_developed_Real Estate": [
+        "AGNC"
+      ],
+      "small_value_developed_Financial Services": [
+        "IVZ"
+      ],
+      "mid_neutral_developed_Basic Materials": [
+        "1303.TW"
+      ],
+      "small_neutral_developed_Healthcare": [
+        "NAN.AX",
+        "MCAP.ST",
+        "SYNSAM.ST"
+      ],
+      "small_growth_developed_Technology": [
         "DTL.AX",
-        "ALFA.L",
+        "ALFA.L"
+      ],
+      "small_growth_developed": [
         "007390.KS",
-        "TROAX.ST",
         "060370.KS",
         "096530.KS"
       ],
-      "small_neutral_developed": [
-        "KNSL",
-        "POOL",
-        "FDS",
-        "LI.PA",
-        "MRNA",
-        "NAN.AX",
-        "MCAP.ST",
-        "SYNSAM.ST",
-        "NGVC",
-        "OSBC",
-        "SCSC",
-        "BHRB"
+      "small_growth_developed_Industrials": [
+        "TROAX.ST"
       ],
-      "large_value_developed": [
-        "8593.T"
+      "small_neutral_developed_Consumer Defensive": [
+        "NGVC"
       ],
-      "small_value_developed": [
-        "CA.PA",
-        "DWNI.DE",
-        "PR",
-        "IVZ",
-        "OPFI",
-        "SVEAF.ST",
-        "HMC.AX",
-        "EVH",
-        "AGR.VI",
-        "NEXA"
+      "mid_neutral_developed_Consumer Cyclical": [
+        "7611.T"
       ],
-      "large_neutral_emerging": [
-        "0700.HK",
+      "small_value_developed_Technology": [
+        "SCSC"
+      ],
+      "mid_value_developed_Basic Materials": [
+        "1314.TW"
+      ],
+      "mid_value_developed_Real Estate": [
+        "2501.TW"
+      ],
+      "mid_growth_developed_Consumer Cyclical": [
+        "073240.KS"
+      ],
+      "large_neutral_emerging_Communication Services": [
+        "0700.HK"
+      ],
+      "large_neutral_emerging_Consumer Defensive": [
         "600519.SS",
-        "300750.SZ",
-        "601857.SS",
         "CLEO.JK"
       ],
-      "large_growth_emerging": [
-        "3750.HK",
-        "BREN.JK",
-        "NICL.JK",
-        "INDY.JK"
+      "large_neutral_emerging_Industrials": [
+        "300750.SZ"
       ],
-      "mid_growth_emerging": [
+      "large_growth_emerging_Industrials": [
+        "3750.HK"
+      ],
+      "mid_growth_emerging_Technology": [
         "601138.SS",
-        "MELI",
-        "9633.HK",
         "688041.SS",
-        "NU",
         "688256.SS",
         "600536.SS",
         "300661.SZ",
-        "300857.SZ",
-        "688331.SS",
-        "9995.HK"
+        "300857.SZ"
       ],
-      "mid_neutral_emerging": [
+      "mid_neutral_emerging_Technology": [
         "1810.HK",
-        "601899.SS",
-        "2899.HK",
-        "9999.HK",
-        "3968.HK",
-        "2628.HK",
-        "601318.SS",
-        "2318.HK",
         "600588.SS",
-        "002517.SZ",
-        "601777.SS",
-        "688122.SS",
-        "300832.SZ",
         "301236.SZ",
         "0268.HK",
-        "2367.HK",
-        "601808.SS",
-        "601555.SS",
-        "600918.SS",
-        "600219.SS",
         "600745.SS"
       ],
-      "large_value_emerging": [
+      "mid_growth_emerging_Consumer Cyclical": [
+        "MELI"
+      ],
+      "mid_neutral_emerging_Basic Materials": [
+        "601899.SS",
+        "2899.HK",
+        "600219.SS"
+      ],
+      "mid_neutral_emerging_Communication Services": [
+        "9999.HK",
+        "002517.SZ"
+      ],
+      "large_growth_emerging_Utilities": [
+        "BREN.JK"
+      ],
+      "mid_growth_emerging_Consumer Defensive": [
+        "9633.HK"
+      ],
+      "mid_growth_emerging_Financial Services": [
+        "NU"
+      ],
+      "large_value_emerging_Financial Services": [
         "601398.SS",
         "1398.HK",
-        "601288.SS",
         "1288.HK",
         "601939.SS",
         "0939.HK",
         "601988.SS",
-        "3988.HK",
-        "0857.HK",
-        "AUTO.JK"
+        "3988.HK"
       ],
-      "mid_value_emerging": [
+      "large_neutral_emerging_Financial Services": [
+        "601288.SS"
+      ],
+      "large_neutral_emerging_Energy": [
+        "601857.SS",
+        "0857.HK"
+      ],
+      "mid_value_emerging_Financial Services": [
         "600036.SS",
         "601658.SS",
         "1658.HK",
-        "600028.SS",
-        "0386.HK",
         "601328.SS",
-        "1099.HK",
-        "2883.HK",
         "600061.SS"
       ],
-      "small_growth_emerging": [
-        "INVP.L",
+      "mid_neutral_emerging_Financial Services": [
+        "3968.HK",
+        "2628.HK",
+        "601318.SS",
+        "2318.HK",
+        "601555.SS",
+        "600918.SS"
+      ],
+      "mid_value_emerging_Energy": [
+        "600028.SS",
+        "0386.HK",
+        "2883.HK"
+      ],
+      "mid_neutral_emerging_Consumer Cyclical": [
+        "601777.SS"
+      ],
+      "mid_neutral_emerging_Industrials": [
+        "688122.SS"
+      ],
+      "mid_neutral_emerging_Healthcare": [
+        "300832.SZ"
+      ],
+      "mid_growth_emerging_Healthcare": [
+        "688331.SS",
+        "9995.HK"
+      ],
+      "mid_neutral_emerging_Consumer Defensive": [
+        "2367.HK"
+      ],
+      "mid_value_emerging_Healthcare": [
+        "1099.HK"
+      ],
+      "mid_neutral_emerging_Energy": [
+        "601808.SS"
+      ],
+      "mid_neutral_developed_Consumer Defensive": [
+        "2319.HK"
+      ],
+      "small_growth_emerging_Financial Services": [
+        "INVP.L"
+      ],
+      "small_neutral_emerging_Technology": [
+        "9669.HK"
+      ],
+      "small_growth_emerging_Healthcare": [
         "2410.HK"
       ],
-      "small_neutral_emerging": [
-        "9669.HK",
-        "1969.HK",
-        "3709.HK"
+      "large_growth_emerging_Basic Materials": [
+        "NICL.JK"
       ],
-      "small_value_emerging": [
-        "1108.HK",
-        "0272.HK",
+      "large_growth_emerging_Energy": [
+        "INDY.JK"
+      ],
+      "small_value_developed_Basic Materials": [
+        "NEXA"
+      ],
+      "small_value_emerging_Basic Materials": [
+        "1108.HK"
+      ],
+      "small_value_emerging_Real Estate": [
+        "0272.HK"
+      ],
+      "small_value_emerging_Financial Services": [
         "QD"
+      ],
+      "large_value_emerging_Consumer Cyclical": [
+        "AUTO.JK"
+      ],
+      "small_neutral_emerging_Consumer Defensive": [
+        "1969.HK"
+      ],
+      "small_neutral_emerging_Consumer Cyclical": [
+        "3709.HK"
       ]
     },
     "construction_log": [
@@ -325,55 +533,55 @@
     ]
   },
   "risk_metrics": {
-    "expected_return": 24.15766665326954,
-    "expected_risk": 0.19999800000999976,
-    "diversification_score": 0.8
+    "expected_return": 5.247925398623536,
+    "expected_risk": 0.05561068197467083,
+    "diversification_score": 1.0
   },
   "summary": {
     "strategy_type": "fama_french_5",
-    "model_id": "ff5_regression_20251103_161033",
+    "model_id": "ff5_regression_20251104_202303",
     "prediction_date": "2025-08-28T00:00:00",
-    "total_positions": 8,
+    "total_positions": 16,
     "portfolio_method": "box_based",
-    "expected_return": 24.15766665326954,
-    "expected_risk": 0.19999800000999976,
-    "diversification_score": 0.8,
+    "expected_return": 5.247925398623536,
+    "expected_risk": 0.05561068197467083,
+    "diversification_score": 1.0,
     "is_meta_model": false,
     "base_model_ids": null,
     "model_weights": null,
     "box_allocations": {
-      "large_growth_developed": 1.0,
-      "large_growth_emerging": 1.0,
-      "large_neutral_developed": 1.0,
-      "large_neutral_emerging": 1.0,
-      "large_value_developed": 1.0,
-      "large_value_emerging": 1.0,
-      "mid_growth_developed": 1.0,
-      "mid_growth_emerging": 1.0,
-      "mid_neutral_developed": 1.0,
-      "mid_neutral_emerging": 1.0,
-      "mid_value_developed": 1.0,
-      "mid_value_emerging": 1.0,
+      "large_growth_developed": 0.0,
+      "large_growth_emerging": 0.0,
+      "large_neutral_developed": 0.0,
+      "large_neutral_emerging": 0.0,
+      "large_value_developed": 0.0,
+      "large_value_emerging": 0.0,
+      "mid_growth_developed": 0.0,
+      "mid_growth_emerging": 0.0,
+      "mid_neutral_developed": 0.0,
+      "mid_neutral_emerging": 0.0,
+      "mid_value_developed": 0.0,
+      "mid_value_emerging": 0.0,
       "small_growth_developed": 1.0,
-      "small_growth_emerging": 1.0,
-      "small_neutral_developed": 1.0,
-      "small_neutral_emerging": 1.0,
-      "small_value_developed": 1.0,
-      "small_value_emerging": 1.0
+      "small_growth_emerging": 0.0,
+      "small_neutral_developed": 0.0,
+      "small_neutral_emerging": 0.0,
+      "small_value_developed": 0.0,
+      "small_value_emerging": 0.0
     },
     "top_5_stocks": [
-      "1969.HK",
-      "PLTR",
-      "NVDA",
-      "3750.HK",
-      "00680K.KS"
+      "0019.HK",
+      "0087.HK",
+      "601988.SS",
+      "3778.T",
+      "9104.T"
     ],
     "top_5_weights": [
-      0.9999899999999982,
-      1.0000000001744706e-05,
-      9.151025693777084e-17,
-      2.8660577818371554e-17,
-      1.099561578844127e-17
+      0.13222265784134146,
+      0.10901844621129773,
+      0.08954773999172896,
+      0.0872499402860172,
+      0.08517072146682803
     ]
   }
 }

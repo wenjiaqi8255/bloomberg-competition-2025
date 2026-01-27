@@ -1,3 +1,6 @@
+*.csv
+*.xlsx
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -219,7 +222,7 @@ ignore/
 wandb/
 results/
 # *.md
-# tree.txt
+tree.txt
 *.poetrylock
 .DS_Store
 *.pkl
@@ -243,7 +246,7 @@ results/
 flattened_repo.txt
 repo_structure.yaml
 
-*.md
+# *.md
 
 
 test/
@@ -270,3 +273,13 @@ tree.txt
 test_data/
 test_cache/
 optimal_system_results/
+
+*.json
+*.txt
+repomix-output.xml
+paper_refer.md
+poetry.lock
+*.sh
+
+*.py
+*.ipynb

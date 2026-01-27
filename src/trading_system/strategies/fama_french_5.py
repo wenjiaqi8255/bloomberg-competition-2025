@@ -213,6 +213,193 @@ class FamaFrench5Strategy(BaseStrategy):
     def _expected_factor_columns(self) -> list:
         """Get the expected factor columns for FF5 model."""
         return ['MKT', 'SMB', 'HML', 'RMW', 'CMA']
+    
+    def _determine_required_factors(self, current_model) -> List[str]:
+        """Determine required factors based on model type."""
+        model_type = getattr(current_model, 'model_type', None)
+        if model_type is None:
+            # Try to infer from model_id
+            model_id = getattr(current_model, 'model_id', '')
+            if 'ff3' in str(model_id).lower():
+                return ['MKT', 'SMB', 'HML']
+            else:
+                return ['MKT', 'SMB', 'HML', 'RMW', 'CMA']
+        elif 'ff3' in str(model_type).lower():
+            return ['MKT', 'SMB', 'HML']
+        else:
+            return ['MKT', 'SMB', 'HML', 'RMW', 'CMA']
+    
+    def _extract_factor_values_for_date(self, features: pd.DataFrame, date: datetime, 
+                                        required_factors: List[str]) -> pd.DataFrame:
+        """
+        Extract factor values from features DataFrame for a specific date.
+        
+        Handles different feature DataFrame structures:
+        - MultiIndex (date, symbol)
+        - DatetimeIndex
+        - Regular index with date column
+        
+        Args:
+            features: Features DataFrame with factor columns
+            date: Date to extract factors for
+            required_factors: List of factor column names to extract
+            
+        Returns:
+            DataFrame with single row containing factor values (shape: 1 x n_factors)
+        """
+        if features.empty:
+            return pd.DataFrame()
+        
+        # Ensure date is datetime
+        if not isinstance(date, pd.Timestamp):
+            date = pd.to_datetime(date)
+        
+        # Handle MultiIndex (date, symbol)
+        if isinstance(features.index, pd.MultiIndex):
+            if 'date' in features.index.names:
+                try:
+                    # Extract data for this date
+                    date_features = features.xs(date, level='date')
+                    # Take first row (all symbols should have same factor values for a given date)
+                    if len(date_features) > 0:
+                        first_row = date_features.iloc[[0]]
+                        factor_values = first_row[required_factors]
+                        return factor_values
+                except KeyError:
+                    # Date not found, try to use last available date
+                    available_dates = features.index.get_level_values('date').unique()
+                    available_dates = pd.to_datetime(available_dates).sort_values()
+                    valid_dates = available_dates[available_dates <= date]
+                    if len(valid_dates) > 0:
+                        last_date = valid_dates.max()
+                        logger.debug(f"Date {date} not found, using {last_date}")
+                        date_features = features.xs(last_date, level='date')
+                        if len(date_features) > 0:
+                            first_row = date_features.iloc[[0]]
+                            factor_values = first_row[required_factors]
+                            return factor_values
+                    else:
+                        # Use most recent date
+                        if len(available_dates) > 0:
+                            last_date = available_dates.max()
+                            logger.warning(f"No dates <= {date}, using most recent: {last_date}")
+                            date_features = features.xs(last_date, level='date')
+                            if len(date_features) > 0:
+                                first_row = date_features.iloc[[0]]
+                                factor_values = first_row[required_factors]
+                                return factor_values
+        
+        # Handle DatetimeIndex
+        elif isinstance(features.index, pd.DatetimeIndex):
+            if date in features.index:
+                date_features = features.loc[[date]]
+                if len(date_features) > 0:
+                    factor_values = date_features[required_factors].iloc[[0]]
+                    return factor_values
+            else:
+                # Find closest date
+                available_dates = features.index[features.index <= date]
+                if len(available_dates) > 0:
+                    closest_date = available_dates.max()
+                    logger.debug(f"Date {date} not found, using {closest_date}")
+                    date_features = features.loc[[closest_date]]
+                    if len(date_features) > 0:
+                        factor_values = date_features[required_factors].iloc[[0]]
+                        return factor_values
+                else:
+                    # Use most recent date
+                    if len(features.index) > 0:
+                        closest_date = features.index.max()
+                        logger.warning(f"No dates <= {date}, using most recent: {closest_date}")
+                        date_features = features.loc[[closest_date]]
+                        if len(date_features) > 0:
+                            factor_values = date_features[required_factors].iloc[[0]]
+                            return factor_values
+        
+        # Fallback: use first row if available
+        if len(features) > 0:
+            logger.warning(f"Could not extract factors for date {date}, using first row")
+            first_row = features.iloc[[0]]
+            if all(col in first_row.columns for col in required_factors):
+                factor_values = first_row[required_factors]
+                return factor_values
+        
+        logger.error(f"Failed to extract factor values for date {date}")
+        return pd.DataFrame()
+    
+    def _apply_expected_return_significance_filter(self, expected_returns: Dict[str, float],
+                                                   config: Dict[str, Any],
+                                                   current_date: datetime,
+                                                   pipeline_data: Dict[str, Any],
+                                                   required_factors: List[str],
+                                                   lookback_days: int) -> Dict[str, float]:
+        """
+        Apply significance filter to expected returns based on alpha t-statistics.
+        
+        For expected returns, we still filter based on alpha significance since
+        the alpha component is what we're testing for statistical significance.
+        
+        Args:
+            expected_returns: Dictionary of {symbol: expected_return_value}
+            config: Configuration dict (same as alpha_significance)
+            current_date: Current date for rolling mode
+            pipeline_data: Pipeline data with price_data and factor_data
+            required_factors: List of factor columns to use
+            lookback_days: Lookback window for rolling computation
+        
+        Returns:
+            Filtered expected returns dict
+        """
+        # Get alphas from model for t-stat computation
+        current_model = self.model_predictor.get_current_model()
+        if not hasattr(current_model, 'get_symbol_alphas'):
+            logger.warning("Cannot compute t-stats for expected returns without alpha access")
+            return expected_returns
+        
+        alphas = current_model.get_symbol_alphas()
+        if not alphas:
+            logger.warning("No alphas available for t-stat computation")
+            return expected_returns
+        
+        # Apply rolling alpha filter to get t-stats, then apply same shrinkage to expected returns
+        filtered_alphas = self._apply_rolling_alpha_filter(
+            alphas.copy(),
+            config,
+            current_date,
+            pipeline_data,
+            required_factors,
+            lookback_days
+        )
+        
+        # Compute shrinkage factors based on alpha t-stats
+        # We'll need to get t-stats from cache or recompute
+        tstat_dict = self._tstats_cache.get(current_date, {})
+        if not tstat_dict:
+            logger.warning(f"No t-stats cached for {current_date}, skipping filter")
+            return expected_returns
+        
+        threshold = float(config.get('t_threshold', 2.0))
+        method = config.get('method', 'hard_threshold')
+        
+        # Apply same shrinkage to expected returns
+        filtered_returns = expected_returns.copy()
+        for symbol in list(filtered_returns.keys()):
+            if symbol not in tstat_dict:
+                continue
+            
+            t_stat = tstat_dict[symbol]
+            if pd.isna(t_stat):
+                filtered_returns[symbol] = 0.0
+                continue
+            
+            # Apply shrinkage factor
+            factor = self._shrinkage_factor(float(t_stat), threshold, method)
+            if factor < 1.0:
+                filtered_returns[symbol] *= factor
+                if factor == 0.0:
+                    filtered_returns[symbol] = 0.0
+        
+        return filtered_returns
 
     def generate_signals(self, pipeline_data, start_date, end_date):
         """Generate signals with pipeline data context"""
@@ -225,57 +412,75 @@ class FamaFrench5Strategy(BaseStrategy):
 
     def _get_predictions(self, features, price_data, start_date, end_date):
         """
-        FF5预测现在直接使用模型的alpha值作为信号。
-        这更符合因子投资的初衷：寻找持续产生超额回报的资产。
+        Generate predictions using either alpha (intercept) or expected return (alpha + beta @ factors).
         
-        支持rolling t-stats模式：在每个日期使用历史数据计算t-stats，避免look-ahead bias。
+        Supports configurable signal source via parameters.signal_source:
+        - 'alpha': Uses only the intercept term (original behavior)
+        - 'expected_return': Uses full expected return E[R] = α + β @ factors (default)
+        
+        Supports rolling t-stats mode: computes t-stats per date using historical data to avoid look-ahead bias.
         """
-        logger.info("修正：FF5策略现在使用模型的 Alpha 作为固定信号。")
+        # Get signal source configuration (default to 'expected_return' per requirement 2b)
+        signal_source = self.parameters.get('signal_source', 'expected_return')
+        logger.info(f"[{self.name}] Using signal source: {signal_source}")
         
         current_model = self.model_predictor.get_current_model()
-        if not hasattr(current_model, 'get_symbol_alphas'):
-            logger.error("当前模型不支持 get_symbol_alphas 方法，无法获取 Alpha。")
-            return pd.DataFrame()
-
-        # 一次性获取所有已训练股票的 alpha 值
-        alphas = current_model.get_symbol_alphas()
-        if not alphas:
-            logger.error("未能从模型中获取任何 Alpha 值。")
-            return pd.DataFrame()
-
-        # Check if rolling t-stats is enabled
-        alpha_config = self.parameters.get('alpha_significance', {})
-        rolling_tstats = alpha_config.get('rolling_tstats', False)
         
         # Get pipeline_data if available (stored in generate_signals)
         pipeline_data = getattr(self, '_current_pipeline_data', None)
         
-        # 创建一个符合回测时间范围的 DataFrame
+        # Create date range DataFrame
         date_range = pd.date_range(start_date, end_date, freq='D')
         predictions_df = pd.DataFrame(index=date_range)
+        
+        # Get signal transformation method
+        signal_method = self.parameters.get('signal_method', 'raw')
+        
+        # Get alpha significance config
+        alpha_config = self.parameters.get('alpha_significance', {})
+        rolling_tstats = alpha_config.get('rolling_tstats', False)
+        
+        if signal_source == 'alpha':
+            # Alpha mode: use intercept term only (original behavior)
+            return self._get_predictions_from_alpha(
+                current_model, features, price_data, date_range, predictions_df,
+                alpha_config, rolling_tstats, pipeline_data, signal_method
+            )
+        elif signal_source == 'expected_return':
+            # Expected return mode: use full E[R] = α + β @ factors
+            return self._get_predictions_from_expected_return(
+                current_model, features, price_data, date_range, predictions_df,
+                alpha_config, rolling_tstats, pipeline_data, signal_method
+            )
+        else:
+            logger.warning(f"Unknown signal_source: {signal_source}, defaulting to 'expected_return'")
+            return self._get_predictions_from_expected_return(
+                current_model, features, price_data, date_range, predictions_df,
+                alpha_config, rolling_tstats, pipeline_data, signal_method
+            )
+    
+    def _get_predictions_from_alpha(self, current_model, features, price_data, date_range,
+                                    predictions_df, alpha_config, rolling_tstats, pipeline_data, signal_method):
+        """Generate predictions using alpha (intercept) only."""
+        logger.info(f"[{self.name}] Using alpha (intercept) as signal source")
+        
+        if not hasattr(current_model, 'get_symbol_alphas'):
+            logger.error("当前模型不支持 get_symbol_alphas 方法，无法获取 Alpha。")
+            return pd.DataFrame()
+
+        # Get all symbol alphas
+        alphas = current_model.get_symbol_alphas()
+        if not alphas:
+            logger.error("未能从模型中获取任何 Alpha 值。")
+            return pd.DataFrame()
 
         if alpha_config.get('enabled', False) and rolling_tstats and pipeline_data:
             # Rolling mode: compute t-stats per date
             logger.info("使用rolling t-stats模式：为每个日期计算历史t-stats")
             
             # Determine required factors based on model type
-            model_type = getattr(current_model, 'model_type', None)
-            if model_type is None:
-                # Try to infer from model_id
-                model_id = getattr(current_model, 'model_id', '')
-                if 'ff3' in str(model_id).lower():
-                    required_factors = ['MKT', 'SMB', 'HML']
-                else:
-                    required_factors = ['MKT', 'SMB', 'HML', 'RMW', 'CMA']
-            elif 'ff3' in str(model_type).lower():
-                required_factors = ['MKT', 'SMB', 'HML']
-            else:
-                required_factors = ['MKT', 'SMB', 'HML', 'RMW', 'CMA']
-            
+            required_factors = self._determine_required_factors(current_model)
             lookback_days = alpha_config.get('lookback_days', self.lookback_days)
-            
-            # Get signal transformation method
-            signal_method = self.parameters.get('signal_method', 'raw')
             
             # Compute rolling t-stats for each date
             for date in date_range:
@@ -289,7 +494,7 @@ class FamaFrench5Strategy(BaseStrategy):
                     lookback_days=lookback_days
                 )
                 
-                # FIX: Apply signal transformation
+                # Apply signal transformation
                 transformed_signals = self._transform_alpha_to_signals(filtered_alphas, signal_method)
                 
                 # Store transformed signals for this date
@@ -302,18 +507,122 @@ class FamaFrench5Strategy(BaseStrategy):
             if alpha_config.get('enabled', False):
                 alphas = self._apply_alpha_significance_filter(alphas, alpha_config)
             
-            # FIX: Apply signal transformation (rank-based or Z-score normalization)
-            signal_method = self.parameters.get('signal_method', 'raw')  # Options: 'raw', 'rank', 'zscore'
+            # Apply signal transformation
             alpha_signals = self._transform_alpha_to_signals(alphas, signal_method)
             
             for symbol, signal_value in alpha_signals.items():
                 predictions_df[symbol] = signal_value
             
-        # 确保返回的 DataFrame 包含正确的股票
+        # Ensure DataFrame contains correct symbols
         symbols_in_data = list(price_data.keys())
         predictions_df = predictions_df.reindex(columns=symbols_in_data).fillna(0.0)
 
         logger.info(f"成功为 {len(predictions_df.columns)} 只股票生成了基于 Alpha 的信号 (method: {signal_method})。")
+        return predictions_df
+    
+    def _get_predictions_from_expected_return(self, current_model, features, price_data, date_range,
+                                              predictions_df, alpha_config, rolling_tstats, pipeline_data, signal_method):
+        """Generate predictions using expected return E[R] = α + β @ factors."""
+        logger.info(f"[{self.name}] Using expected return (alpha + beta @ factors) as signal source")
+        
+        symbols = list(price_data.keys())
+        required_factors = self._expected_factor_columns()
+        
+        # Verify features contain required factors
+        missing_factors = set(required_factors) - set(features.columns)
+        if missing_factors:
+            logger.error(f"[{self.name}] Missing required factors in features: {missing_factors}")
+            return pd.DataFrame()
+        
+        if alpha_config.get('enabled', False) and rolling_tstats and pipeline_data:
+            # Rolling mode: compute expected returns per date with t-stats filtering
+            logger.info("使用rolling t-stats模式：为每个日期计算expected return和历史t-stats")
+            
+            lookback_days = alpha_config.get('lookback_days', self.lookback_days)
+            
+            for date in date_range:
+                # Extract factor values for current date
+                factor_values_df = self._extract_factor_values_for_date(features, date, required_factors)
+                if factor_values_df.empty:
+                    logger.warning(f"No factor values found for date {date}, skipping")
+                    continue
+                
+                # Get expected returns using model.predict()
+                expected_returns = self.model_predictor.predict(
+                    features=factor_values_df,
+                    symbols=symbols,
+                    date=date
+                )
+                
+                # Convert to dict for filtering
+                expected_returns_dict = expected_returns.to_dict()
+                
+                # Apply significance filter if enabled
+                if alpha_config.get('enabled', False):
+                    filtered_returns = self._apply_expected_return_significance_filter(
+                        expected_returns_dict.copy(),
+                        alpha_config,
+                        current_date=date,
+                        pipeline_data=pipeline_data,
+                        required_factors=required_factors,
+                        lookback_days=lookback_days
+                    )
+                else:
+                    filtered_returns = expected_returns_dict
+                
+                # Apply signal transformation
+                transformed_signals = self._transform_alpha_to_signals(filtered_returns, signal_method)
+                
+                # Store transformed signals for this date
+                for symbol, signal_value in transformed_signals.items():
+                    if symbol not in predictions_df.columns:
+                        predictions_df[symbol] = 0.0
+                    predictions_df.loc[date, symbol] = signal_value
+        else:
+            # Non-rolling mode: compute expected returns once per date (or use first date's factors)
+            logger.info("使用非rolling模式：为每个日期计算expected return")
+            
+            for date in date_range:
+                # Extract factor values for current date
+                factor_values_df = self._extract_factor_values_for_date(features, date, required_factors)
+                if factor_values_df.empty:
+                    logger.warning(f"No factor values found for date {date}, skipping")
+                    continue
+                
+                # Get expected returns using model.predict()
+                expected_returns = self.model_predictor.predict(
+                    features=factor_values_df,
+                    symbols=symbols,
+                    date=date
+                )
+                
+                # Convert to dict
+                expected_returns_dict = expected_returns.to_dict()
+                
+                # Apply significance filter if enabled (CSV mode)
+                if alpha_config.get('enabled', False):
+                    # For expected returns, we can still use alpha filter logic
+                    # since we're filtering based on alpha significance
+                    filtered_returns = self._apply_alpha_significance_filter(
+                        expected_returns_dict, alpha_config
+                    )
+                else:
+                    filtered_returns = expected_returns_dict
+                
+                # Apply signal transformation
+                transformed_signals = self._transform_alpha_to_signals(filtered_returns, signal_method)
+                
+                # Store transformed signals for this date
+                for symbol, signal_value in transformed_signals.items():
+                    if symbol not in predictions_df.columns:
+                        predictions_df[symbol] = 0.0
+                    predictions_df.loc[date, symbol] = signal_value
+        
+        # Ensure DataFrame contains correct symbols
+        symbols_in_data = list(price_data.keys())
+        predictions_df = predictions_df.reindex(columns=symbols_in_data).fillna(0.0)
+
+        logger.info(f"成功为 {len(predictions_df.columns)} 只股票生成了基于 Expected Return 的信号 (method: {signal_method})。")
         return predictions_df
 
     def _transform_alpha_to_signals(self, alphas: Dict[str, float], method: str = 'raw') -> Dict[str, float]:

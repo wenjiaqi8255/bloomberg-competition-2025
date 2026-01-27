@@ -1,0 +1,98 @@
+# Prediction Configuration - ML XGBoost Model with Quantitative Portfolio Construction
+# ===============================================================================
+# Configuration for generating investment predictions using trained XGBoost model.
+# Model: xgboost_20251110_010814
+# Portfolio Construction: Quantitative (mean-variance optimization)
+
+# Prediction settings
+prediction:
+  prediction_date: "2025-11-09"  # Date to make predictions for (use latest available data)
+  # Note: Use a recent trading day. Adjust based on data availability.
+
+# Strategy configuration (ML model)
+strategy:
+  type: "ml"  # ML strategy using XGBoost model
+  name: "ML_XGBoost_Prediction_Strategy_Quantitative"
+
+  # Model configuration
+  parameters:
+    model_id: "xgboost_20251110_010814"  # Trained XGBoost model ID
+    model_registry_path: "./models/"
+    use_fitted_pipeline: true  # Use the fitted feature pipeline stored with the model
+    lookback_days: 252  # Lookback period for data preparation
+    risk_free_rate: 0.02  # Risk-free rate
+    min_signal_strength: 0.00001  # Minimum signal strength threshold
+    enable_normalization: true
+    normalization_method: "minmax"
+    enable_short_selling: false
+
+# Data configuration
+data_provider:
+  type: "YFinanceProvider"
+  parameters:
+    max_retries: 3
+    retry_delay: 1.0
+
+# Factor data provider (not needed for ML models)
+# factor_data_provider:
+
+# Universe configuration
+# Use same universe as training for consistency
+universe:
+  source: "csv"
+  csv_path: "./data/universes/complete_stock_data_converted.csv"
+  filters:
+    min_market_cap: 1000  # $1B (same as training)
+    max_stocks: 200  # Same as training for consistency
+    # Keep same box filters to ensure consistent universe
+    include_boxes: ["DM_LG","DM_MG","DM_SG","DM_LV","DM_MV","DM_SV","EM_LG","EM_MG","EM_SG","EM_LV","EM_MV","EM_SV"]
+    per_box_top_n: 15  # Same as training
+    per_box_min_n: 1
+  symbols: []
+
+# Portfolio construction - Quantitative Method
+# Same configuration as quantitative training experiment for consistency
+portfolio_construction:
+  method: "quantitative"  # Use quantitative construction
+
+  # Universe size for quantitative optimization
+  universe_size: 200  # Use all available stocks from universe (same as training)
+  min_history_days: 252  # Minimum history days for covariance estimation
+  
+  # Optimizer configuration - same as training
+  optimizer:
+    method: "mean_variance"  # Mean-variance optimization
+    risk_aversion: 2.0  # Same risk aversion as training
+    max_weight: 0.5  # Same as training constraints
+    min_weight: 0.01  # Same as training constraints
+
+  # Covariance estimation - same as training
+  covariance:
+    lookback_days: 252  # Same as training
+    method: "ledoit_wolf"  # Same as training
+    shrinkage: 0.1  # Default shrinkage parameter
+
+  # Liquidity filtering - adjust for prediction (fewer trading days than calendar days)
+  # Note: Actual data may have fewer trading days than requested calendar days
+  # Use a lower threshold to accommodate real-world data availability
+  min_history_days: 30  # Minimum trading days required (not calendar days)
+
+  # Short selling control - same as training
+  enable_short_selling: false
+
+# Risk constraints (top-level constraints for prediction)
+constraints:
+  max_position_weight: 0.5  # Maximum weight for any single position (same as training)
+  min_position_weight: 0.01  # Minimum weight threshold (same as training)
+  max_leverage: 1.0  # Maximum total portfolio leverage
+  enable_short_selling: false  # No short selling (same as training)
+
+# Output configuration
+output:
+  format: "detailed"  # Options: 'simple', 'detailed', 'comparison'
+  include_risk_analysis: true
+  include_sector_analysis: true
+  include_box_analysis: true  # Useful for tracking diversification
+  save_results: true
+  output_path: "./prediction_results/ml_xgboost_quantitative/"
+

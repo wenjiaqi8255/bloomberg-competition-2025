@@ -1,9 +1,17 @@
 symbol,weight,signal_strength,risk_score,box_classification,box_size,box_style,box_region,box_sector
-1969.HK,0.9999899999999982,0.0958642301523715,0.04793211507618575,small_neutral_emerging,small,neutral,emerging,
-PLTR,1.0000000001744706e-05,0.04850505235324216,0.02425252617662108,mid_growth_developed,mid,growth,developed,
-NVDA,9.151025693777084e-17,0.02241355845852467,0.011206779229262335,large_growth_developed,large,growth,developed,
-3750.HK,2.8660577818371554e-17,0.0,0.0,large_growth_emerging,large,growth,emerging,
-00680K.KS,1.099561578844127e-17,0.01909299031509488,0.00954649515754744,large_growth_developed,large,growth,developed,
-0272.HK,1.0533929727300746e-17,0.0,0.0,small_value_emerging,small,value,emerging,
-3968.HK,1.0192091415098685e-17,0.016280280642525912,0.008140140321262956,mid_neutral_emerging,mid,neutral,emerging,
-BREN.JK,5.246380641356615e-18,0.0,0.0,large_growth_emerging,large,growth,emerging,
+0019.HK,0.13222265784134146,0.020997932080484793,0.010498966040242396,mid_value_developed_Industrials,mid,value,developed,Industrials
+0087.HK,0.10901844621129773,0.02040724872031263,0.010203624360156314,mid_value_developed_Industrials,mid,value,developed,Industrials
+601988.SS,0.08954773999172896,0.014455231463838553,0.007227615731919277,large_value_emerging_Financial Services,large,value,emerging,Financial Services
+3778.T,0.0872499402860172,0.06516954151009893,0.032584770755049466,mid_neutral_developed_Technology,mid,neutral,developed,Technology
+9104.T,0.08517072146682803,0.025567632049693662,0.012783816024846831,mid_value_developed_Industrials,mid,value,developed,Industrials
+601939.SS,0.07403793383831525,0.007023069915982913,0.0035115349579914563,large_value_emerging_Financial Services,large,value,emerging,Financial Services
+600028.SS,0.06937843664313569,0.015589782158438757,0.007794891079219378,mid_value_emerging_Energy,mid,value,emerging,Energy
+JKHY,0.05438987072263516,0.0,0.0,mid_neutral_developed_Technology,mid,neutral,developed,Technology
+DWNI.DE,0.05046349020079359,-0.0,0.0,small_value_developed_Real Estate,small,value,developed,Real Estate
+PLTR,0.047532728357988586,0.02148997525393344,0.01074498762696672,mid_growth_developed_Technology,mid,growth,developed,Technology
+601328.SS,0.041097599976111225,0.012604598723749168,0.006302299361874584,mid_value_emerging_Financial Services,mid,value,emerging,Financial Services
+MCAP.ST,0.04043648475024839,0.027419588644802154,0.013709794322401077,small_neutral_developed_Healthcare,small,neutral,developed,Healthcare
+301236.SZ,0.03620763074963086,0.034730682791575096,0.017365341395787548,mid_neutral_emerging_Technology,mid,neutral,emerging,Technology
+688041.SS,0.0335106605262621,0.030143687269578025,0.015071843634789013,mid_growth_emerging_Technology,mid,growth,emerging,Technology
+601398.SS,0.026654198236242755,0.00556684054187137,0.002783420270935685,large_value_emerging_Financial Services,large,value,emerging,Financial Services
+V,0.023081460201423,0.0,0.0,mid_growth_developed_Financial Services,mid,growth,developed,Financial Services

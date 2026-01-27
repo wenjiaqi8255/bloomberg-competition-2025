@@ -1,0 +1,209 @@
+# ML Strategy Configuration with Quantitative Portfolio Construction
+# =================================================================
+# This configuration demonstrates ML strategy setup with XGBoost model and Quantitative portfolio construction.
+# Configured to match Box-Based experiment settings for controlled variable comparison.
+# Only difference: portfolio_construction method (quantitative vs box_based).
+# Optimized for faster training while maintaining good performance.
+
+# Optional: Use a pre-trained model instead of training a new one
+# If specified, training will be skipped and this model will be used for backtesting
+# Example: pretrained_model_id: "xgboost_20250101_120000"
+pretrained_model_id: "your_xgboost_model_id_here"  # 替换为你的实际模型ID
+
+# Part 1: Data Provider Configuration
+# ---------------------------------
+data_provider:
+  type: "YFinanceProvider"
+  parameters:
+    max_retries: 3
+    retry_delay: 1.0
+
+# Part 2: Training Pipeline Configuration
+# ------------------------------------
+training_setup:
+  model:
+    model_type: "xgboost"  # Use XGBoost model for ML strategy
+    config:
+      # Optimized for faster training while maintaining good performance
+      n_estimators: 100  # Reasonable default for speed/performance balance
+      max_depth: 3  # Moderate depth to avoid overfitting
+      learning_rate: 0.05  # Moderate learning rate
+      subsample: 0.8  # Row sampling for regularization
+      colsample_bytree: 0.8  # Column sampling for regularization
+      early_stopping_rounds: 10
+      random_state: 42
+      
+      # Regularization parameters for better generalization
+      reg_alpha: 0.5  # L1 regularization (alpha)
+      reg_lambda: 1.5  # L2 regularization (lambda)
+
+  feature_engineering:
+    enabled_features: ['momentum', 'volatility', 'technical', 'volume']
+    momentum_periods: [21, 63, 252]
+    volatility_windows: [20, 60]
+    lookback_periods: [20, 60, 252]
+    min_ic_threshold: 0.02
+    min_significance: 0.1
+    feature_lag: 1
+    include_technical: true
+    include_cross_sectional: true
+
+    cross_sectional_features: [
+      'market_cap',
+      'book_to_market', 'size', 'value', 'momentum', 'volatility',
+      'country_risk_premium', 'equity_risk_premium', 'default_spread', 'corporate_tax_rate'
+    ]
+
+    cross_sectional_lookback:
+      momentum: 252
+      volatility: 60
+      ma_long: 200
+      ma_short: 50
+    winsorize_percentile: 0.01
+
+    box_features:
+      enabled: true
+      size_categories: true
+      style_categories: true
+      region_categories: true
+      sector_categories: true
+      encoding_method: "one_hot"
+      handle_unknown: "ignore"
+  # Parameters for the training pipeline execution
+  parameters:
+    # Universe selection - EXACTLY same as Box-Based for controlled comparison
+    # Both methods start from the same universe, only differ in stock selection approach
+    universe:
+      source: "csv"
+      csv_path: "./data/universes/complete_stock_data_converted.csv"
+      filters:
+        min_market_cap: 1000  # $1B (same unit as Box-Based)
+        max_stocks: 200  # Same as Box-Based for controlled comparison
+        # Keep same box filters to ensure both methods start from identical universe
+        # Box-Based uses boxes for selection; Quantitative uses signals from same universe
+        include_boxes: ["DM_LG","DM_MG","DM_SG","DM_LV","DM_MV","DM_SV","EM_LG","EM_MG","EM_SG","EM_LV","EM_MV","EM_SV"]
+        per_box_top_n: 15  # Same as Box-Based
+        per_box_min_n: 1
+
+    # Training period - same as Box-Based for controlled comparison
+    start_date: "2022-01-01"
+    end_date: "2023-12-31"
+    symbols: []
+
+  # Hyperparameter optimization configuration
+  # Disabled for faster training - use default model config for controlled comparison
+  # Can enable later for model-specific optimization
+  hyperparameter_optimization:
+    enabled: false  # Disabled for faster training and controlled comparison
+    optimization_method: "optuna"
+    n_trials: 20  # Reduced for faster training if enabled
+    cv_folds: 3
+    objective: "sharpe_ratio"
+
+    # Search space using XGBoost model defaults
+    search_space_preset: "xgboost_default"
+
+    # Optuna sampler and pruner settings
+    sampler_type: "tpe"
+    pruner_type: "median"
+
+    # Logging
+    log_to_wandb: true
+    log_all_trials: true
+
+# Part 3: Strategy Configuration
+# ------------------------------
+strategy:
+  type: ml
+  name: MLStrategy_Quantitative_v1
+
+  parameters:
+    model_id: "placeholder_model_id"  # Will be overwritten by orchestrator
+    lookback_days: 252
+    risk_free_rate: 0.02
+
+  # Enable Quantitative portfolio construction
+  # Same risk parameters as Box-Based for controlled comparison
+  portfolio_construction:
+    method: "quantitative"
+
+    # Universe size for quantitative optimization
+    # Selected from the same universe as Box-Based (200 stocks)
+    universe_size: 200  # Use all available stocks from universe
+
+    # Optimizer configuration - same risk aversion as Box-Based
+    optimizer:
+      method: "mean_variance"  # Mean-variance optimization (same as Box-Based allocation_method)
+      risk_aversion: 2.0  # Same risk aversion as Box-Based allocation_config
+      max_weight: 0.5  # Same as Box-Based max_position_weight constraint
+      min_weight: 0.01  # Same as Box-Based min_position_weight constraint
+
+    # Covariance estimation - same as Box-Based allocation_config
+    covariance:
+      lookback_days: 252  # Same as Box-Based allocation_config.lookback_days
+      method: "ledoit_wolf"  # Same as Box-Based allocation_config.covariance_method
+      shrinkage: 0.1  # Default shrinkage parameter
+
+    # Short selling control - same as Box-Based
+    enable_short_selling: false
+
+  # Centralized constraints for both methods - same as Box-Based for controlled comparison
+  constraints:
+    max_position_weight: 0.5
+    max_leverage: 1.0
+    min_position_weight: 0.01  # Select stocks by ML signal strength
+
+    # Strategy-level controls - same as Box-Based (no short selling for fair comparison)
+    enable_short_selling: false
+
+# Part 4: Backtesting Configuration
+# --------------------------------
+# Same backtest period and benchmark as Box-Based for controlled comparison
+backtest:
+  name: "ML_Strategy_Quantitative_Backtest"
+  start_date: "2024-07-01"  # Same as Box-Based
+  end_date: "2025-08-15"  # Same as Box-Based
+  initial_capital: 1000000
+  
+  # Benchmark configuration - same as Box-Based (CSV file for WLS index)
+  benchmark:
+    source: "csv"
+    csv_path: "./data/universes/wls_index.csv"
+  
+  commission_rate: 0.001
+  slippage_rate: 0.0005
+  rebalance_frequency: "weekly"
+  position_limit: 0.99  # Same as Box-Based
+  rebalance_threshold: 0.001
+
+# Reporting and Analysis
+# =====================
+# Enhanced reporting for Quantitative analysis
+reporting:
+  generate_report: true
+  output_directory: "./results/ml_strategy_quantitative"
+
+  # Box coverage analysis (still useful for quantitative to track diversification)
+  box_analysis:
+    enabled: true
+    track_box_coverage: true
+    track_box_performance: true
+    generate_box_charts: true
+
+# Experiment Configuration
+# =======================
+experiment:
+  name: "ML_Strategy_Quantitative_Comparison"
+  description: "ML strategy with XGBoost model and Quantitative portfolio construction. Configured for controlled comparison with Box-Based experiment."
+
+  # Experiment tracking
+  log_to_wandb: true
+  wandb_project: "ml_strategy_experiments"
+  tags:
+    - "ml"
+    - "xgboost"
+    - "portfolio_construction"
+    - "quantitative"
+    - "comparison"
+    - "controlled_variables"
+

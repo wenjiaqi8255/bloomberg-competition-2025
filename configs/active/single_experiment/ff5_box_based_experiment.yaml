@@ -3,6 +3,8 @@
 # This configuration combines Fama-French 5-factor model training with Box-First portfolio construction
 # to ensure systematic diversification across investment style boxes.
 
+pretrained_model_id: "ff5_regression_20251107_012512"
+
 # Part 1: FF5 Model Training Pipeline
 # ----------------------------------
 # Training configuration for the Fama-French 5-factor model
@@ -16,6 +18,8 @@ factor_data_provider:
   type: "FF5DataProvider"
   parameters:
     data_frequency: "daily"
+    file_path: "./data/ff5_factors_processed.csv"
+    cache_enabled: true
 
 training_setup:
   model:
@@ -47,13 +51,18 @@ training_setup:
       source: "csv"
       csv_path: "./data/universes/complete_stock_data_converted.csv"
       filters:
-        min_market_cap: 1000000000
-        max_stocks: 500
+        min_market_cap: 1000 # $1B
+        max_stocks: 500 # 800 stocks
         # exclude_sectors: ["Real Estate"]
+        # Ensure hard box coverage at input (uses CSV column `source_sheet`)
+        include_boxes: ["DM_LG","DM_MG","DM_SG","DM_LV","DM_MV","DM_SV","EM_LG","EM_MG","EM_SG","EM_LV","EM_MV","EM_SV"]
+        # include_boxes: ["DM_LG","DM_MG","DM_SG","DM_LV","DM_MV","DM_SV"]
+        per_box_top_n: 30
+        per_box_min_n: 1
 
-    start_date: "2025-01-01"
-    end_date: "2025-09-30"
-    symbols: []
+    start_date: "2022-01-01"
+    end_date: "2023-12-31"
+    # symbols: []
     # symbols:
     #   # Technology (Large Growth)
     #   - AAPL
@@ -129,10 +138,24 @@ training_setup:
 # Uses the trained FF5 model with Box-First portfolio construction
 backtest:
   name: "FF5_BoxBased_Backtest"
-  start_date: "2024-01-01"
-  end_date: "2024-12-31"
+  start_date: "2024-07-01"
+  end_date: "2025-08-15"
   initial_capital: 1000000
-  benchmark_symbol: "SPY"
+  
+  # Benchmark configuration (supports CSV or symbol)
+  # Option 1: Load from CSV file (recommended for custom indices like WLS)
+  benchmark:
+    source: "csv"
+    csv_path: "./data/universes/wls_index.csv"
+  
+  # Option 2: Use symbol from data provider (fallback or alternative)
+  # benchmark:
+  #   source: "symbol"
+  #   symbol: "SPY"
+  
+  # Option 3: Backward compatible - simple string (deprecated, use benchmark config above)
+  # benchmark_symbol: "SPY"
+  
   commission_rate: 0.001
   slippage_rate: 0.0005
   rebalance_frequency: "weekly"
@@ -148,29 +171,55 @@ strategy:
     model_id: "placeholder_model_id"  # Will be overwritten by orchestrator
     lookback_days: 252
     risk_free_rate: 0.02
+    
+    # Alpha significance filtering
+    # Filters out statistically insignificant alphas before portfolio optimization
+    # This helps prevent MVO from over-weighting stocks with noisy alpha estimates
+    alpha_significance:
+      enabled: true
+      rolling_tstats: true  # 启用rolling模式
+      t_threshold: 2  # FIX: 降低阈值从2.0到1.5，保留更多股票 (原来2.0只有3.2%股票显著)
+      method: "hard_threshold"  # Options: "hard_threshold", "linear_shrinkage", "sigmoid_shrinkage"
+      # tstats_path: "./alpha_tstats.csv"  # Path to CSV with columns: symbol, t_alpha, p_value, r_squared
+    
+    # Signal generation method
+    signal_source: 'expected_return'  # ‘expected_return' or 'alpha'
+    # Options: "raw" (直接使用Alpha), "rank" (排名标准化), "zscore" (Z-score标准化)
+    signal_method: "rank"  # 使用rank-based方法，将Alpha转换为0-1的排名信号
 
   # Enable Box-Based portfolio construction
   portfolio_construction:
     method: "box_based"
 
     # Box construction parameters
-    stocks_per_box: 3
-    min_stocks_per_box: 3
-    allocation_method: "signal_proportional"  # Use Fama-MacBeth signals for weight allocation
+    stocks_per_box: 8  # FIX: 从3增加到8，提高分散度，降低集中风险
+    min_stocks_per_box: 2  # FIX: 从3降低到2，允许更灵活的box选择
+    allocation_method: "mean_variance"  # Use mean-variance optimization for weight allocation
+    allocation_scope: "global"  # Use global mean-variance across all selected stocks
+
+    # Allocation configuration for mean-variance optimization
+    allocation_config:
+      risk_aversion: 2.0  # Risk aversion parameter (higher = more risk-averse)
+      lookback_days: 252  # Lookback period for covariance estimation
+      covariance_method: "ledoit_wolf"  # Options: "simple", "ledoit_wolf", or "factor_model"
+      min_regression_obs: 24  # Minimum observations for factor model regression
 
     # Box weight configuration - equal weights for all boxes
     box_weights:
       method: "equal"
       dimensions:
         size: ["large", "mid", "small"]
-        style: ["growth", "value"]
+        style: ["growth", "neutral", "value"]
         region: ["developed","emerging"]  # Focus on US developed markets
+        sector: []
         # sector: [
         #   "Technology", "Financials", "Healthcare",
         #   "Consumer Discretionary", "Consumer Staples",
         #   "Industrials", "Energy", "Communication Services",
         #   "Materials", "Utilities", "Real Estate"
         # ]
+
+    # optimize_rebalance: false
 
     # Stock classifier configuration
     classifier:
@@ -183,160 +232,9 @@ strategy:
 
   # Centralized constraints for both methods
   constraints:
-    max_position_weight: 0.99
+    max_position_weight: 0.10  # FIX: 从0.5降低到0.10，限制单股权重，降低集中风险
     max_leverage: 1.0
-    min_position_weight: 0.02  # Select stocks by FF5 signal strength
+    min_position_weight: 0.01  # Select stocks by FF5 signal strength
 
     # Strategy-level controls
     enable_short_selling: false
-    max_position_weight: 0.99  # Consistent with backtest position limit
-
-
-# Reporting and Analysis
-# =====================
-# Enhanced reporting for Box-Based analysis
-reporting:
-  generate_report: true
-  output_directory: "./results/ff5_box_based"
-
-  # Box coverage analysis
-  box_analysis:
-    enabled: true
-    track_box_coverage: true
-    track_box_performance: true
-    generate_box_charts: true
-
-  # Performance attribution
-  attribution_analysis:
-    enabled: true
-    analyze_box_contributions: true
-    analyze_factor_exposures: true
-
-  # Model analysis
-  model_analysis:
-    track_ff5_coefficients: true
-    analyze_factor_stability: true
-    generate_model_plots: true
-
-# Experiment Configuration
-# =======================
-experiment:
-  name: "FF5_BoxBased_Portfolio_Construction"
-  description: "Fama-French 5-factor model with Box-First portfolio construction for systematic diversification"
-
-  # Experiment tracking
-  log_to_wandb: true
-  wandb_project: "ff5_box_based_experiments"
-  tags:
-    - "ff5"
-    - "box_based"
-    - "portfolio_construction"
-    - "factor_model"
-    - "systematic_diversification"
-
-  # Comparison with baseline
-  comparison:
-    enabled: true
-    baseline_method: "quantitative"  # Compare with traditional optimization
-    compare_metrics:
-      - "sharpe_ratio"
-      - "max_drawdown"
-      - "information_ratio"
-      - "box_coverage"
-      - "concentration_risk"
-
-# FF5 Model Hyperparameter Optimization Settings
-# ===========================================
-ff5_hyperparameter_optimization:
-  enabled: true
-  optimization_method: "optuna"
-  n_trials: 30
-  cv_folds: 3
-  objective: "r2"
-  direction: "maximize"
-
-  sampler:
-    type: "tpe"
-    seed: 42
-
-  pruner:
-    type: "median"
-    n_startup_trials: 5
-    n_warmup_steps: 3
-    interval_steps: 1
-
-  search_space:
-    preset: "ff5_default"
-
-    custom_space:
-      regularization:
-        type: "categorical"
-        choices: ["none", "ridge", "lasso"]
-      alpha:
-        type: "float"
-        low: 0.01
-        high: 10.0
-        log_scale: true
-      standardize:
-        type: "categorical"
-        choices: [true, false]
-
-  # Feature analysis
-  feature_analysis:
-    enabled: true
-    analyze_factor_importance: true
-    calculate_factor_correlations: true
-    beta_stability_analysis: true
-
-  # Logging
-  logging:
-    log_optimization: true
-    log_all_trials: true
-    create_optimization_plot: true
-    log_beta_coefficients: true
-    log_factor_analysis: true
-
-  # Validation
-  validation:
-    out_of_sample_test: true
-    time_series_split: true
-    stability_check: true
-    statistical_significance: true
-
-# Risk Management
-# ==============
-risk_management:
-  # Box-level risk controls
-  box_risk_limits:
-    max_box_weight: 0.15  # Maximum 15% in any single box
-    min_box_coverage: 0.6  # Minimum 60% of target boxes covered
-    max_sector_concentration: 0.25  # Maximum 25% in any sector
-
-  # Position-level controls
-  position_limits:
-    max_single_position: 0.08  # Maximum 8% in single stock
-    min_position: 0.01  # Minimum 1% position size
-    max_turnover: 0.5  # Maximum 50% annual turnover
-
-  # Drawdown controls
-  drawdown_control:
-    max_portfolio_drawdown: 0.15  # Stop trading at 15% drawdown
-    volatility_target: 0.12  # Target 12% annual volatility
-    rebalance_on_volatility: true
-
-# Performance Benchmarks
-# ====================
-benchmarks:
-  primary: "SPY"
-  secondary:
-    - "QQQ"  # Nasdaq 100 (Growth bias)
-    - "IWM"  # Russell 2000 (Small cap bias)
-    - "AGG"  # Bonds (Risk-free proxy)
-
-  # Factor model benchmarks
-  factor_benchmarks:
-    - "MTUM"  # Momentum
-    - "QUAL"  # Quality
-    - "VLUE"  # Value
-    - "SIZE"  # Size
-    - "USMV"  # Minimum volatility

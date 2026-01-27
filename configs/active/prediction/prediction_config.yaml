@@ -14,14 +14,22 @@ strategy:
 
   # For single model strategies (ff5, ml)
   parameters:
-    model_id: "ff5_regression_20251103_161033"  # Trained model ID 20251027_011643
+    model_id: "ff5_regression_20251104_202303"  # ✅ 更新为实验使用的模型ID
     model_registry_path: "./models/"
     use_fitted_pipeline: true  # Use the fitted feature pipeline stored with the model
     lookback_days: 252
+    risk_free_rate: 0.02  # ✅ 添加：无风险利率
     min_signal_strength: 0.0000000001
     enable_normalization: true
     normalization_method: "minmax"
     enable_short_selling: false
+    
+    # ✅ 添加：Alpha显著性过滤配置（与实验配置一致）
+    alpha_significance:
+      enabled: true
+      t_threshold: 2.0  # t-statistic threshold (|t| >= 2.0 for significance)
+      method: "hard_threshold"  # Options: "hard_threshold", "linear_shrinkage", "sigmoid_shrinkage"
+      tstats_path: "./alpha_tstats.csv"  # Path to CSV with columns: symbol, t_alpha, p_value, r_squared
 
 # Data configuration - reuse from MultiModelOrchestrator pattern
 data_provider:
@@ -38,106 +46,53 @@ factor_data_provider:
 
 # Universe configuration
 universe:
-  # Uncomment to load symbols from CSV instead of inline list
   source: "csv"
   csv_path: "./data/universes/complete_stock_data_converted.csv"
   filters:
-    min_market_cap: 100
+    min_market_cap: 100  # 实验用1000，但预测可以保持100
     max_stocks: 500
-    # exclude_sectors: ["Real Estate"]
-    # Ensure hard box coverage at input (uses CSV column `source_sheet`)
     include_boxes: ["DM_LG","DM_MG","DM_SG","DM_LV","DM_MV","DM_SV","EM_LG","EM_MG","EM_SG","EM_LV","EM_MV","EM_SV"]
     per_box_top_n: 20
     per_box_min_n: 1
-    # fail_fast omitted → defaults to true in code
   symbols: []
-  
-  # symbols:
-  # # Technology (Large Growth)
-  #   - AAPL
-  #   - MSFT
-  #   - GOOGL
-  #   - META
-  #   - NVDA
-  #   # Technology (Mid/Large Value)
-  #   - CSCO
-  #   - IBM
-  #   - INTC
-
-  #   # Healthcare (Large Growth)
-  #   - JNJ
-  #   - UNH
-  #   - PFE
-  #   # Healthcare (Mid/Large Value)
-  #   - ABT
-  #   - TMO
-  #   - DHR
 
 # Portfolio construction - USE FACTORY PATTERN
 portfolio_construction:
-  method: "box_based"  # Factory determines which builder: 'box_based' or 'quantitative'
+  method: "box_based"
   
   # Box-based configuration (if method: box_based)
   stocks_per_box: 3
   min_stocks_per_box: 3
-  # allocation_method: "equal"
-  # allocation_config: {}
   allocation_method: "mean_variance"  # Use mean-variance optimization
-  allocation_scope: "global"  # Use global mean-variance across all selected stocks
+  allocation_scope: "global"  # ✅ 与实验配置一致：使用全局均值方差优化
+  
+  # Allocation configuration for mean-variance optimization
   allocation_config:
     risk_aversion: 2.0  # Risk aversion parameter (higher = more risk-averse)
     lookback_days: 252  # Lookback period for covariance estimation
-    covariance_method: "ledoit_wolf"  # Use factor model covariance
+    covariance_method: "ledoit_wolf"  # ✅ 与实验配置一致：使用Ledoit-Wolf方法
     min_regression_obs: 24  # Minimum observations for factor model regression
 
   # Box weight configuration
   box_weights:
     method: "equal"
-    # Generate 18 boxes: 3x3x2 = size x style x region
     dimensions:
-      size: ["large", "mid", "small"]       # 3 categories
-      style: ["growth", "neutral", "value"] # 3 categories (add neutral)
-      region: ["developed", "emerging"]     # 2 categories
-      # sector: ["Technology", "Financial Services", "Healthcare", "Consumer Discretionary", "Consumer Staples", "Communication Services"]  # Match classifier output
-      sector: []                            # Empty = 3D boxes
+      size: ["large", "mid", "small"]
+      style: ["growth", "neutral", "value"]  
+      region: ["developed", "emerging"]
+      sector: []  # Empty = 3D boxes (size x style x region)
 
-  # Stock classifier configuration - use technical indicators for classification
+  # Stock classifier configuration
   classifier:
-    # method: "technical"  # Use technical indicators that are already computed
     method: "four_factor"
     cache_enabled: true
-    # size_config:
-    #   thresholds:
-    #     large: 500.0  # $500B - only mega caps
-    #     mid: 50.0     # $50B - mid caps
-        # small: 0.0  # Everything below $50B is small
 
   # Box selector configuration
   box_selector:
-    type: "top_signals"
+    type: "signal_based"  # ✅ 修改：改为与实验配置一致的 "signal_based"
 
-  # Centralized constraints for both methods
-  constraints:
-    max_position_weight: 0.99999
-    max_leverage: 1.0
-    min_position_weight: 0.0
-  
-  # Alternative: Quantitative configuration (if method: quantitative)
-  # optimizer:
-  #   method: "mean_variance"
-  #   risk_aversion: 1.0
-  #   max_weight: 0.15
-  #   min_weight: 0.02
-  # 
-  # covariance:
-  #   lookback_days: 252
-  #   method: "ledoit_wolf"
-  #   shrinkage: 0.1
-  # 
-  # universe_size: 20
-  # enable_short_selling: false
-
-# Risk constraints
+# Risk constraints (top-level constraints for prediction)
+# ✅ 修复：统一使用顶层constraints，删除portfolio_construction.constraints避免冲突
 constraints:
   max_position_weight: 0.15  # Maximum weight for any single position
   min_position_weight: 0.02  # Minimum weight threshold

@@ -1,0 +1,111 @@
+experiment:
+  name: "e2e_ff3_experiment"
+  description: "End-to-end FF3 pipeline using FF5DataProvider subset"
+  tags: ["ff3", "factor_model"]
+
+training_setup:
+  model:
+    model_type: "ff3_regression"
+    config:
+      regularization: 'ridge'
+      alpha: 1.0
+      standardize: true
+
+  feature_engineering:
+    # FF3 regression needs FF3 factors, not cross-sectional features
+    include_technical: false
+    include_cross_sectional: false
+    include_theoretical: false
+
+    # FF5 factors will be provided by FF5DataProvider
+    # No additional features needed for pure FF5 regression
+    enabled_features: []
+
+    # Feature preprocessing
+    normalize_features: true
+    handle_missing: "forward_fill"
+
+  # Expanded symbol universe for better box coverage
+  parameters:
+    # Universe selection (Option A - minimally intrusive)
+    # Uncomment to load symbols from CSV instead of inline list
+    universe:
+      source: "tickers"
+      # csv_path: "./data/universes/complete_stock_data_converted.csv"
+      # filters:
+      #   min_market_cap: 1000 # $1B
+      #   max_stocks: 500 # 800 stocks
+      #   # exclude_sectors: ["Real Estate"]
+      #   # Ensure hard box coverage at input (uses CSV column `source_sheet`)
+      #   include_boxes: ["DM_LG","DM_MG","DM_SG","DM_LV","DM_MV","DM_SV","EM_LG","EM_MG","EM_SG","EM_LV","EM_MV","EM_SV"]
+      #   per_box_top_n: 20
+      #   per_box_min_n: 1
+      #   # fail_fast omitted → defaults to true in code
+
+    start_date: "2024-01-01"
+    end_date: "2025-06-30"
+    # symbols: []
+    symbols:
+      # Technology (Large Growth)
+      - AAPL
+      - MSFT
+      - GOOGL
+      - AMZN
+      - META
+      - NVDA
+      - CSCO
+      - IBM
+
+data_provider:
+  type: "YFinanceProvider"
+  parameters:
+    cache_enabled: true
+
+factor_data_provider:
+  type: "FF5DataProvider"
+  parameters:
+    data_frequency: "monthly"
+    cache_enabled: true
+
+strategy:
+  name: "FF3"
+  type: "fama_french_3"
+  model_id: "ff3_regression_v1"
+  lookback_days: 252
+  risk_free_rate: 0.02
+
+parameters:
+  model_config:
+    regularization: "ridge"
+    alpha: 1.0
+    standardize: false
+
+backtest:
+  name: "FF3_BoxBased_Backtest"
+  start_date: "2025-07-01"
+  end_date: "2025-08-15"
+  initial_capital: 1000000
+  
+  # Benchmark configuration (supports CSV or symbol)
+  # Option 1: Load from CSV file (recommended for custom indices like WLS)
+  benchmark:
+    source: "csv"
+    csv_path: "./data/universes/wls_index.csv"
+  
+  # Option 2: Use symbol from data provider (fallback or alternative)
+  # benchmark:
+  #   source: "symbol"
+  #   symbol: "SPY"
+  
+  # Option 3: Backward compatible - simple string (deprecated, use benchmark config above)
+  # benchmark_symbol: "SPY"
+  
+  commission_rate: 0.001
+  slippage_rate: 0.0005
+  rebalance_frequency: "weekly"
+  position_limit: 0.99  # Reduced to 8% for better diversification
+  rebalance_threshold: 0.001
+
+
+
+

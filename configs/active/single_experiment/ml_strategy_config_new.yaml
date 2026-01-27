@@ -1,6 +1,8 @@
-# ML Strategy Configuration
-# =========================
-# This configuration demonstrates ML strategy setup with feature engineering.
+# ML Strategy Configuration with Box-Based Portfolio Construction
+# ===============================================================
+# This configuration demonstrates ML strategy setup with XGBoost model and Box-Based portfolio construction.
+# Configured to match FF5 experiment settings for controlled variable comparison.
+# Optimized for faster training while maintaining good performance.
 
 # Part 1: Data Provider Configuration
 # ---------------------------------
@@ -16,15 +18,21 @@ training_setup:
   model:
     model_type: "xgboost"  # Use XGBoost model for ML strategy
     config:
-      n_estimators: 100
-      max_depth: 6
-      learning_rate: 0.1
+      # Optimized for faster training while maintaining good performance
+      n_estimators: 100  # Reasonable default for speed/performance balance
+      max_depth: 3  # Moderate depth to avoid overfitting
+      learning_rate: 0.05  # Moderate learning rate
+      subsample: 0.8  # Row sampling for regularization
+      colsample_bytree: 0.8  # Column sampling for regularization
+      early_stopping_rounds: 10
       random_state: 42
+      
+      # Regularization parameters for better generalization
+      reg_alpha: 0.5  # L1 regularization (alpha)
+      reg_lambda: 1.5  # L2 regularization (lambda)
 
   feature_engineering:
-    enabled_features: ['momentum'
-    # , 'volatility', 'technical', 'volume'
-    ]
+    enabled_features: ['momentum', 'volatility', 'technical', 'volume']
     momentum_periods: [21, 63, 252]
     volatility_windows: [20, 60]
     lookback_periods: [20, 60, 252]
@@ -35,9 +43,9 @@ training_setup:
     include_cross_sectional: true
 
     cross_sectional_features: [
-      'market_cap'
-      # 'book_to_market', 'size', 'value', 'momentum', 'volatility',
-      # 'country_risk_premium', 'equity_risk_premium', 'default_spread', 'corporate_tax_rate'
+      'market_cap',
+      'book_to_market', 'size', 'value', 'momentum', 'volatility',
+      'country_risk_premium', 'equity_risk_premium', 'default_spread', 'corporate_tax_rate'
     ]
 
     cross_sectional_lookback:
@@ -57,26 +65,31 @@ training_setup:
       handle_unknown: "ignore"
   # Parameters for the training pipeline execution
   parameters:
-    start_date: "2018-01-01"
-    end_date: "2019-12-31"
-    symbols:
-      - AAPL
-      - MSFT
-      - GOOGL
-      - AMZN
-      - META
-      # - TSLA
-      # - NVDA
-      # - JPM
-      # - V
-      # - WMT
+    # Universe selection - same as FF5 for controlled comparison
+    universe:
+      source: "csv"
+      csv_path: "./data/universes/complete_stock_data_converted.csv"
+      filters:
+        min_market_cap: 1000  # $1B (same unit as FF5)
+        max_stocks: 200  # Reduced from 500 for faster training, but enough for box coverage
+        # Ensure hard box coverage at input (uses CSV column `source_sheet`)
+        include_boxes: ["DM_LG","DM_MG","DM_SG","DM_LV","DM_MV","DM_SV","EM_LG","EM_MG","EM_SG","EM_LV","EM_MV","EM_SV"]
+        per_box_top_n: 15  # Reduced from 30 for faster training
+        per_box_min_n: 1
+
+    # Training period - same as FF5 for controlled comparison
+    start_date: "2022-01-01"
+    end_date: "2023-12-31"
+    symbols: []
 
   # Hyperparameter optimization configuration
+  # Disabled for faster training - use default model config for controlled comparison
+  # Can enable later for model-specific optimization
   hyperparameter_optimization:
-    enabled: true
+    enabled: false  # Disabled for faster training and controlled comparison with FF5
     optimization_method: "optuna"
-    n_trials: 100  # More trials for XGBoost due to faster training
-    cv_folds: 5
+    n_trials: 20  # Reduced for faster training if enabled
+    cv_folds: 3
     objective: "sharpe_ratio"
 
     # Search space using XGBoost model defaults
@@ -85,10 +98,6 @@ training_setup:
     # Optuna sampler and pruner settings
     sampler_type: "tpe"
     pruner_type: "median"
-
-    # Training optimization
-    enable_early_stopping: true
-    early_stopping_rounds: 50
 
     # Logging
     log_to_wandb: true
@@ -100,235 +109,103 @@ strategy:
   type: ml
   name: MLStrategy_v1
 
-  # # Model configuration
-  # model_id: placeholder_model_id  # Will be overwritten by orchestrator
-  # min_signal_strength: 0.00001       # Minimum signal strength threshold
-
   parameters:
     model_id: "placeholder_model_id"  # Will be overwritten by orchestrator
     lookback_days: 252
     risk_free_rate: 0.02
 
-    # Enable Box-Based portfolio construction
-    portfolio_construction:
-      method: "box_based"
+  # Enable Box-Based portfolio construction
+  # Same configuration as FF5 for controlled comparison
+  portfolio_construction:
+    method: "box_based"
 
-      # Box construction parameters
-      stocks_per_box: 3
-      min_stocks_per_box: 3
-      allocation_method: "signal_proportional"  # Use Fama-MacBeth signals for weight allocation
+    # Box construction parameters - same as FF5
+    stocks_per_box: 3
+    min_stocks_per_box: 3
+    allocation_method: "mean_variance"  # Use mean-variance optimization for weight allocation (same as FF5)
+    allocation_scope: "global"  # Use global mean-variance across all selected stocks (same as FF5)
 
-      # Box weight configuration - equal weights for all boxes
-      box_weights:
-        method: "equal"
-        dimensions:
-          size: ["large", "mid", "small"]
-          style: ["growth", "value"]
-          region: ["developed"]  # Focus on US developed markets
-          sector: [
-            "Technology", "Financials", "Healthcare",
-            "Consumer Discretionary", "Consumer Staples",
-            "Industrials", "Energy", "Communication Services",
-            "Materials", "Utilities", "Real Estate"
-          ]
+    # Allocation configuration for mean-variance optimization - same as FF5
+    allocation_config:
+      risk_aversion: 2.0  # Risk aversion parameter (higher = more risk-averse)
+      lookback_days: 252  # Lookback period for covariance estimation
+      covariance_method: "ledoit_wolf"  # Options: "simple", "ledoit_wolf", or "factor_model"
+      min_regression_obs: 24  # Minimum observations for factor model regression
 
-      # Stock classifier configuration
-      classifier:
-        method: "four_factor"
-        cache_enabled: true
+    # Box weight configuration - equal weights for all boxes (same as FF5)
+    box_weights:
+      method: "equal"
+      dimensions:
+        size: ["large", "mid", "small"]
+        style: ["growth", "neutral", "value"]  # Same as FF5 - includes neutral
+        region: ["developed", "emerging"]
+        sector: []
 
-      # Box selector configuration
-      box_selector:
-        type: "signal_based"  # Select stocks by Fama-MacBeth signal strength
+    # Stock classifier configuration - same as FF5
+    classifier:
+      method: "four_factor"
+      cache_enabled: true
 
-    # Strategy-level controls
+    # Box selector configuration - same as FF5
+    box_selector:
+      type: "signal_based"
+
+  # Centralized constraints for both methods - same as FF5 for controlled comparison
+  constraints:
+    max_position_weight: 0.5
+    max_leverage: 1.0
+    min_position_weight: 0.01  # Select stocks by ML signal strength
+
+    # Strategy-level controls - same as FF5 (no short selling for fair comparison)
     enable_short_selling: false
-    max_position_weight: 0.999  # Consistent with backtest position limit
-
-  # # Normalization settings
-  # enable_normalization: true
-  # normalization_method: minmax  # Ensure [0,1] range for TradingSignal compatibility
-
-  # # Short selling control
-  # enable_short_selling: false  # Enable short selling for long-short strategy
-
-# XGBoost Hyperparameter Optimization Settings
-xgboost_hyperparameter_optimization:
-  # Enable/disable hyperparameter optimization
-  enabled: false
-
-  # Optimization method (optuna, grid_search, random_search)
-  optimization_method: "optuna"
-
-  # Number of optimization trials
-  n_trials: 100
-
-  # Optimization timeout (in seconds) - alternative to n_trials
-  timeout: null  # e.g., 7200 for 2 hours
-
-  # Cross-validation settings
-  cv_folds: 3
-  purge_days: 10  # Days to purge after train period
-  embargo_days: 5  # Days to embargo before test period
-
-  # Optimization objective (sharpe_ratio, sortino_ratio, max_drawdown, total_return, r2, mse)
-  objective: "sharpe_ratio"
-  direction: "maximize"  # maximize or minimize
-
-  # Sampler settings (optuna specific)
-  sampler:
-    type: "tpe"  # tpe, random, cmaes, grid
-    seed: 42
-
-  # Pruner settings (for early stopping of bad trials)
-  pruner:
-    type: "median"  # median, hyperband, successional_halving
-    n_startup_trials: 10  # Number of trials before pruning starts
-    n_warmup_steps: 5  # Number of steps before pruning starts
-    interval_steps: 1  # Interval between pruning checks
-
-  # Search space configuration (uses model defaults if not specified)
-  search_space:
-    # Use preset search space from SearchSpaceBuilder
-    preset: "xgboost_default"  # xgboost_default, xgboost_fast, xgboost_accurate, or custom
-
-    # Custom search space (if preset is "custom")
-    custom_space:
-      n_estimators:
-        type: "int"
-        low: 50
-        high: 500
-        step: 10
-      max_depth:
-        type: "int"
-        low: 3
-        high: 12
-        step: 1
-      learning_rate:
-        type: "float"
-        low: 0.01
-        high: 0.3
-        step: 0.01
-        log_scale: true
-      subsample:
-        type: "float"
-        low: 0.6
-        high: 1.0
-        step: 0.05
-      colsample_bytree:
-        type: "float"
-        low: 0.6
-        high: 1.0
-        step: 0.05
-      min_child_weight:
-        type: "int"
-        low: 1
-        high: 10
-        step: 1
-      gamma:
-        type: "float"
-        low: 0.0
-        high: 1.0
-        step: 0.05
-      reg_alpha:
-        type: "float"
-        low: 0.0
-        high: 1.0
-        step: 0.05
-      reg_lambda:
-        type: "float"
-        low: 0.5
-        high: 2.0
-        step: 0.1
-
-  # Early stopping settings
-  early_stopping:
-    enabled: true
-    early_stopping_rounds: 20  # Number of rounds without improvement
-    eval_metric: "rmse"  # Evaluation metric for early stopping
-
-  # Trial logging and visualization
-  logging:
-    log_optimization: true  # Log optimization progress to wandb
-    log_all_trials: true  # Log all trials (not just best)
-    create_optimization_plot: true  # Create optimization history plots
-    log_feature_importance: true  # Log feature importance from best model
-    log_tree_visualization: true  # Log tree structure for best model
-
-  # Performance optimization
-  performance:
-    n_jobs: -1  # Use all available CPU cores
-    tree_method: "auto"  # auto, exact, approx, hist
-    gpu_id: -1  # GPU device ID (-1 for no GPU)
-
-  # Feature selection during optimization
-  feature_selection:
-    enabled: true
-    method: "importance"  # importance, correlation, mutual_info
-    n_features_to_select: null  # null for automatic selection
-    importance_threshold: 0.01  # Minimum importance threshold
-
-# =============================================================================
-# PORTFOLIO OPTIMIZATION CONFIGURATION
-# =============================================================================
-# portfolio_optimization:
-#   # Optimization method selection
-#   # Options: 'mean_variance', 'equal_weight', 'top_n'
-#   method: "mean_variance"  # Simple 1/N equal weighting (robust, KISS principle)
-
-#   # Mean-variance specific parameters (used when method='mean_variance')
-#   risk_aversion: 2.0      # Higher = more risk-averse (typical range: 1-5)
-
-#   # Top-N specific parameters (used when method='top_n')
-#   top_n: 10               # Number of top assets to select
-
-#   # Short selling control
-#   enable_short_selling: false  # Disable short selling (long-only strategy)
-
-#   # Box constraints (applied to all methods)
-#   box_limits:
-#     sector:
-#       Technology: 0.30    # Max 30% in tech sector
-#       Finance: 0.25       # Max 25% in financials
-#       Consumer: 0.20      # Max 20% in consumer stocks
-#     size:
-#       Large: 0.50         # Max 50% in large-cap
-#       Mid: 0.30           # Max 30% in mid-cap
-#       Small: 0.20         # Max 20% in small-cap
-
 
 # Part 4: Backtesting Configuration
 # --------------------------------
+# Same backtest period and benchmark as FF5 for controlled comparison
 backtest:
   name: "ML_Strategy_Backtest"
-  start_date: "2023-01-01"
-  end_date: "2023-12-31"
+  start_date: "2024-07-01"  # Same as FF5
+  end_date: "2025-08-15"  # Same as FF5
   initial_capital: 1000000
-  benchmark_symbol: "SPY"
+  
+  # Benchmark configuration - same as FF5 (CSV file for WLS index)
+  benchmark:
+    source: "csv"
+    csv_path: "./data/universes/wls_index.csv"
+  
   commission_rate: 0.001
   slippage_rate: 0.0005
   rebalance_frequency: "weekly"
-  position_limit: 0.10
-  rebalance_threshold: 0.001  # Allow small trades
-  enable_short_selling: false  # Disable short selling for long-only strategy
+  position_limit: 0.99  # Same as FF5
+  rebalance_threshold: 0.001
 
-# Universe configuration
-universe:
-  - AAPL
-  - MSFT
-  - GOOGL
-  - AMZN
-  - META
-  - TSLA
-  - NVDA
-  - JPM
-  - V
-  - WMT
+# Reporting and Analysis
+# =====================
+# Enhanced reporting for Box-Based analysis
+reporting:
+  generate_report: true
+  output_directory: "./results/ml_strategy"
 
-# Model training (if needed)
-model_training:
-  train_start: "2022-01-01"
-  train_end: "2022-12-31"
-  validation_split: 0.2
-  test_size: 0.1
+  # Box coverage analysis
+  box_analysis:
+    enabled: true
+    track_box_coverage: true
+    track_box_performance: true
+    generate_box_charts: true
 
+# Experiment Configuration
+# =======================
+experiment:
+  name: "ML_Strategy_BoxBased_Comparison"
+  description: "ML strategy with XGBoost model and Box-Based portfolio construction. Configured for controlled comparison with FF5 experiment."
+
+  # Experiment tracking
+  log_to_wandb: true
+  wandb_project: "ml_strategy_experiments"
+  tags:
+    - "ml"
+    - "xgboost"
+    - "portfolio_construction"
+    - "box_based"
+    - "comparison"
+    - "controlled_variables"

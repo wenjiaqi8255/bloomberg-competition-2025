@@ -66,6 +66,25 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "include_boxes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "per_box_top_n": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "per_box_min_n": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "fail_fast": {
+                      "type": "boolean",
+                      "default": true
                     }
                   }
                 }

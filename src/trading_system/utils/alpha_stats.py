@@ -196,3 +196,5 @@ def compute_alpha_tstat(returns: pd.Series, factors: pd.DataFrame, required_fact
             'n_obs': len(common_index)
         }
 
+
+

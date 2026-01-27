@@ -1,0 +1,235 @@
+# FF5 + Box-Based Portfolio Construction Experiment
+# =================================================
+# This configuration combines Fama-French 5-factor model training with Box-First portfolio construction
+# to ensure systematic diversification across investment style boxes.
+
+# Optional: Use a pre-trained model instead of training a new one
+# If specified, training will be skipped and this model will be used for backtesting
+# Example: pretrained_model_id: "ff3_regression_20251105_202033"
+pretrained_model_id: "ff3_regression_20251106_000146"
+
+# Part 1: FF5 Model Training Pipeline
+# ----------------------------------
+# Training configuration for the Fama-French 5-factor model
+data_provider:
+  type: "YFinanceProvider"
+  parameters:
+    max_retries: 3
+    retry_delay: 1.0
+
+factor_data_provider:
+  type: "FF5DataProvider"
+  parameters:
+    data_frequency: "daily"
+    file_path: "./data/ff5_factors_processed.csv"
+    cache_enabled: true
+
+training_setup:
+  model:
+    model_type: "ff3_regression"
+    config:
+      regularization: 'ridge'
+      alpha: 1.0
+      standardize: true
+
+  feature_engineering:
+    # FF5 regression needs FF5 factors, not cross-sectional features
+    include_technical: false
+    include_cross_sectional: false
+    include_theoretical: false
+
+    # FF5 factors will be provided by FF5DataProvider
+    # No additional features needed for pure FF5 regression
+    enabled_features: []
+
+    # Feature preprocessing
+    normalize_features: true
+    handle_missing: "forward_fill"
+
+  # Expanded symbol universe for better box coverage
+  parameters:
+    # Universe selection (Option A - minimally intrusive)
+    # Uncomment to load symbols from CSV instead of inline list
+    universe:
+      source: "csv"
+      csv_path: "./data/universes/complete_stock_data_converted.csv"
+      filters:
+        min_market_cap: 1000 # $1B
+        max_stocks: 500 # 800 stocks
+        # exclude_sectors: ["Real Estate"]
+        # Ensure hard box coverage at input (uses CSV column `source_sheet`)
+        include_boxes: ["DM_LG","DM_MG","DM_SG","DM_LV","DM_MV","DM_SV","EM_LG","EM_MG","EM_SG","EM_LV","EM_MV","EM_SV"]
+        # include_boxes: ["DM_LG","DM_MG","DM_SG","DM_LV","DM_MV","DM_SV"]
+        per_box_top_n: 30
+        per_box_min_n: 1
+
+    start_date: "2022-01-01"
+    end_date: "2023-12-31"
+    # symbols: []
+    # symbols:
+    #   # Technology (Large Growth)
+    #   - AAPL
+    #   - MSFT
+    #   - GOOGL
+    #   - META
+    #   - NVDA
+    #   # Technology (Mid/Large Value)
+    #   - CSCO
+    #   - IBM
+    #   - INTC
+
+    #   # Healthcare (Large Growth)
+    #   - JNJ
+    #   - UNH
+    #   - PFE
+    #   # Healthcare (Mid/Large Value)
+    #   - ABT
+    #   - TMO
+    #   - DHR
+
+    #   # Financials (Large Growth)
+    #   - JPM
+    #   - BAC
+    #   - GS
+    #   # Financials (Mid/Large Value)
+    #   - WFC
+    #   - MS
+    #   - AXP
+
+    #   # Consumer (Growth)
+    #   - AMZN
+    #   - TSLA
+    #   - HD
+    #   - MCD
+    #   # Consumer (Value)
+    #   - WMT
+    #   - PG
+    #   - KO
+    #   - COST
+
+    #   # Industrial
+    #   - CAT
+    #   - GE
+    #   - HON
+    #   - UPS
+
+    #   # Energy
+    #   - XOM
+    #   - CVX
+    #   - COP
+
+    #   # Communication
+    #   - VZ
+    #   - DIS
+    #   - NFLX
+
+  # Hyperparameter optimization for FF5 model
+  hyperparameter_optimization:
+    enabled: false
+    optimization_method: "optuna"
+    n_trials: 20  # Reduced for faster demo
+    cv_folds: 3
+    objective: "r2"
+    search_space_preset: "ff5_default"
+    sampler_type: "tpe"
+    pruner_type: "median"
+    log_to_wandb: true
+    log_all_trials: true
+
+# Part 2: Box-Based Portfolio Construction Backtest
+# -----------------------------------------------
+# Uses the trained FF3 model with Box-First portfolio construction
+backtest:
+  name: "FF3_BoxBased_Backtest"
+  start_date: "2024-07-01"
+  end_date: "2025-08-15"
+  initial_capital: 1000000
+  
+  # Benchmark configuration (supports CSV or symbol)
+  # Option 1: Load from CSV file (recommended for custom indices like WLS)
+  benchmark:
+    source: "csv"
+    csv_path: "./data/universes/wls_index.csv"
+  
+  # Option 2: Use symbol from data provider (fallback or alternative)
+  # benchmark:
+  #   source: "symbol"
+  #   symbol: "SPY"
+  
+  # Option 3: Backward compatible - simple string (deprecated, use benchmark config above)
+  # benchmark_symbol: "SPY"
+  
+  commission_rate: 0.001
+  slippage_rate: 0.0005
+  rebalance_frequency: "weekly"
+  position_limit: 0.5  # Reduced to 8% for better diversification
+  rebalance_threshold: 0.001
+
+# FF3 Strategy Configuration
+strategy:
+  name: "FF3_BoxBased_Strategy"
+  type: "fama_french_3"
+
+  parameters:
+    model_id: "placeholder_model_id"  # Will be overwritten by orchestrator
+    lookback_days: 252
+    risk_free_rate: 0.02
+
+    # Alpha significance filtering
+    # Filters out statistically insignificant alphas before portfolio optimization
+    # This helps prevent MVO from over-weighting stocks with noisy alpha estimates
+    alpha_significance:
+      enabled: true
+      t_threshold: 2.0  # t-statistic threshold (|t| >= 2.0 for significance)
+      method: "hard_threshold"  # Options: "hard_threshold", "linear_shrinkage", "sigmoid_shrinkage"
+      tstats_path: "./alpha_tstats_ff3.csv"  # Path to CSV with columns: symbol, t_alpha, p_value, r_squared
+
+  # Enable Box-Based portfolio construction
+  portfolio_construction:
+    method: "box_based"
+
+    # Box construction parameters
+    stocks_per_box: 3
+    min_stocks_per_box: 3
+    allocation_method: "mean_variance"  # Use mean-variance optimization for weight allocation
+    allocation_scope: "global"  # Use global mean-variance across all selected stocks
+
+    # Allocation configuration for mean-variance optimization
+    allocation_config:
+      risk_aversion: 2.0  # Risk aversion parameter (higher = more risk-averse)
+      lookback_days: 252  # Lookback period for covariance estimation
+      covariance_method: "ledoit_wolf"  # Options: "simple", "ledoit_wolf", or "factor_model"
+      min_regression_obs: 24  # Minimum observations for factor model regression
+
+    # Box weight configuration - equal weights for all boxes
+    box_weights:
+      method: "equal"
+      dimensions:
+        size: ["large", "mid", "small"]
+        style: ["growth", "neutral", "value"]
+        region: ["developed","emerging"]  # Focus on US developed markets
+        sector: []
+        # sector: [
+        #   "Technology", "Financials", "Healthcare",
+        #   "Consumer Discretionary", "Consumer Staples",
+        #   "Industrials", "Energy", "Communication Services",
+        #   "Materials", "Utilities", "Real Estate"
+        # ]
+
+    # Stock classifier configuration
+    classifier:
+      method: "four_factor"
+      cache_enabled: true
+
+    # Box selector configuration
+    box_selector:
+      type: "signal_based"
+
+  # Centralized constraints for both methods
+  constraints:
+    max_position_weight: 0.5
+    max_leverage: 1.0
+    min_position_weight: 0.01  # Select stocks by FF3 signal strength
+
+    # Strategy-level controls
+    enable_short_selling: false

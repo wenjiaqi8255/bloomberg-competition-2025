@@ -1,47 +1,49 @@
 INVESTMENT PREDICTION SUMMARY REPORT
 ==================================================
 
-Generated: 2025-11-03 19:10:12
+Generated: 2025-11-10 18:42:00
 Strategy: fama_french_5
-Model ID: ff5_regression_20251103_161033
+Model ID: ff5_regression_20251104_202303
 Prediction Date: 2025-08-28
 Portfolio Method: box_based
 
 TOP 10 RECOMMENDATIONS:
 -------------------------
- 1. 1969.HK  100.0% (signal:  0.096, risk: 0.05)
- 2. PLTR       0.0% (signal:  0.049, risk: 0.02)
- 3. NVDA       0.0% (signal:  0.022, risk: 0.01)
- 4. 3750.HK    0.0% (signal:  0.000, risk: 0.00)
- 5. 00680K.KS   0.0% (signal:  0.019, risk: 0.01)
- 6. 0272.HK    0.0% (signal:  0.000, risk: 0.00)
- 7. 3968.HK    0.0% (signal:  0.016, risk: 0.01)
- 8. BREN.JK    0.0% (signal:  0.000, risk: 0.00)
+ 1. 0019.HK   13.2% (signal:  0.021, risk: 0.01)
+ 2. 0087.HK   10.9% (signal:  0.020, risk: 0.01)
+ 3. 601988.SS   9.0% (signal:  0.014, risk: 0.01)
+ 4. 3778.T     8.7% (signal:  0.065, risk: 0.03)
+ 5. 9104.T     8.5% (signal:  0.026, risk: 0.01)
+ 6. 601939.SS   7.4% (signal:  0.007, risk: 0.00)
+ 7. 600028.SS   6.9% (signal:  0.016, risk: 0.01)
+ 8. JKHY       5.4% (signal:  0.000, risk: 0.00)
+ 9. DWNI.DE    5.0% (signal: -0.000, risk: 0.00)
+10. PLTR       4.8% (signal:  0.021, risk: 0.01)
 
 PORTFOLIO METRICS:
 ------------------
-Total Positions: 8
-Expected Return: 2415.77%
-Expected Risk: 20.00%
-Diversification Score: 0.80
+Total Positions: 16
+Expected Return: 524.79%
+Expected Risk: 5.56%
+Diversification Score: 1.00
 
 BOX ALLOCATIONS:
 ----------------
-large_growth_developed: 100.0%
-large_growth_emerging: 100.0%
-large_neutral_developed: 100.0%
-large_neutral_emerging: 100.0%
-large_value_developed: 100.0%
-large_value_emerging: 100.0%
-mid_growth_developed: 100.0%
-mid_growth_emerging: 100.0%
-mid_neutral_developed: 100.0%
-mid_neutral_emerging: 100.0%
-mid_value_developed: 100.0%
-mid_value_emerging: 100.0%
+large_growth_developed: 0.0%
+large_growth_emerging: 0.0%
+large_neutral_developed: 0.0%
+large_neutral_emerging: 0.0%
+large_value_developed: 0.0%
+large_value_emerging: 0.0%
+mid_growth_developed: 0.0%
+mid_growth_emerging: 0.0%
+mid_neutral_developed: 0.0%
+mid_neutral_emerging: 0.0%
+mid_value_developed: 0.0%
+mid_value_emerging: 0.0%
 small_growth_developed: 100.0%
-small_growth_emerging: 100.0%
-small_neutral_developed: 100.0%
-small_neutral_emerging: 100.0%
-small_value_developed: 100.0%
-small_value_emerging: 100.0%
+small_growth_emerging: 0.0%
+small_neutral_developed: 0.0%
+small_neutral_emerging: 0.0%
+small_value_developed: 0.0%
+small_value_emerging: 0.0%
