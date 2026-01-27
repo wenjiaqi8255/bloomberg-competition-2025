@@ -312,12 +312,16 @@ class MLStrategy(BaseStrategy):
             logger.info(f"[{self.name}] Model training stocks: {len(self.model_training_stocks)}")
 
             # Check if model supports batch prediction
-            model = self.model_predictor.model
-            if hasattr(model, 'predict_batch'):
-                logger.info(f"[{self.name}] ✅ Using optimized batch prediction")
-                predictions = self._get_predictions_batch_optimized(features, price_data, start_date, end_date)
-            else:
-                logger.info(f"[{self.name}] ⚠️ Model doesn't support batch prediction, using standard method")
+            try:
+                model = self.model_predictor.get_current_model()
+                if model and hasattr(model, 'predict_batch'):
+                    logger.info(f"[{self.name}] ✅ Using optimized batch prediction")
+                    predictions = self._get_predictions_batch_optimized(features, price_data, start_date, end_date)
+                else:
+                    logger.info(f"[{self.name}] ⚠️ Model doesn't support batch prediction, using standard method")
+                    predictions = super()._get_predictions(features, price_data, start_date, end_date)
+            except Exception as e:
+                logger.warning(f"[{self.name}] Failed to check batch prediction capability: {e}, using standard method")
                 predictions = super()._get_predictions(features, price_data, start_date, end_date)
 
             if predictions.empty:

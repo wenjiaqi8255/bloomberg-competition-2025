@@ -274,6 +274,9 @@ class FamaFrench5Strategy(BaseStrategy):
             
             lookback_days = alpha_config.get('lookback_days', self.lookback_days)
             
+            # Get signal transformation method
+            signal_method = self.parameters.get('signal_method', 'raw')
+            
             # Compute rolling t-stats for each date
             for date in date_range:
                 # Get filtered alphas for this date
@@ -286,28 +289,95 @@ class FamaFrench5Strategy(BaseStrategy):
                     lookback_days=lookback_days
                 )
                 
-                # Store filtered alphas for this date
-                for symbol, alpha_value in filtered_alphas.items():
+                # FIX: Apply signal transformation
+                transformed_signals = self._transform_alpha_to_signals(filtered_alphas, signal_method)
+                
+                # Store transformed signals for this date
+                for symbol, signal_value in transformed_signals.items():
                     if symbol not in predictions_df.columns:
                         predictions_df[symbol] = 0.0
-                    predictions_df.loc[date, symbol] = alpha_value
+                    predictions_df.loc[date, symbol] = signal_value
         else:
             # CSV mode (backward compatible): filter once, apply to all dates
             if alpha_config.get('enabled', False):
                 alphas = self._apply_alpha_significance_filter(alphas, alpha_config)
             
-            # 将 alpha 转换为一个 Series，这是我们的信号
-            alpha_signals = pd.Series(alphas)
+            # FIX: Apply signal transformation (rank-based or Z-score normalization)
+            signal_method = self.parameters.get('signal_method', 'raw')  # Options: 'raw', 'rank', 'zscore'
+            alpha_signals = self._transform_alpha_to_signals(alphas, signal_method)
             
-            for symbol, alpha_value in alpha_signals.items():
-                predictions_df[symbol] = alpha_value
+            for symbol, signal_value in alpha_signals.items():
+                predictions_df[symbol] = signal_value
             
         # 确保返回的 DataFrame 包含正确的股票
         symbols_in_data = list(price_data.keys())
         predictions_df = predictions_df.reindex(columns=symbols_in_data).fillna(0.0)
 
-        logger.info(f"成功为 {len(predictions_df.columns)} 只股票生成了基于 Alpha 的信号。")
+        logger.info(f"成功为 {len(predictions_df.columns)} 只股票生成了基于 Alpha 的信号 (method: {signal_method})。")
         return predictions_df
+
+    def _transform_alpha_to_signals(self, alphas: Dict[str, float], method: str = 'raw') -> Dict[str, float]:
+        """
+        Transform alpha values to trading signals using different methods.
+        
+        Args:
+            alphas: Dictionary of symbol -> alpha values
+            method: Transformation method ('raw', 'rank', 'zscore')
+                - 'raw': Use alpha values directly (original behavior)
+                - 'rank': Convert to ranks (0 to 1, higher alpha = higher rank)
+                - 'zscore': Normalize using Z-score (mean=0, std=1)
+        
+        Returns:
+            Dictionary of symbol -> signal values
+        """
+        if not alphas:
+            return {}
+        
+        alpha_values = np.array(list(alphas.values()))
+        alpha_symbols = list(alphas.keys())
+        
+        if method == 'raw':
+            # Original behavior: use alpha values directly
+            return alphas
+        
+        elif method == 'rank':
+            # Rank-based: Convert to percentiles (0 to 1)
+            # Higher alpha = higher rank = higher signal
+            try:
+                from scipy.stats import rankdata
+                ranks = rankdata(alpha_values, method='average')  # Average rank for ties
+            except ImportError:
+                # Fallback: manual ranking if scipy not available
+                sorted_indices = np.argsort(alpha_values)
+                ranks = np.zeros_like(alpha_values)
+                for rank, idx in enumerate(sorted_indices, 1):
+                    ranks[idx] = rank
+            # Normalize to [0, 1]
+            normalized_ranks = (ranks - 1) / (len(ranks) - 1) if len(ranks) > 1 else ranks
+            signals = {symbol: float(rank) for symbol, rank in zip(alpha_symbols, normalized_ranks)}
+            logger.info(f"Applied rank-based transformation: min={min(signals.values()):.4f}, max={max(signals.values()):.4f}")
+            return signals
+        
+        elif method == 'zscore':
+            # Z-score normalization: (x - mean) / std
+            mean_alpha = np.mean(alpha_values)
+            std_alpha = np.std(alpha_values)
+            
+            if std_alpha == 0:
+                # All alphas are the same, return zeros
+                logger.warning("All alphas are identical, Z-score normalization returns zeros")
+                return {symbol: 0.0 for symbol in alpha_symbols}
+            
+            z_scores = (alpha_values - mean_alpha) / std_alpha
+            # Optional: Apply sigmoid to map to [0, 1] range for better signal strength
+            # Using tanh to map to [-1, 1], then shift to [0, 1]
+            signals = {symbol: float((np.tanh(z) + 1) / 2) for symbol, z in zip(alpha_symbols, z_scores)}
+            logger.info(f"Applied Z-score transformation: min={min(signals.values()):.4f}, max={max(signals.values()):.4f}")
+            return signals
+        
+        else:
+            logger.warning(f"Unknown signal method: {method}, using raw alphas")
+            return alphas
 
     def _apply_alpha_significance_filter(self, alphas: Dict[str, float], config: Dict[str, Any], 
                                          current_date: Optional[datetime] = None,

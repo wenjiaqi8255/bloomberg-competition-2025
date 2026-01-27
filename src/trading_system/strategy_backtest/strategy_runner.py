@@ -73,6 +73,7 @@ from ..types import TradingSignal, SignalType
 from ..portfolio_construction import (
     IPortfolioBuilder, PortfolioConstructionRequest, PortfolioBuilderFactory
 )
+from src.trading_system.portfolio_construction.utils.weight_utils import WeightUtils
 
 logger = logging.getLogger(__name__)
 
@@ -500,39 +501,66 @@ class StrategyRunner:
         
         return filtered_signals
 
-    def _apply_portfolio_construction(self, strategy_signals: pd.DataFrame, price_data: Dict[str, pd.DataFrame], start_date: datetime) -> pd.DataFrame:
+    def _apply_portfolio_construction(self, strategy_signals: pd.DataFrame, price_data: Dict[str, pd.DataFrame], start_date: datetime, rebalance_frequency: str = "daily") -> pd.DataFrame:
         """
-        Apply portfolio construction to strategy signals.
+        Apply portfolio construction to strategy signals with rebalance optimization.
+        
+        This method implements the correct portfolio construction logic:
+        - Only executes portfolio construction on rebalance dates
+        - Forward fills weights to non-rebalance dates
+        - Ensures all weights are properly normalized (sum to 1.0)
+        - Validates weight constraints (range [0, 1], no NaN values)
         
         Args:
-            strategy_signals: Raw strategy signals DataFrame
+            strategy_signals: Raw strategy signals DataFrame (all dates)
             price_data: Price data for all symbols
             start_date: Start date for portfolio construction
+            rebalance_frequency: Rebalance frequency ("daily", "weekly", "monthly", "quarterly")
             
         Returns:
-            Processed signals DataFrame with portfolio construction applied
+            Processed signals DataFrame with portfolio construction applied to all dates
+            All weights are normalized and validated.
         """
         try:
             if self.portfolio_builder is None:
                 logger.warning("Portfolio builder not initialized, returning original signals")
                 return strategy_signals
-                
-            # Create portfolio construction request
-            # For now, we'll process signals date by date
-            processed_signals = pd.DataFrame(index=strategy_signals.index, columns=strategy_signals.columns)
             
-            for i, date in enumerate(strategy_signals.index):
+            if strategy_signals.empty:
+                return strategy_signals
+            
+            # Get rebalance dates based on frequency
+            if rebalance_frequency == "daily":
+                # For daily rebalancing, process all dates
+                rebalance_dates = strategy_signals.index.tolist()
+            else:
+                # Get rebalance dates using existing filter method
+                filtered_signals = self._filter_signals_by_rebalance_frequency(
+                    strategy_signals.copy(), rebalance_frequency
+                )
+                rebalance_dates = filtered_signals.index.tolist()
+            
+            logger.info(f"   🔄 Portfolio construction: processing {len(rebalance_dates)} rebalance dates out of {len(strategy_signals)} total dates")
+            
+            # Initialize output DataFrame with same index and columns as input
+            processed_signals = pd.DataFrame(index=strategy_signals.index, columns=strategy_signals.columns, dtype=float)
+            
+            # Dictionary to store portfolio weights for each rebalance date
+            rebalance_weights: Dict[datetime, pd.Series] = {}
+            
+            # Process each rebalance date
+            for i, rebalance_date in enumerate(rebalance_dates):
                 try:
-                    # Get signals for this date
-                    date_signals = strategy_signals.loc[date]
+                    # Get signals for this rebalance date
+                    date_signals = strategy_signals.loc[rebalance_date]
                     
-                    # Log progress for first few dates and every 10th date
+                    # Log progress
                     if i < 3 or i % 10 == 0:
-                        logger.info(f"   📅 Processing date {i+1}/{len(strategy_signals)}: {date.date()}")
+                        logger.info(f"   📅 Building portfolio for rebalance date {i+1}/{len(rebalance_dates)}: {rebalance_date.date()}")
                     
                     # Create portfolio construction request
                     request = PortfolioConstructionRequest(
-                        date=date,
+                        date=rebalance_date,
                         universe=list(date_signals.index),
                         signals=date_signals,
                         price_data=price_data,
@@ -542,21 +570,202 @@ class StrategyRunner:
                     # Build portfolio
                     portfolio_weights = self.portfolio_builder.build_portfolio(request)
                     
-                    # Update processed signals
-                    processed_signals.loc[date] = portfolio_weights
+                    # CRITICAL FIX: Ensure all columns are properly initialized
+                    # Portfolio weights may only contain a subset of symbols, but we need
+                    # weights for ALL symbols in the universe (others should be 0.0)
+                    if isinstance(portfolio_weights, pd.Series):
+                        # Create a full weight vector with all symbols initialized to 0.0
+                        full_weights = pd.Series(0.0, index=strategy_signals.columns, dtype=float)
+                        
+                        # Only update symbols that are in both portfolio_weights and strategy_signals.columns
+                        common_symbols = portfolio_weights.index.intersection(strategy_signals.columns)
+                        full_weights[common_symbols] = portfolio_weights[common_symbols]
+                        
+                        # Normalize using the centralized utility
+                        portfolio_weights = WeightUtils.normalize_weights(full_weights)
+
+                    elif isinstance(portfolio_weights, dict):
+                        # Handle dict format: convert to Series with all symbols
+                        full_weights = pd.Series(0.0, index=strategy_signals.columns, dtype=float)
+                        for symbol, weight in portfolio_weights.items():
+                            if symbol in full_weights.index:
+                                full_weights[symbol] = weight
+                        
+                        # Normalize using the centralized utility
+                        portfolio_weights = WeightUtils.normalize_weights(full_weights)
+                    
+                    # Store weights for this rebalance date
+                    rebalance_weights[rebalance_date] = portfolio_weights
+                    processed_signals.loc[rebalance_date] = portfolio_weights
                     
                 except Exception as e:
-                    logger.warning(f"Portfolio construction failed for date {date}: {e}")
-                    # Fall back to original signals for this date
-                    processed_signals.loc[date] = strategy_signals.loc[date]
+                    logger.warning(f"Portfolio construction failed for rebalance date {rebalance_date}: {e}")
+                    # Fall back to zero weights (not original signals, as signals are not weights!)
+                    zero_weights = pd.Series(0.0, index=strategy_signals.columns, dtype=float)
+                    processed_signals.loc[rebalance_date] = zero_weights
+                    rebalance_weights[rebalance_date] = zero_weights
             
-            logger.info(f"Portfolio construction applied successfully to {len(processed_signals)} dates")
+            # Forward fill weights for non-rebalance dates
+            if rebalance_frequency != "daily" and len(rebalance_weights) > 0:
+                logger.info(f"   🔄 Forward filling portfolio weights to {len(strategy_signals) - len(rebalance_dates)} non-rebalance dates")
+                
+                # Weights are already properly formatted above (all columns, normalized to sum to 1.0)
+                # Forward fill using pandas (forward fill along index)
+                processed_signals = processed_signals.ffill()
+                
+                # Backward fill for any dates before first rebalance date
+                # Use the first rebalance date's weights for dates before it
+                if len(rebalance_dates) > 0:
+                    first_rebalance_date = rebalance_dates[0]
+                    if first_rebalance_date in processed_signals.index:
+                        first_weights = processed_signals.loc[first_rebalance_date]
+                        # Fill all dates before first rebalance date with first rebalance weights
+                        for date in processed_signals.index:
+                            if date < first_rebalance_date:
+                                processed_signals.loc[date] = first_weights
+                
+                # CRITICAL FIX: Do NOT use fillna(strategy_signals) as it replaces weights with signals!
+                # Signals are NOT weights - they are alpha values or signal strengths!
+                # Instead, fill any remaining NaN with 0.0 (no position)
+                processed_signals = processed_signals.fillna(0.0)
+                
+                # Final validation: ensure weights sum to 1.0 for each date (with tolerance)
+                weight_sums = processed_signals.sum(axis=1)
+                invalid_dates = weight_sums[abs(weight_sums - 1.0) > 0.01]  # 1% tolerance
+                if len(invalid_dates) > 0:
+                    logger.warning(f"Found {len(invalid_dates)} dates with weights not summing to 1.0 (tolerance: 1%), normalizing...")
+                    for date in invalid_dates.index:
+                        row_sum = processed_signals.loc[date].sum()
+                        if row_sum > 0:
+                            processed_signals.loc[date] = processed_signals.loc[date] / row_sum
+                        else:
+                            # If all weights are 0, keep as 0 (no positions) - this is valid
+                            logger.debug(f"Date {date} has all zero weights (no positions)")
+                
+                logger.debug(f"Forward fill completed. Weight sum stats: min={weight_sums.min():.4f}, max={weight_sums.max():.4f}, mean={weight_sums.mean():.4f}")
+                
+            else:
+                # For daily rebalancing, ensure all dates have proper weights
+                # Fill any NaN values with 0.0 (not with original signals!)
+                processed_signals = processed_signals.fillna(0.0)
+                
+                # Validate and normalize weights for daily rebalancing
+                for date in processed_signals.index:
+                    row_sum = processed_signals.loc[date].sum()
+                    if row_sum > 0 and abs(row_sum - 1.0) > 0.01:
+                        processed_signals.loc[date] = processed_signals.loc[date] / row_sum
+            
+            # Validate portfolio weights before returning
+            validation_passed = self._validate_portfolio_weights(processed_signals)
+            if not validation_passed:
+                logger.error("❌ Portfolio weight validation failed! This may indicate a bug.")
+                # Still return the weights, but log the error for investigation
+            
+            logger.info(f"Portfolio construction applied successfully: {len(rebalance_dates)} rebalance dates, {len(processed_signals)} total dates")
             return processed_signals
             
         except Exception as e:
             logger.error(f"Portfolio construction failed: {e}")
             logger.info("Returning original signals")
             return strategy_signals
+    
+    def _validate_portfolio_weights(self, weights_df: pd.DataFrame) -> bool:
+        """
+        Validate portfolio weights for correctness.
+        
+        Checks:
+        1. Weights are in range [0, 1]
+        2. Weight sums are approximately 1.0 (within tolerance)
+        3. No NaN values
+        
+        Args:
+            weights_df: DataFrame with portfolio weights (dates x symbols)
+            
+        Returns:
+            True if validation passes, False otherwise
+        """
+        if weights_df.empty:
+            logger.warning("⚠️  Weight DataFrame is empty")
+            return False
+        
+        # Check 1: Weight range [0, 1]
+        if (weights_df < 0).any().any():
+            negative_count = (weights_df < 0).sum().sum()
+            logger.error(f"❌ Found {negative_count} negative weights!")
+            return False
+        
+        if (weights_df > 1).any().any():
+            over_one_count = (weights_df > 1).sum().sum()
+            logger.error(f"❌ Found {over_one_count} weights > 1.0!")
+            return False
+        
+        # Check 2: Weight sums approximately 1.0
+        weight_sums = weights_df.sum(axis=1)
+        tolerance = 0.01  # 1% tolerance
+        invalid_sums = weight_sums[(weight_sums < 1 - tolerance) | (weight_sums > 1 + tolerance)]
+        
+        if len(invalid_sums) > 0:
+            # Allow zero-weight dates (no positions)
+            non_zero_dates = invalid_sums[invalid_sums.abs() > tolerance]
+            if len(non_zero_dates) > 0:
+                logger.warning(f"⚠️  Found {len(non_zero_dates)} dates with weight sums outside [0.99, 1.01]")
+                logger.debug(f"   Invalid sums: min={invalid_sums.min():.4f}, max={invalid_sums.max():.4f}")
+                # Don't return False here, as this might be acceptable (e.g., cash positions)
+        
+        # Check 3: No NaN values
+        if weights_df.isna().any().any():
+            nan_count = weights_df.isna().sum().sum()
+            logger.error(f"❌ Found {nan_count} NaN values in weights!")
+            return False
+        
+        logger.debug(f"✅ Weight validation passed: {len(weights_df)} dates, weight sum range [{weight_sums.min():.4f}, {weight_sums.max():.4f}]")
+        return True
+    
+    def _sanity_check_weights(self, weights_df: pd.DataFrame, original_signals: pd.DataFrame = None) -> None:
+        """
+        Sanity check: Ensure weights are not equal to signals.
+        
+        This helps detect if the bug where signals are used as weights still exists.
+        
+        Args:
+            weights_df: DataFrame with portfolio weights
+            original_signals: Original strategy signals (optional, for comparison)
+        """
+        if original_signals is None or original_signals.empty:
+            logger.debug("Skipping sanity check: original signals not available")
+            return
+        
+        if weights_df.empty:
+            logger.debug("Skipping sanity check: weights DataFrame is empty")
+            return
+        
+        # Check if weights are identical to signals (would indicate bug)
+        try:
+            # Align indices and columns
+            common_index = weights_df.index.intersection(original_signals.index)
+            common_columns = weights_df.columns.intersection(original_signals.columns)
+            
+            if len(common_index) == 0 or len(common_columns) == 0:
+                logger.debug("Skipping sanity check: no common indices/columns")
+                return
+            
+            weights_subset = weights_df.loc[common_index, common_columns]
+            signals_subset = original_signals.loc[common_index, common_columns]
+            
+            # Check if they are approximately equal (within numerical precision)
+            # Use a small tolerance to account for floating point errors
+            tolerance = 1e-6
+            are_equal = (weights_subset - signals_subset).abs().max().max() < tolerance
+            
+            if are_equal:
+                logger.error("❌ CRITICAL BUG DETECTED: Weights are identical to signals!")
+                logger.error("   This indicates the bug where signals are used as weights still exists.")
+                logger.error("   Portfolio construction may not be working correctly.")
+            else:
+                logger.debug("✅ Sanity check passed: Weights are different from signals (as expected)")
+        
+        except Exception as e:
+            logger.debug(f"Sanity check encountered an error (non-critical): {e}")
 
     def run_strategy(self, experiment_name: str = None) -> Dict[str, Any]:
         """
@@ -650,24 +859,31 @@ class StrategyRunner:
                 end_date=backtest_config.end_date
             )
 
-            # Step 4.5: Filter signals by rebalance frequency
-            if not strategy_signals.empty and backtest_config.rebalance_frequency != "daily":
-                original_count = len(strategy_signals)
-                strategy_signals = self._filter_signals_by_rebalance_frequency(
-                    strategy_signals, backtest_config.rebalance_frequency
-                )
-                logger.info(
-                    f"📅 Filtered signals by rebalance frequency '{backtest_config.rebalance_frequency}': "
-                    f"{original_count} → {len(strategy_signals)} dates"
-                )
-
             # Step 3.5: Apply portfolio construction if configured
+            # Portfolio construction implements the correct financial logic:
+            # - Only computes weights on rebalance dates (as per rebalance_frequency)
+            # - Forward fills weights to non-rebalance dates
+            # - Ensures all weights are properly normalized and validated
+            # All dates are passed to backtest engine, which handles rebalance threshold logic internally.
             if self.portfolio_builder and not strategy_signals.empty:
                 logger.info("🔧 APPLYING PORTFOLIO CONSTRUCTION...")
                 logger.info(f"   📊 Input signals shape: {strategy_signals.shape}")
                 logger.info(f"   📅 Date range: {strategy_signals.index[0].date()} to {strategy_signals.index[-1].date()}")
-                strategy_signals = self._apply_portfolio_construction(strategy_signals, price_data, backtest_config.start_date)
+                logger.info(f"   🔄 Rebalance frequency: {backtest_config.rebalance_frequency}")
+                
+                # Save original signals for sanity check
+                original_signals = strategy_signals.copy()
+                
+                strategy_signals = self._apply_portfolio_construction(
+                    strategy_signals, 
+                    price_data, 
+                    backtest_config.start_date,
+                    rebalance_frequency=backtest_config.rebalance_frequency
+                )
                 logger.info(f"   ✅ Portfolio construction completed. Output shape: {strategy_signals.shape}")
+                
+                # Sanity check: Verify weights are not equal to signals (would indicate bug)
+                self._sanity_check_weights(strategy_signals, original_signals)
 
             # Step 4: Convert signals to unified format and run backtest
             unified_strategy_signals = self._convert_signals_to_unified_format(strategy_signals, price_data)

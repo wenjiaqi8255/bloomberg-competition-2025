@@ -299,23 +299,46 @@ class ExperimentOrchestrator:
                 factor_data_provider = _create_factor_data_provider(factor_data_config)
             
             # Resolve training symbols for universe (needed for backtest)
-            # Note: We skip data availability check for pre-trained models - let backtest handle it
+            # CRITICAL FIX: For pre-trained models, get symbols from the model itself
+            # This ensures backtest uses the SAME stocks that were used during training
             training_params = {}
             try:
-                from ...trading_system.data.utils.universe_loader import UniverseProvider
-                resolved_symbols = UniverseProvider.resolve_symbols(self.full_config)
-                training_params = {'symbols': resolved_symbols}
-                logger.info(f"Resolved backtest universe via UniverseProvider: {len(resolved_symbols)} symbols")
+                # First, try to get symbols from the pre-trained model
+                from ...trading_system.models.serving.predictor import ModelPredictor
+                model_predictor = ModelPredictor(
+                    model_id=model_id,
+                    model_registry_path="./models/"
+                )
+                model = model_predictor.get_current_model()
+                
+                if model and hasattr(model, 'get_symbol_alphas'):
+                    # Get symbols from model's alpha dictionary (these are the stocks used in training)
+                    model_symbols = list(model.get_symbol_alphas().keys())
+                    training_params = {'symbols': model_symbols}
+                    logger.info(f"✅ FIX: Retrieved {len(model_symbols)} training symbols from pre-trained model")
+                    logger.info(f"   This ensures backtest uses the SAME stocks as training (overlap: 100%)")
+                else:
+                    raise AttributeError("Model does not support get_symbol_alphas()")
+                    
             except Exception as e:
-                logger.warning(f"UniverseProvider resolution failed; may need symbols from config. Reason: {e}")
-                # Try to get symbols from training_setup if available
-                if training_setup:
-                    if isinstance(training_setup, dict):
-                        training_params = training_setup.get('parameters', {})
-                    else:
-                        training_params = getattr(training_setup, 'parameters', {})
-                        if training_params and hasattr(training_params, 'dict'):
-                            training_params = training_params.dict()
+                logger.warning(f"Could not get symbols from pre-trained model: {e}")
+                logger.info("Falling back to config-based symbol resolution...")
+                # Fallback: Try to resolve from config
+                try:
+                    from ...trading_system.data.utils.universe_loader import UniverseProvider
+                    resolved_symbols = UniverseProvider.resolve_symbols(self.full_config)
+                    training_params = {'symbols': resolved_symbols}
+                    logger.info(f"Resolved backtest universe via UniverseProvider: {len(resolved_symbols)} symbols")
+                except Exception as e2:
+                    logger.warning(f"UniverseProvider resolution also failed: {e2}")
+                    # Try to get symbols from training_setup if available
+                    if training_setup:
+                        if isinstance(training_setup, dict):
+                            training_params = training_setup.get('parameters', {})
+                        else:
+                            training_params = getattr(training_setup, 'parameters', {})
+                            if training_params and hasattr(training_params, 'dict'):
+                                training_params = training_params.dict()
             
             logger.info(f"Pre-trained model loaded successfully. Model ID: {model_id}")
             logger.info("Skipping data availability check for pre-trained model - backtest will handle data fetching")
@@ -435,7 +458,8 @@ class ExperimentOrchestrator:
             # Phase 2: Check data availability before creating strategy
             # Skip this check for pre-trained models - backtest will handle data fetching
             if pretrained_model_id:
-                logger.info(f"Using {len(training_symbols)} symbols from config for pre-trained model backtest")
+                logger.info(f"✅ Using {len(training_symbols)} symbols from pre-trained model for backtest")
+                logger.info("   This ensures 100% overlap between training and backtest universes")
                 logger.info("Skipping pre-backtest data availability check - backtest runner will fetch data as needed")
             else:
                 # Only do data availability check for newly trained models
@@ -456,12 +480,15 @@ class ExperimentOrchestrator:
                     training_symbols = available_symbols
                     logger.info(f"Updated training universe to {len(training_symbols)} available symbols")
 
-            logger.info(f"Injecting training universe ({len(training_symbols)} symbols) into strategy config.")
+            logger.info(f"✅ Injecting training universe ({len(training_symbols)} symbols) into strategy config.")
             # Set universe as both attribute and in parameters dict for compatibility
             backtest_config_objects['strategy'].universe = training_symbols
             if 'parameters' not in backtest_config_objects['strategy'].__dict__:
                 backtest_config_objects['strategy'].parameters = {}
             backtest_config_objects['strategy'].parameters['universe'] = training_symbols
+        else:
+            logger.warning("⚠️  No training symbols found! Backtest may use different universe than training.")
+            logger.warning("   This could lead to poor performance due to low overlap.")
         
         logger.info(f"Updating backtest config to use model_id: {model_id}")
         # The 'parameters' dict is directly on the dataclass

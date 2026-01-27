@@ -307,6 +307,7 @@ class BaseStrategy(ABC):
                 try:
                     # ====================================================
                     # 关键修复：提取当前日期的特征
+                    # 如果预测日期不在features中，使用最后一个可用日期
                     # ====================================================
                     if isinstance(features.index, pd.MultiIndex):
                         logger.debug(f"Date {date}: MultiIndex features, extracting date-specific data")
@@ -317,9 +318,29 @@ class BaseStrategy(ABC):
                                 date_features = features.xs(date, level='date')
                                 logger.debug(f"  Extracted {len(date_features)} rows for date {date}")
                             except KeyError:
-                                logger.warning(f"  Date {date} not found in features, skipping")
-                                predictions_dict[date] = pd.Series(0.0, index=symbols)
-                                continue
+                                # 预测日期不在features中，使用最后一个可用日期
+                                logger.warning(f"  Date {date} not found in features, using last available date")
+                                
+                                # 获取所有可用日期
+                                available_dates = features.index.get_level_values('date').unique()
+                                available_dates = pd.to_datetime(available_dates).sort_values()
+                                
+                                # 找到小于或等于预测日期的最后一个可用日期
+                                valid_dates = available_dates[available_dates <= date]
+                                if len(valid_dates) > 0:
+                                    last_available_date = valid_dates.max()
+                                    logger.info(f"  Using last available date: {last_available_date} (requested: {date})")
+                                    date_features = features.xs(last_available_date, level='date')
+                                else:
+                                    # 如果没有可用日期，使用最近的日期
+                                    if len(available_dates) > 0:
+                                        last_available_date = available_dates.max()
+                                        logger.warning(f"  No dates <= {date}, using most recent date: {last_available_date}")
+                                        date_features = features.xs(last_available_date, level='date')
+                                    else:
+                                        logger.error(f"  No available dates in features, skipping prediction")
+                                        predictions_dict[date] = pd.Series(0.0, index=symbols)
+                                        continue
                         else:
                             # 没有日期索引：使用全部特征（假设是单日）
                             logger.debug(f"  No 'date' level in MultiIndex, using all features")
@@ -327,13 +348,31 @@ class BaseStrategy(ABC):
                     else:
                         # 普通索引：假设特征已经按日期准备好
                         logger.debug(f"Date {date}: Regular index features")
-                        date_features = features
-                    
-                    # 额外检查：如果是普通索引但有DatetimeIndex，过滤到当前日期
-                    if isinstance(date_features.index, pd.DatetimeIndex):
-                        if date in date_features.index:
-                            date_features = date_features.loc[[date]]
-                            logger.debug(f"  Filtered to single date: {date_features.shape}")
+                        
+                        # 如果是DatetimeIndex，尝试找到可用日期
+                        if isinstance(features.index, pd.DatetimeIndex):
+                            if date in features.index:
+                                date_features = features.loc[[date]]
+                                logger.debug(f"  Filtered to single date: {date_features.shape}")
+                            else:
+                                # 使用最后一个可用日期
+                                available_dates = features.index[features.index <= date]
+                                if len(available_dates) > 0:
+                                    last_available_date = available_dates.max()
+                                    logger.info(f"  Date {date} not found, using last available date: {last_available_date}")
+                                    date_features = features.loc[[last_available_date]]
+                                else:
+                                    # 使用最近的日期
+                                    if len(features.index) > 0:
+                                        last_available_date = features.index.max()
+                                        logger.warning(f"  No dates <= {date}, using most recent date: {last_available_date}")
+                                        date_features = features.loc[[last_available_date]]
+                                    else:
+                                        logger.error(f"  No available dates in features, skipping prediction")
+                                        predictions_dict[date] = pd.Series(0.0, index=symbols)
+                                        continue
+                        else:
+                            date_features = features
                     
                     logger.debug(f"Date {date}: final features shape = {date_features.shape}")
                     
