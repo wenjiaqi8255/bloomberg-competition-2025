@@ -130,6 +130,11 @@
           "items": {
             "type": "string"
           }
+        },
+        "random_seed": {
+          "type": "integer",
+          "default": 42,
+          "description": "Random seed for reproducibility. Set to null for complete randomness."
         }
       }
     },

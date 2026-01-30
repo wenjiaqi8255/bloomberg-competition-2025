@@ -25,6 +25,9 @@ Key Features:
 References:
 - Fama, E. F., & MacBeth, J. D. (1973). Risk, return, and equilibrium:
   Empirical tests. Journal of Political Economy, 81(3), 607-636.
+- Benjamini, Y., & Hochberg, Y. (1995). Controlling the false discovery rate:
+  A practical and powerful approach to multiple testing. Journal of the
+  Royal Statistical Society, Series B, 57(1), 289-300.
 """
 
 import logging
@@ -94,21 +97,27 @@ class FamaMacBethModel(BaseModel):
                 - alpha: Regularization strength for ridge (default: 1.0)
                 - min_cross_section_size: Minimum stocks per cross-section (default: 3)
                 - newey_west_lags: Lags for Newey-West correction (default: None, auto-detect)
+                - fdr_level: False Discovery Rate level for Benjamini-Hochberg (default: 0.05)
+                - apply_fdr: Whether to apply FDR correction for feature filtering (default: True)
         """
         super().__init__(model_type, config)
-        
+
         # Model configuration
         self.regularization = self.config.get('regularization', 'none')
         self.alpha = self.config.get('alpha', 1.0)
         self.min_cross_section_size = self.config.get('min_cross_section_size', 3)
         self.newey_west_lags = self.config.get('newey_west_lags', None)
-        
+        self.fdr_level = self.config.get('fdr_level', 0.05)
+        self.apply_fdr = self.config.get('apply_fdr', True)
+
         # Model state (will be populated during training)
         self.gamma_history: List[Dict[str, Any]] = []  # Time series of γ_t
         self.gamma_mean: Optional[Dict[str, float]] = None  # Average γ
         self.gamma_std: Optional[Dict[str, float]] = None  # Std dev of γ
         self.gamma_tstat: Optional[Dict[str, float]] = None  # t-statistics
-        self.gamma_pvalue: Optional[Dict[str, float]] = None  # p-values
+        self.gamma_pvalue: Optional[Dict[str, float]] = None  # p-values (raw)
+        self.gamma_pvalue_fdr: Optional[Dict[str, float]] = None  # FDR-adjusted p-values
+        self.significant_features_fdr: List[str] = []  # Features significant after FDR correction
         self.feature_names: List[str] = []
         self.dates_used: List[pd.Timestamp] = []
         
@@ -233,7 +242,10 @@ class FamaMacBethModel(BaseModel):
             
             # Step 2: Calculate time-series statistics
             self._calculate_coefficient_statistics()
-            
+
+            # Step 3: Apply FDR correction for multiple testing
+            self._apply_fdr_correction()
+
             # Update model status and metadata
             self.status = ModelStatus.TRAINED
             self.metadata.training_samples = len(y_clean)
@@ -243,10 +255,14 @@ class FamaMacBethModel(BaseModel):
                 'gamma_std': self.gamma_std,
                 'gamma_tstat': self.gamma_tstat,
                 'gamma_pvalue': self.gamma_pvalue,
+                'gamma_pvalue_fdr': self.gamma_pvalue_fdr,
+                'significant_features_fdr': self.significant_features_fdr,
                 'n_cross_sections': len(gamma_history),
                 'n_dates': len(successful_dates),
                 'regularization': self.regularization,
-                'alpha': self.alpha
+                'alpha': self.alpha,
+                'fdr_level': self.fdr_level,
+                'apply_fdr': self.apply_fdr
             })
             
             # Log results
@@ -418,9 +434,117 @@ class FamaMacBethModel(BaseModel):
                 for f in self.feature_names
             }
         }
-        
+
         logger.debug(f"Calculated coefficient statistics based on {T} time periods")
-    
+
+    def _apply_fdr_correction(self) -> None:
+        """
+        Apply Benjamini-Hochberg (1995) False Discovery Rate correction.
+
+        This method controls the expected proportion of false discoveries
+        (false positives) among all discoveries (rejected hypotheses).
+
+        Procedure:
+        1. Sort p-values in ascending order: p_(1) ≤ p_(2) ≤ ... ≤ p_(m)
+        2. Find largest k such that: p_(k) ≤ (k/m) * Q
+        3. Reject all hypotheses H_(1), ..., H_(k)
+        4. Adjusted p-value: p_adj_(i) = min(m * p_(i) / i, 1.0)
+
+        Where:
+        - m = total number of hypotheses (features)
+        - Q = FDR level (e.g., 0.05)
+        - k = rank of p-value
+
+        References:
+        - Benjamini, Y., & Hochberg, Y. (1995). Controlling the false
+          discovery rate. Journal of the Royal Statistical Society,
+          Series B, 57(1), 289-300.
+        """
+        if not self.gamma_pvalue or not self.apply_fdr:
+            logger.info("FDR correction disabled or no p-values available")
+            return
+
+        # Extract p-values for features (exclude intercept)
+        p_values = np.array([
+            self.gamma_pvalue['coefs'][f]
+            for f in self.feature_names
+        ])
+
+        # Get number of hypotheses
+        m = len(p_values)
+
+        # Sort p-values and keep track of original indices
+        sorted_indices = np.argsort(p_values)
+        sorted_p_values = p_values[sorted_indices]
+
+        # Calculate Benjamini-Hochberg critical values
+        # Critical value for rank i: (i / m) * Q
+        ranks = np.arange(1, m + 1)
+        critical_values = (ranks / m) * self.fdr_level
+
+        # Find largest k where p_(k) ≤ (k/m) * Q
+        significant_ranks = np.where(sorted_p_values <= critical_values)[0]
+
+        if len(significant_ranks) == 0:
+            logger.warning(f"No features significant at FDR level {self.fdr_level}")
+            self.significant_features_fdr = []
+        else:
+            k = significant_ranks[-1] + 1  # Convert to 1-indexed rank
+            logger.info(f"FDR correction: {k} out of {m} features significant "
+                       f"at FDR level {self.fdr_level}")
+
+            # Get significant feature names
+            significant_indices = sorted_indices[:k]
+            self.significant_features_fdr = [
+                self.feature_names[i]
+                for i in significant_indices
+            ]
+
+        # Calculate adjusted p-values (FDR-adjusted)
+        # p_adj_(i) = min(m * p_(i) / rank_i, 1.0)
+        adjusted_p_values = np.minimum(
+            sorted_p_values * m / ranks,
+            1.0
+        )
+
+        # Unsort adjusted p-values to match original feature order
+        unsorted_adjusted = np.empty_like(adjusted_p_values)
+        unsorted_adjusted[sorted_indices] = adjusted_p_values
+
+        # Store FDR-adjusted p-values
+        self.gamma_pvalue_fdr = {
+            'intercept': self.gamma_pvalue['intercept'],  # Intercept not adjusted
+            'coefs': {
+                f: float(unsorted_adjusted[i])
+                for i, f in enumerate(self.feature_names)
+            }
+        }
+
+        # Log results
+        logger.info("=" * 60)
+        logger.info("Benjamini-Hochberg FDR Correction Results")
+        logger.info("=" * 60)
+        logger.info(f"FDR Level (Q): {self.fdr_level}")
+        logger.info(f"Total Features Tested: {m}")
+        logger.info(f"Significant Features (after FDR): {len(self.significant_features_fdr)}")
+        logger.info(f"False Discovery Rate Controlled at: {self.fdr_level * 100:.1f}%")
+
+        if len(self.significant_features_fdr) > 0:
+            logger.info("\nSignificant Features after FDR Correction:")
+            for feature in self.significant_features_fdr:
+                raw_p = self.gamma_pvalue['coefs'][feature]
+                adj_p = self.gamma_pvalue_fdr['coefs'][feature]
+                logger.info(f"  {feature:20s}: raw_p = {raw_p:.6f}, "
+                           f"adj_p = {adj_p:.6f}")
+        else:
+            logger.warning("\n⚠️  No features significant after FDR correction!")
+            logger.warning("   This may indicate:")
+            logger.warning("   1. Weak factor premia in the data")
+            logger.warning("   2. High noise level")
+            logger.warning("   3. FDR level too strict")
+
+        logger.info("=" * 60)
+
     def _log_estimation_results(self) -> None:
         """Log Fama-MacBeth estimation results."""
         logger.info("=" * 60)
@@ -461,36 +585,55 @@ class FamaMacBethModel(BaseModel):
     def get_coefficient_statistics(self) -> pd.DataFrame:
         """
         Get comprehensive statistics for all coefficients.
-        
+
         Returns:
-            DataFrame with columns: coefficient, std_error, t_stat, p_value, significance
+            DataFrame with columns: coefficient, std_error, t_stat, p_value, p_value_fdr,
+                                  significant, significant_fdr
         """
         if self.gamma_mean is None:
             return pd.DataFrame()
-        
+
         rows = []
-        
+
         # Intercept
-        rows.append({
+        intercept_row = {
             'feature': 'Intercept',
             'coefficient': self.gamma_mean['intercept'],
             'std_error': self.gamma_std['intercept'] / np.sqrt(len(self.gamma_history)),
             't_stat': self.gamma_tstat['intercept'],
             'p_value': self.gamma_pvalue['intercept'],
             'significant': self.gamma_pvalue['intercept'] < 0.05
-        })
-        
+        }
+        # Add FDR-adjusted p-value if available
+        if self.gamma_pvalue_fdr is not None:
+            intercept_row['p_value_fdr'] = self.gamma_pvalue_fdr['intercept']
+            intercept_row['significant_fdr'] = self.gamma_pvalue_fdr['intercept'] < self.fdr_level
+        else:
+            intercept_row['p_value_fdr'] = None
+            intercept_row['significant_fdr'] = None
+
+        rows.append(intercept_row)
+
         # Feature coefficients
         for feature in self.feature_names:
-            rows.append({
+            row = {
                 'feature': feature,
                 'coefficient': self.gamma_mean['coefs'][feature],
                 'std_error': self.gamma_std['coefs'][feature] / np.sqrt(len(self.gamma_history)),
                 't_stat': self.gamma_tstat['coefs'][feature],
                 'p_value': self.gamma_pvalue['coefs'][feature],
                 'significant': self.gamma_pvalue['coefs'][feature] < 0.05
-            })
-        
+            }
+            # Add FDR-adjusted p-value if available
+            if self.gamma_pvalue_fdr is not None:
+                row['p_value_fdr'] = self.gamma_pvalue_fdr['coefs'][feature]
+                row['significant_fdr'] = self.gamma_pvalue_fdr['coefs'][feature] < self.fdr_level
+            else:
+                row['p_value_fdr'] = None
+                row['significant_fdr'] = None
+
+            rows.append(row)
+
         return pd.DataFrame(rows)
     
     def get_gamma_time_series(self) -> pd.DataFrame:
@@ -531,11 +674,15 @@ class FamaMacBethModel(BaseModel):
             'gamma_std': self.gamma_std,
             'gamma_tstat': self.gamma_tstat,
             'gamma_pvalue': self.gamma_pvalue,
+            'gamma_pvalue_fdr': self.gamma_pvalue_fdr,
+            'significant_features_fdr': self.significant_features_fdr,
             'feature_names': self.feature_names,
             'dates_used': [d.isoformat() for d in self.dates_used],
             'regularization': self.regularization,
             'alpha': self.alpha,
-            'min_cross_section_size': self.min_cross_section_size
+            'min_cross_section_size': self.min_cross_section_size,
+            'fdr_level': self.fdr_level,
+            'apply_fdr': self.apply_fdr
         }
         
         # Save model dictionary
@@ -600,11 +747,15 @@ class FamaMacBethModel(BaseModel):
         instance.gamma_std = model_dict['gamma_std']
         instance.gamma_tstat = model_dict['gamma_tstat']
         instance.gamma_pvalue = model_dict['gamma_pvalue']
+        instance.gamma_pvalue_fdr = model_dict.get('gamma_pvalue_fdr')
+        instance.significant_features_fdr = model_dict.get('significant_features_fdr', [])
         instance.feature_names = model_dict['feature_names']
         instance.dates_used = [pd.Timestamp(d) for d in model_dict['dates_used']]
         instance.regularization = model_dict['regularization']
         instance.alpha = model_dict['alpha']
         instance.min_cross_section_size = model_dict['min_cross_section_size']
+        instance.fdr_level = model_dict.get('fdr_level', 0.05)
+        instance.apply_fdr = model_dict.get('apply_fdr', True)
         
         instance.is_trained = True
         

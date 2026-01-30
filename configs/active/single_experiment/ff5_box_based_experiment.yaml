@@ -3,7 +3,7 @@
 # This configuration combines Fama-French 5-factor model training with Box-First portfolio construction
 # to ensure systematic diversification across investment style boxes.
 
-pretrained_model_id: "ff5_regression_20251107_012512"
+# pretrained_model_id: "ff5_regression_20251107_012512"  # Removed to train new model with FDR
 
 # Part 1: FF5 Model Training Pipeline
 # ----------------------------------
@@ -28,6 +28,9 @@ training_setup:
       regularization: 'ridge'
       alpha: 1.0
       standardize: true
+      # Academic Enhancement: Multiple Testing Correction
+      fdr_level: 0.05  # 5% False Discovery Rate
+      apply_fdr: true  # Enable Benjamini-Hochberg FDR correction
 
   feature_engineering:
     # FF5 regression needs FF5 factors, not cross-sectional features
@@ -245,3 +248,25 @@ strategy:
 
     # Strategy-level controls
     enable_short_selling: false
+
+# Academic Enhancement: Reproducibility Configuration
+experiment:
+  name: "FF5_BoxBased_FDR_Enhanced"
+  description: "FF5 strategy with Benjamini-Hochberg FDR correction and market impact modeling"
+  random_seed: 42  # Fixed seed for reproducibility
+  log_to_wandb: true
+  wandb_project: "bloomberg-competition"
+  tags:
+    - "ff5"
+    - "fdr_correction"
+    - "market_impact"
+    - "academic_enhancements"
+
+# Academic Enhancement: Market Impact Modeling
+# Almgren-Chriss (2001) market impact will be applied in transaction costs
+# These parameters are used by the MarketImpactModel class
+market_impact:
+  enabled: true  # Enable Almgren-Chriss market impact modeling
+  gamma: 1e-6  # Permanent impact coefficient
+  eta: 1e-6  # Temporary impact coefficient
+  default_daily_volume: 1000000  # Default if not provided in market data
