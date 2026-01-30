@@ -80,7 +80,13 @@ training_setup:
     # Training period - same as FF5 for controlled comparison
     start_date: "2022-01-01"
     end_date: "2023-12-31"
-    symbols: []
+    symbols:
+    - AAPL
+    - MSFT
+    - GOOGL
+    - AMZN
+    - META
+    - NVDA
 
   # Hyperparameter optimization configuration
   # Disabled for faster training - use default model config for controlled comparison
@@ -139,7 +145,7 @@ strategy:
         size: ["large", "mid", "small"]
         style: ["growth", "neutral", "value"]  # Same as FF5 - includes neutral
         region: ["developed", "emerging"]
-        sector: []
+        sector: ["Technology", "Financials", "Healthcare"]
 
     # Stock classifier configuration - same as FF5
     classifier:

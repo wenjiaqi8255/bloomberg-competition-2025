@@ -63,6 +63,13 @@ training_setup:
     start_date: "2022-01-01"
     end_date: "2023-12-31"
     # symbols: []
+    symbols:
+      - AAPL
+      - MSFT
+      - GOOGL
+      - AMZN
+      - META
+      - NVDA
     # symbols:
     #   # Technology (Large Growth)
     #   - AAPL

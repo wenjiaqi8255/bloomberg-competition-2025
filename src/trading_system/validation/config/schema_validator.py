@@ -26,7 +26,9 @@ class SchemaValidator(BaseValidator):
     
     def __init__(self):
         super().__init__("SchemaValidator")
-        self.schemas_dir = Path(__file__).parent.parent.parent.parent / "configs" / "schemas"
+        # Navigate from: src/trading_system/validation/config/schema_validator.py
+        # To project root: ../../../../ then configs/schemas
+        self.schemas_dir = Path(__file__).parent.parent.parent.parent.parent / "configs" / "schemas"
         self._schemas_cache = {}
     
     def validate(self, config_data: Dict[str, Any], schema_name: str) -> ValidationResult:

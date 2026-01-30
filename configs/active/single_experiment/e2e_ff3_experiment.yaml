@@ -5,7 +5,7 @@ experiment:
 
 training_setup:
   model:
-    model_type: "ff3_regression"
+    model_type: "fama_macbeth"
     config:
       regularization: 'ridge'
       alpha: 1.0
@@ -30,7 +30,7 @@ training_setup:
     # Universe selection (Option A - minimally intrusive)
     # Uncomment to load symbols from CSV instead of inline list
     universe:
-      source: "tickers"
+      source: "csv"
       # csv_path: "./data/universes/complete_stock_data_converted.csv"
       # filters:
       #   min_market_cap: 1000 # $1B
@@ -69,8 +69,8 @@ factor_data_provider:
 
 strategy:
   name: "FF3"
-  type: "fama_french_3"
-  model_id: "ff3_regression_v1"
+  type: "fama_macbeth"
+  model_id: "fama_macbeth_v1"
   lookback_days: 252
   risk_free_rate: 0.02
 

@@ -30,7 +30,7 @@ training_setup:
     # Universe selection (Option A - minimally intrusive)
     # Uncomment to load symbols from CSV instead of inline list
     universe:
-      source: "tickers"
+      source: "csv"
       # csv_path: "./data/universes/complete_stock_data_converted.csv"
       # filters:
       #   min_market_cap: 1000 # $1B

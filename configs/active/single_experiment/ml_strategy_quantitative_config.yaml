@@ -88,7 +88,13 @@ training_setup:
     # Training period - same as Box-Based for controlled comparison
     start_date: "2022-01-01"
     end_date: "2023-12-31"
-    symbols: []
+    symbols:
+    - AAPL
+    - MSFT
+    - GOOGL
+    - AMZN
+    - META
+    - NVDA
 
   # Hyperparameter optimization configuration
   # Disabled for faster training - use default model config for controlled comparison

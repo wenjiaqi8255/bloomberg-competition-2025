@@ -26,7 +26,7 @@ factor_data_provider:
 
 training_setup:
   model:
-    model_type: "ff3_regression"
+    model_type: "fama_macbeth"
     config:
       regularization: 'ridge'
       alpha: 1.0
@@ -65,7 +65,13 @@ training_setup:
 
     start_date: "2022-01-01"
     end_date: "2023-12-31"
-    # symbols: []
+    symbols:
+      - AAPL
+      - MSFT
+      - GOOGL
+      - AMZN
+      - META
+      - NVDA
     # symbols:
     #   # Technology (Large Growth)
     #   - AAPL
@@ -168,7 +174,7 @@ backtest:
 # FF3 Strategy Configuration
 strategy:
   name: "FF3_BoxBased_Strategy"
-  type: "fama_french_3"
+  type: "fama_macbeth"
 
   parameters:
     model_id: "placeholder_model_id"  # Will be overwritten by orchestrator
