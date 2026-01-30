@@ -152,7 +152,7 @@ class MultiModelOrchestrator:
         params = config.get('parameters', {})
         
         if provider_type == "YFinanceProvider":
-            from src.trading_system.data.yfinance_provider import YFinanceProvider
+            from trading_system.data.yfinance_provider import YFinanceProvider
             return YFinanceProvider(**params)
         else:
             raise ValueError(f"Unsupported data provider type: {provider_type}")
@@ -163,7 +163,7 @@ class MultiModelOrchestrator:
         params = config.get('parameters', {})
 
         if provider_type == "FF5DataProvider":
-            from src.trading_system.data.ff5_provider import FF5DataProvider
+            from trading_system.data.ff5_provider import FF5DataProvider
             return FF5DataProvider(**params)
         else:
             return None  # Allow no factor data provider
@@ -435,8 +435,8 @@ class MultiModelOrchestrator:
         # 1. Collect strategy returns from backtest results
         logger.info("Collecting strategy returns from backtest results...")
         
-        from src.trading_system.data.enhanced_strategy_data_collector import EnhancedStrategyDataCollector
-        from src.trading_system.data.enhanced_strategy_data_collector import DataCollectionError
+        from trading_system.data.enhanced_strategy_data_collector import EnhancedStrategyDataCollector
+        from trading_system.data.enhanced_strategy_data_collector import DataCollectionError
         
         # Get strategy names and date range
         strategy_ids = [result['model_id'] for result in self.base_model_results]

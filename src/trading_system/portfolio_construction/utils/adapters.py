@@ -9,8 +9,8 @@ portfolio construction framework.
 import logging
 from typing import Dict, List, Any
 
-from src.trading_system.data.stock_classifier import InvestmentBox
-from src.trading_system.portfolio_construction.models.types import BoxKey
+from trading_system.data.stock_classifier import InvestmentBox
+from trading_system.portfolio_construction.models.types import BoxKey
 
 logger = logging.getLogger(__name__)
 

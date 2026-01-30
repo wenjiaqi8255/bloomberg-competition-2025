@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize, LinearConstraint, Bounds
 from .constraint_applier import ConstraintApplier
-from src.trading_system.portfolio_construction.utils.weight_utils import WeightUtils
+from trading_system.portfolio_construction.utils.weight_utils import WeightUtils
 
 logger = logging.getLogger(__name__)
 

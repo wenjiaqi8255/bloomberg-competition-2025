@@ -21,11 +21,11 @@ from sklearn.preprocessing import StandardScaler
 import joblib
 
 from .models.data_types import FeatureConfig
-from src.trading_system.feature_engineering.components.technical_features import TechnicalIndicatorCalculator
-from src.trading_system.feature_engineering.components.cross_sectional_features import CrossSectionalFeatureCalculator
+from trading_system.feature_engineering.components.technical_features import TechnicalIndicatorCalculator
+from trading_system.feature_engineering.components.cross_sectional_features import CrossSectionalFeatureCalculator
 from .utils.panel_data_transformer import PanelDataTransformer
-from src.trading_system.feature_engineering.utils.cache_provider import FeatureCacheProvider
-from src.trading_system.feature_engineering.utils.local_cache_provider import LocalCacheProvider
+from trading_system.feature_engineering.utils.cache_provider import FeatureCacheProvider
+from trading_system.feature_engineering.utils.local_cache_provider import LocalCacheProvider
 from .box_feature_provider import BoxFeatureProvider, BoxFeatureConfig
 
 logger = logging.getLogger(__name__)

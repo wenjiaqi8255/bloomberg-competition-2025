@@ -13,11 +13,11 @@ Key Features:
 
 Usage:
     # Basic usage
-    from src.trading_system.feature_engineering import compute_features
+    from trading_system.feature_engineering import compute_features
     result = compute_features(price_data, forward_returns)
 
     # Advanced usage with custom configuration
-    from src.trading_system.feature_engineering import FeatureEngine, FeatureConfig, FeatureType
+    from trading_system.feature_engineering import FeatureEngine, FeatureConfig, FeatureType
     config = FeatureConfig(
         enabled_features=[FeatureType.MOMENTUM, FeatureType.VOLATILITY],
         min_ic_threshold=0.05
@@ -38,7 +38,7 @@ from .models.data_types import (
     PriceData, ForwardReturns, ValidationData, FeatureData,
     validate_price_data, align_data, create_default_config
 )
-from src.trading_system.feature_engineering.base.feature import FeatureType, FeatureConfig
+from trading_system.feature_engineering.base.feature import FeatureType, FeatureConfig
 from .components.technical_features import TechnicalIndicatorCalculator
 
 
@@ -64,7 +64,7 @@ def compute_technical_features(price_data: PriceData,
 
     Example:
         >>> import pandas as pd
-        >>> from src.trading_system.feature_engineering import compute_technical_features
+        >>> from trading_system.feature_engineering import compute_technical_features
         >>>
         >>> # Prepare price data
         >>> price_data = {

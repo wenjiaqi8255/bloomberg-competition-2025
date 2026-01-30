@@ -20,7 +20,7 @@ from scipy import stats
 
 from ..base.base_model import BaseModel
 from ..utils.performance_evaluator import PerformanceEvaluator as PerformanceEvaluator
-from src.trading_system.experiment_tracking import ExperimentTrackerInterface
+from trading_system.experiment_tracking import ExperimentTrackerInterface
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +106,7 @@ class ModelMonitor:
         self.monitor_run_id = None
         if self.tracker:
             try:
-                from src.trading_system.experiment_tracking import ExperimentConfig
+                from trading_system.experiment_tracking import ExperimentConfig
                 monitor_config = ExperimentConfig(
                     project_name="model_monitoring",
                     experiment_name=f"monitor_{model_id}",

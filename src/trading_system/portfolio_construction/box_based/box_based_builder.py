@@ -12,23 +12,23 @@ from collections import OrderedDict
 import pandas as pd
 from datetime import datetime
 
-from src.trading_system.portfolio_construction.interface.interfaces import IPortfolioBuilder, IBoxSelector
-from src.trading_system.portfolio_construction.models.types import PortfolioConstructionRequest, BoxConstructionResult, BoxKey
-from src.trading_system.portfolio_construction.box_based.box_weight_manager import BoxWeightManager
-from src.trading_system.portfolio_construction.box_based.weight_allocator import (
+from trading_system.portfolio_construction.interface.interfaces import IPortfolioBuilder, IBoxSelector
+from trading_system.portfolio_construction.models.types import PortfolioConstructionRequest, BoxConstructionResult, BoxKey
+from trading_system.portfolio_construction.box_based.box_weight_manager import BoxWeightManager
+from trading_system.portfolio_construction.box_based.weight_allocator import (
     WeightAllocatorFactory, MeanVarianceAllocator
 )
-from src.trading_system.portfolio_construction.utils.adapters import ClassificationAdapter
-from src.trading_system.portfolio_construction.utils.component_factory import ComponentFactory
-from src.trading_system.portfolio_construction.utils.weight_utils import WeightUtils
-from src.trading_system.portfolio_construction.models.exceptions import (
+from trading_system.portfolio_construction.utils.adapters import ClassificationAdapter
+from trading_system.portfolio_construction.utils.component_factory import ComponentFactory
+from trading_system.portfolio_construction.utils.weight_utils import WeightUtils
+from trading_system.portfolio_construction.models.exceptions import (
     PortfolioConstructionError, ClassificationError, WeightAllocationError, InvalidConfigError
 )
-from src.trading_system.portfolio_construction.box_based.services import (
+from trading_system.portfolio_construction.box_based.services import (
     ClassificationService, StockSelectionService
 )
-from src.trading_system.data.stock_classifier import StockClassifier
-from src.trading_system.data.offline_stock_metadata_provider import OfflineStockMetadataProvider
+from trading_system.data.stock_classifier import StockClassifier
+from trading_system.data.offline_stock_metadata_provider import OfflineStockMetadataProvider
 
 logger = logging.getLogger(__name__)
 

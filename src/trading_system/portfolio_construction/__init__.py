@@ -13,8 +13,8 @@ Key Components:
 - PortfolioBuilderFactory: Factory for creating builders from config
 """
 
-from src.trading_system.portfolio_construction.interface.interfaces import IPortfolioBuilder, PortfolioConstructionRequest
-from src.trading_system.portfolio_construction.models.types import BoxKey, BoxConstructionResult
+from trading_system.portfolio_construction.interface.interfaces import IPortfolioBuilder, PortfolioConstructionRequest
+from trading_system.portfolio_construction.models.types import BoxKey, BoxConstructionResult
 from .factory import PortfolioBuilderFactory
 
 __all__ = [

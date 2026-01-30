@@ -9,12 +9,12 @@ system to use different construction methods.
 import logging
 from typing import Dict, Any, Union
 
-from src.trading_system.portfolio_construction.interface.interfaces import IPortfolioBuilder
-from src.trading_system.portfolio_construction.quant_based.quantitative_builder import QuantitativePortfolioBuilder
-from src.trading_system.portfolio_construction.box_based.box_based_builder import BoxBasedPortfolioBuilder
-from src.trading_system.validation.config.portfolio_validator import PortfolioConfigValidator
-from src.trading_system.portfolio_construction.models.exceptions import InvalidConfigError
-from src.trading_system.config.pydantic.portfolio import (
+from trading_system.portfolio_construction.interface.interfaces import IPortfolioBuilder
+from trading_system.portfolio_construction.quant_based.quantitative_builder import QuantitativePortfolioBuilder
+from trading_system.portfolio_construction.box_based.box_based_builder import BoxBasedPortfolioBuilder
+from trading_system.validation.config.portfolio_validator import PortfolioConfigValidator
+from trading_system.portfolio_construction.models.exceptions import InvalidConfigError
+from trading_system.config.pydantic.portfolio import (
     BoxBasedPortfolioConfig,
     QuantitativePortfolioConfig
 )

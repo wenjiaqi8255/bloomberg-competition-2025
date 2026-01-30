@@ -11,9 +11,9 @@ import pandas as pd
 from typing import Dict, Any, List
 from datetime import datetime
 
-from src.trading_system.metamodel.meta_model import MetaModel
-from src.trading_system.utils.performance import PerformanceMetrics
-from src.trading_system.data.enhanced_strategy_data_collector import EnhancedStrategyDataCollector, DataCollectionError
+from trading_system.metamodel.meta_model import MetaModel
+from trading_system.utils.performance import PerformanceMetrics
+from trading_system.data.enhanced_strategy_data_collector import EnhancedStrategyDataCollector, DataCollectionError
 
 logger = logging.getLogger(__name__)
 

@@ -15,15 +15,15 @@ import logging
 from typing import Dict, Any, Optional
 import pandas as pd
 
-from src.trading_system.data.stock_classifier import StockClassifier
-from src.trading_system.utils.risk import (
+from trading_system.data.stock_classifier import StockClassifier
+from trading_system.utils.risk import (
     CovarianceEstimator,
     SimpleCovarianceEstimator,
     LedoitWolfCovarianceEstimator,
     FactorModelCovarianceEstimator,
     CachedCovarianceEstimator
 )
-from src.trading_system.data.offline_stock_metadata_provider import OfflineStockMetadataProvider
+from trading_system.data.offline_stock_metadata_provider import OfflineStockMetadataProvider
 
 logger = logging.getLogger(__name__)
 

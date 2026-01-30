@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Union
 
 import pandas as pd
 
-from src.trading_system.utils.wandb_logger import WandBLogger
+from trading_system.utils.wandb_logger import WandBLogger
 from .interface import ExperimentTrackerInterface, ExperimentTrackingError
 from .config import ExperimentConfig
 from .visualizer import ExperimentVisualizer

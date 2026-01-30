@@ -9,9 +9,9 @@ consistent behavior.
 import logging
 from typing import Dict, List, Any, Tuple
 
-from src.trading_system.portfolio_construction.interface.interfaces import IBoxWeightProvider
-from src.trading_system.portfolio_construction.models.types import BoxKey
-from src.trading_system.portfolio_construction.models.exceptions import InvalidConfigError
+from trading_system.portfolio_construction.interface.interfaces import IBoxWeightProvider
+from trading_system.portfolio_construction.models.types import BoxKey
+from trading_system.portfolio_construction.models.exceptions import InvalidConfigError
 
 logger = logging.getLogger(__name__)
 

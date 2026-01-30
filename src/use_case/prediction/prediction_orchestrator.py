@@ -23,14 +23,14 @@ import pandas as pd
 import numpy as np
 
 from .data_types import PredictionResult, StockRecommendation
-from ...trading_system.strategies.factory import StrategyFactory
-from ...trading_system.portfolio_construction.factory import PortfolioBuilderFactory
-from ...trading_system.portfolio_construction.models.types import (
+from trading_system.strategies.factory import StrategyFactory
+from trading_system.portfolio_construction.factory import PortfolioBuilderFactory
+from trading_system.portfolio_construction.models.types import (
     PortfolioConstructionRequest, 
     BoxConstructionResult,
     BoxKey
 )
-from ...trading_system.data.base_data_provider import BaseDataProvider
+from trading_system.data.base_data_provider import BaseDataProvider
 
 logger = logging.getLogger(__name__)
 
@@ -158,7 +158,7 @@ class PredictionOrchestrator:
         params = config.get('parameters', {})
         
         if provider_type == "YFinanceProvider":
-            from ...trading_system.data.yfinance_provider import YFinanceProvider
+            from trading_system.data.yfinance_provider import YFinanceProvider
             return YFinanceProvider(**params)
         else:
             raise ValueError(f"Unsupported data provider type: {provider_type}")
@@ -172,7 +172,7 @@ class PredictionOrchestrator:
         params = config.get('parameters', {})
         
         if provider_type == "FF5DataProvider":
-            from ...trading_system.data.ff5_provider import FF5DataProvider
+            from trading_system.data.ff5_provider import FF5DataProvider
             return FF5DataProvider(**params)
         else:
             logger.warning(f"Unknown factor data provider type: {provider_type}")
@@ -231,7 +231,7 @@ class PredictionOrchestrator:
                 raise ValueError("universe.source=csv specified but csv_path is missing")
             
             filters = universe_config.get('filters', {})
-            from ...trading_system.data.utils.universe_loader import load_universe_from_csv
+            from trading_system.data.utils.universe_loader import load_universe_from_csv
             return load_universe_from_csv(csv_path, filters)
         
         # Fallback to inline symbols

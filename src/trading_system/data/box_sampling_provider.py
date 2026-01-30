@@ -14,8 +14,8 @@ import pandas as pd
 
 from .base_data_provider import ClassificationProvider
 from .filters.liquidity_filter import LiquidityFilter
-from src.trading_system.portfolio_construction.models.types import BoxKey
-from src.trading_system.portfolio_construction.utils.adapters import ClassificationAdapter
+from trading_system.portfolio_construction.models.types import BoxKey
+from trading_system.portfolio_construction.utils.adapters import ClassificationAdapter
 
 logger = logging.getLogger(__name__)
 

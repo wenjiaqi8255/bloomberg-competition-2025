@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Any
 import pandas as pd
 from datetime import datetime
 
-from ...trading_system.portfolio_construction.models.types import BoxKey
+from trading_system.portfolio_construction.models.types import BoxKey
 
 
 @dataclass

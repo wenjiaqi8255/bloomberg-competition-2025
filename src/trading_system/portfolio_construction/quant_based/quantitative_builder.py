@@ -11,17 +11,17 @@ from typing import Dict, List, Any
 import pandas as pd
 from datetime import datetime
 
-from src.trading_system.portfolio_construction.interface.interfaces import IPortfolioBuilder
-from src.trading_system.portfolio_construction.models.types import PortfolioConstructionRequest, BoxConstructionResult
-from src.trading_system.portfolio_construction.utils.adapters import ClassificationAdapter
-from src.trading_system.portfolio_construction.models.exceptions import (
+from trading_system.portfolio_construction.interface.interfaces import IPortfolioBuilder
+from trading_system.portfolio_construction.models.types import PortfolioConstructionRequest, BoxConstructionResult
+from trading_system.portfolio_construction.utils.adapters import ClassificationAdapter
+from trading_system.portfolio_construction.models.exceptions import (
     PortfolioConstructionError, OptimizationError,
     ClassificationError, InvalidConfigError
 )
-from src.trading_system.optimization.optimizer import PortfolioOptimizer
-from src.trading_system.portfolio_construction.utils.component_factory import ComponentFactory
-from src.trading_system.portfolio_construction.utils.weight_utils import WeightUtils
-from src.trading_system.data.box_sampling_provider import BoxSamplingProvider
+from trading_system.optimization.optimizer import PortfolioOptimizer
+from trading_system.portfolio_construction.utils.component_factory import ComponentFactory
+from trading_system.portfolio_construction.utils.weight_utils import WeightUtils
+from trading_system.data.box_sampling_provider import BoxSamplingProvider
 
 logger = logging.getLogger(__name__)
 

@@ -13,10 +13,10 @@ import pandas as pd
 from datetime import datetime
 from collections import OrderedDict
 
-from src.trading_system.portfolio_construction.models.types import BoxKey
-from src.trading_system.portfolio_construction.utils.adapters import ClassificationAdapter
-from src.trading_system.data.stock_classifier import StockClassifier
-from src.trading_system.portfolio_construction.interface.interfaces import IBoxSelector
+from trading_system.portfolio_construction.models.types import BoxKey
+from trading_system.portfolio_construction.utils.adapters import ClassificationAdapter
+from trading_system.data.stock_classifier import StockClassifier
+from trading_system.portfolio_construction.interface.interfaces import IBoxSelector
 
 logger = logging.getLogger(__name__)
 

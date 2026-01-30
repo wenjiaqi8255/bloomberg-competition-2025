@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Any
 import pandas as pd
 import numpy as np
-from src.trading_system.feature_engineering.base.feature import FeatureConfig
+from trading_system.feature_engineering.base.feature import FeatureConfig
 
 
 # ============================================================================

@@ -4,14 +4,14 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-from src.trading_system.data.enhanced_strategy_data_collector import EnhancedStrategyDataCollector
-from src.trading_system.metamodel.meta_model import MetaModel
-from src.trading_system.models.model_persistence import ModelRegistry
-from src.trading_system.utils.performance import PerformanceMetrics
-from src.trading_system.backtesting.engine import BacktestEngine
+from trading_system.data.enhanced_strategy_data_collector import EnhancedStrategyDataCollector
+from trading_system.metamodel.meta_model import MetaModel
+from trading_system.models.model_persistence import ModelRegistry
+from trading_system.utils.performance import PerformanceMetrics
+from trading_system.backtesting.engine import BacktestEngine
 
 try:
-    from src.trading_system.config.backtest import BacktestConfig  # type: ignore
+    from trading_system.config.backtest import BacktestConfig  # type: ignore
 except Exception:  # pragma: no cover
     BacktestConfig = object  # type: ignore
 

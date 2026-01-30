@@ -10,11 +10,11 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime
 import pandas as pd
 
-from src.trading_system.portfolio_construction.interface.interfaces import IWithinBoxAllocator
-from src.trading_system.portfolio_construction.models.exceptions import WeightAllocationError
-from src.trading_system.optimization.optimizer import PortfolioOptimizer
-from src.trading_system.utils.risk import CovarianceEstimator
-from src.trading_system.portfolio_construction.utils.weight_utils import WeightUtils
+from trading_system.portfolio_construction.interface.interfaces import IWithinBoxAllocator
+from trading_system.portfolio_construction.models.exceptions import WeightAllocationError
+from trading_system.optimization.optimizer import PortfolioOptimizer
+from trading_system.utils.risk import CovarianceEstimator
+from trading_system.portfolio_construction.utils.weight_utils import WeightUtils
 
 logger = logging.getLogger(__name__)
 

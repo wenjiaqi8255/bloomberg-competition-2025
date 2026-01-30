@@ -10,7 +10,7 @@ from typing import Optional
 
 import pandas as pd
 
-from src.trading_system.experiment_tracking import ExperimentTrackerInterface
+from trading_system.experiment_tracking import ExperimentTrackerInterface
 
 logger = logging.getLogger(__name__)
 

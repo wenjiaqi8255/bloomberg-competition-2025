@@ -62,7 +62,7 @@ from ..data.yfinance_provider import YFinanceProvider
 # New backtesting architecture
 from ..backtesting import BacktestEngine
 from ..strategies.factory import StrategyFactory
-from src.trading_system.experiment_tracking import (
+from trading_system.experiment_tracking import (
     ExperimentTrackerInterface,
     NullExperimentTracker,
     WandBExperimentTracker,
@@ -73,7 +73,7 @@ from ..types import TradingSignal, SignalType
 from ..portfolio_construction import (
     IPortfolioBuilder, PortfolioConstructionRequest, PortfolioBuilderFactory
 )
-from src.trading_system.portfolio_construction.utils.weight_utils import WeightUtils
+from trading_system.portfolio_construction.utils.weight_utils import WeightUtils
 
 logger = logging.getLogger(__name__)
 
