@@ -1116,7 +1116,7 @@ class StrategyRunner:
             
             if benchmark_config.source == "csv":
                 # Load from CSV file
-                from ...trading_system.data.utils.benchmark_loader import load_benchmark_from_csv
+                from trading_system.data.utils.benchmark_loader import load_benchmark_from_csv
                 
                 if not benchmark_config.csv_path:
                     logger.warning("benchmark.csv_path not specified, skipping CSV benchmark")
