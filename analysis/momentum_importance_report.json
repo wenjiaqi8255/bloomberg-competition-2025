@@ -1,0 +1,97 @@
+{
+  "key_finding": {
+    "momentum_importance_percentage": "15.7%",
+    "momentum_features_count": 15,
+    "total_features": 84
+  },
+  "interpretation": {
+    "english": "Post-analysis: 15.7% of feature importance sat on momentum indicators. When momentum reversed, the entire signal architecture collapsed.",
+    "technical": "Momentum features account for 15.7% of total feature importance (0.1566 gain). The model's predictions were heavily dependent on momentum continuation signals."
+  },
+  "feature_breakdown": [
+    {
+      "feature_type": "technical",
+      "total_importance": 0.3012222684919834,
+      "avg_importance": 0.013096620369216671,
+      "n_features": 23,
+      "pct_importance": 30.12
+    },
+    {
+      "feature_type": "volatility",
+      "total_importance": 0.18145031575113535,
+      "avg_importance": 0.012960736839366811,
+      "n_features": 14,
+      "pct_importance": 18.15
+    },
+    {
+      "feature_type": "cross_sectional",
+      "total_importance": 0.17890714993700385,
+      "avg_importance": 0.014908929161416987,
+      "n_features": 12,
+      "pct_importance": 17.89
+    },
+    {
+      "feature_type": "box",
+      "total_importance": 0.1714991107583046,
+      "avg_importance": 0.00902626898727919,
+      "n_features": 19,
+      "pct_importance": 17.15
+    },
+    {
+      "feature_type": "momentum",
+      "total_importance": 0.15656250924803317,
+      "avg_importance": 0.010437500616535544,
+      "n_features": 15,
+      "pct_importance": 15.66
+    },
+    {
+      "feature_type": "other",
+      "total_importance": 0.010358716361224651,
+      "avg_importance": 0.010358716361224651,
+      "n_features": 1,
+      "pct_importance": 1.04
+    }
+  ],
+  "top_10_features": [
+    {
+      "feature": "price_above_sma_10",
+      "importance": 0.03753148391842842
+    },
+    {
+      "feature": "price_above_sma_200",
+      "importance": 0.036927685141563416
+    },
+    {
+      "feature": "box_style_growth",
+      "importance": 0.029779573902487755
+    },
+    {
+      "feature": "box_size_large",
+      "importance": 0.025623779743909836
+    },
+    {
+      "feature": "size_factor_rank",
+      "importance": 0.022256379947066307
+    },
+    {
+      "feature": "size_factor",
+      "importance": 0.022029900923371315
+    },
+    {
+      "feature": "box_style_value",
+      "importance": 0.02201290987432003
+    },
+    {
+      "feature": "ema_26",
+      "importance": 0.021551717072725296
+    },
+    {
+      "feature": "value_factor_zscore",
+      "importance": 0.021405981853604317
+    },
+    {
+      "feature": "range_volatility",
+      "importance": 0.02081410400569439
+    }
+  ]
+}

@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+html { background: #ffffff; }
+body {
+  width: 720pt; height: 405pt; margin: 0; padding: 0;
+  background: #1C2833;
+  font-family: Arial, sans-serif;
+  color: #FFFFFF;
+}
+.header {
+  padding: 20pt 40pt 15pt 40pt;
+  border-bottom: 3pt solid #5EA8A7;
+}
+.content {
+  padding: 15pt 40pt;
+  display: flex;
+  gap: 25pt;
+}
+.left-col {
+  flex: 1.2;
+}
+.right-col {
+  flex: 0.8;
+}
+h1 {
+  font-size: 36pt;
+  margin: 0;
+  font-weight: bold;
+}
+h2 {
+  font-size: 18pt;
+  margin: 0 0 10pt 0;
+  color: #5EA8A7;
+}
+.config-box {
+  background: #2E4053;
+  padding: 15pt;
+  border-radius: 8pt;
+  margin-bottom: 15pt;
+  border: 1pt solid rgba(94, 168, 167, 0.5);
+}
+.config-title {
+  font-size: 14pt;
+  font-weight: bold;
+  color: #5EA8A7;
+  margin: 0 0 8pt 0;
+}
+.config-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8pt;
+}
+.config-item {
+  font-size: 12pt;
+  padding: 8pt;
+  background: rgba(94, 168, 167, 0.15);
+  border-radius: 4pt;
+  text-align: center;
+}
+.config-label {
+  font-weight: bold;
+  color: #5EA8A7;
+}
+ul {
+  margin: 10pt 0 0 0;
+  padding-left: 20pt;
+}
+li {
+  font-size: 13pt;
+  margin: 6pt 0;
+  line-height: 1.3;
+}
+.highlight {
+  color: #5EA8A7;
+  font-weight: bold;
+}
+.features-box {
+  background: rgba(94, 168, 167, 0.2);
+  padding: 15pt;
+  border-radius: 8pt;
+  border-left: 3pt solid #5EA8A7;
+  margin-top: 15pt;
+}
+.features-box p {
+  font-size: 13pt;
+  margin: 0;
+  line-height: 1.5;
+}
+.result-box {
+  background: #EED6D3;
+  padding: 15pt;
+  border-radius: 8pt;
+  margin-top: 15pt;
+  color: #191A19;
+}
+.result-box p {
+  font-size: 13pt;
+  margin: 5pt 0;
+  font-weight: bold;
+}
+.result-number {
+  font-size: 24pt;
+  color: #C0392B;
+  text-align: center;
+}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>ML Strategy Methodology</h1>
+</div>
+<div class="content">
+  <div class="left-col">
+    <h2>XGBoost Model Configuration</h2>
+    <div class="config-box">
+      <p class="config-title">Model Architecture</p>
+      <div class="config-grid">
+        <div class="config-item"><span class="config-label">Type:</span> XGBoost</div>
+        <div class="config-item"><span class="config-label">Estimators:</span> 100</div>
+        <div class="config-item"><span class="config-label">Max Depth:</span> 3</div>
+        <div class="config-item"><span class="config-label">Learning Rate:</span> 0.05</div>
+        <div class="config-item"><span class="config-label">Subsample:</span> 0.8</div>
+        <div class="config-item"><span class="config-label">Early Stopping:</span> 10 rounds</div>
+        <div class="config-item"><span class="config-label">L1 Regularization:</span> 0.5</div>
+        <div class="config-item"><span class="config-label">L2 Regularization:</span> 1.5</div>
+      </div>
+    </div>
+    <div class="features-box">
+      <p><strong>Feature Engineering (30+ features):</strong></p>
+      <ul style="margin-top: 10pt;">
+        <li>Momentum indicators (21, 63, 252 periods)</li>
+        <li>Volatility features (20, 60-day windows)</li>
+        <li>Technical indicators (RSI, MACD, Bollinger Bands)</li>
+        <li>Volume analysis and patterns</li>
+        <li>Cross-sectional features (market cap, book-to-market)</li>
+        <li>Box classification (size, style, region, sector)</li>
+      </ul>
+    </div>
+  </div>
+  <div class="right-col">
+    <h2>Training & Validation</h2>
+    <ul>
+      <li><strong>Training Data:</strong> 45,152 data points</li>
+      <li><strong>Method:</strong> Walk-forward validation</li>
+      <li><strong>Hyperparameter:</strong> Grid search optimization</li>
+      <li><strong>Cross-validation:</strong> Time series split</li>
+      <li><strong>Feature Selection:</strong> IC validation</li>
+    </ul>
+    <div class="result-box">
+      <p style="margin-bottom: 10pt;">ML Strategy Performance:</p>
+      <p class="result-number">-39.61%</p>
+      <p style="text-align: center; font-size: 11pt;">Total Return</p>
+      <p style="text-align: center; font-size: 11pt; margin-top: 5pt;">Sharpe: -0.545 | Max DD: -57.75%</p>
+    </div>
+    <div style="margin-top: 15pt; padding: 12pt; background: rgba(236, 112, 81, 0.2); border-radius: 6pt; border-left: 3pt solid #E07A5F; font-size: 12px;">
+      <strong style="color: #E07A5F;">Note:</strong> ML strategy underperformed FF5 significantly
+    </div>
+  </div>
+</div>
+</body>
+</html>

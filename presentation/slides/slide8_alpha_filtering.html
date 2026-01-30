@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+html { background: #ffffff; }
+body {
+  width: 720pt; height: 405pt; margin: 0; padding: 0;
+  background: #1C2833;
+  font-family: Arial, sans-serif;
+  color: #FFFFFF;
+}
+.header {
+  padding: 20pt 40pt 15pt 40pt;
+  border-bottom: 3pt solid #5EA8A7;
+}
+.content {
+  padding: 15pt 40pt;
+}
+h1 {
+  font-size: 36pt;
+  margin: 0;
+  font-weight: bold;
+}
+.subtitle {
+  font-size: 20pt;
+  color: #5EA8A7;
+  margin: 10pt 0 25pt 0;
+}
+.comparison {
+  display: flex;
+  gap: 20pt;
+  margin-bottom: 20pt;
+}
+.metric-box {
+  flex: 1;
+  background: #2E4053;
+  padding: 15pt;
+  border-radius: 8pt;
+  border: 2pt solid #40695B;
+  text-align: center;
+}
+.metric-title {
+  font-size: 14pt;
+  margin: 0 0 10pt 0;
+  color: #AAB7B8;
+}
+.metric-value {
+  font-size: 32pt;
+  font-weight: bold;
+  margin: 0 0 5pt 0;
+  color: #5EA8A7;
+}
+.metric-improvement {
+  font-size: 16pt;
+  font-weight: bold;
+  color: #40695B;
+  margin: 0;
+}
+.diagram {
+  background: rgba(94, 168, 167, 0.15);
+  padding: 20pt;
+  border-radius: 8pt;
+  border: 2pt solid #5EA8A7;
+  margin-top: 20pt;
+}
+.diagram-title {
+  font-size: 16pt;
+  font-weight: bold;
+  color: #5EA8A7;
+  margin: 0 0 15pt 0;
+  text-align: center;
+}
+.flow {
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+  font-size: 13pt;
+}
+.flow-step {
+  text-align: center;
+}
+.flow-arrow {
+  font-size: 24pt;
+  color: #5EA8A7;
+}
+.highlight-box {
+  background: #40695B;
+  padding: 15pt 20pt;
+  border-radius: 8pt;
+  text-align: center;
+  margin-top: 20pt;
+}
+.highlight-box p {
+  font-size: 18pt;
+  margin: 0;
+  font-weight: bold;
+}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Key Innovation: Alpha T-Statistic Filtering</h1>
+  <p class="subtitle">Statistical Significance as a Quality Filter</p>
+</div>
+<div class="content">
+  <div class="comparison">
+    <div class="metric-box">
+      <p class="metric-title">Sharpe Ratio</p>
+      <p class="metric-value">0.62 → 1.17</p>
+      <p class="metric-improvement">+88.7% Improvement</p>
+    </div>
+    <div class="metric-box">
+      <p class="metric-title">Total Return</p>
+      <p class="metric-value">11.17% → 40.42%</p>
+      <p class="metric-improvement">+262% Improvement</p>
+    </div>
+    <div class="metric-box">
+      <p class="metric-title">Max Drawdown</p>
+      <p class="metric-value">-73.27% → -66.88%</p>
+      <p class="metric-improvement">8.7% Improvement</p>
+    </div>
+  </div>
+  <div class="diagram">
+    <p class="diagram-title">Filtering Mechanism</p>
+    <div class="flow">
+      <div class="flow-step">
+        <p><strong>214 Stocks</strong></p>
+        <p style="color: #AAB7B8; font-size: 11pt;">With Alpha Signals</p>
+      </div>
+      <p class="flow-arrow">→</p>
+      <div class="flow-step">
+        <p><strong>Calculate T-Statistics</strong></p>
+        <p style="color: #AAB7B8; font-size: 11pt;">α / SE(α) for each stock</p>
+      </div>
+      <p class="flow-arrow">→</p>
+      <div class="flow-step">
+        <p><strong>Apply Threshold</strong></p>
+        <p style="color: #AAB7B8; font-size: 11pt;">|t-stat| < 2.0 → α = 0</p>
+      </div>
+      <p class="flow-arrow">→</p>
+      <div class="flow-step">
+        <p><strong>179 Stocks</strong></p>
+        <p style="color: #40695B; font-size: 11pt; font-weight: bold;">91 Filtered Out</p>
+      </div>
+    </div>
+  </div>
+  <div class="highlight-box">
+    <p>INSIGHT: Filtering noise signals is more important than model complexity</p>
+  </div>
+</div>
+</body>
+</html>

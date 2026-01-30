@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+html { background: #ffffff; }
+body {
+  width: 720pt; height: 405pt; margin: 0; padding: 0;
+  background: #1C2833;
+  font-family: Arial, sans-serif;
+  color: #FFFFFF;
+}
+.header {
+  padding: 15pt 40pt 10pt 40pt;
+  border-bottom: 3pt solid #5EA8A7;
+}
+.content {
+  padding: 10pt 40pt 15pt 40pt;
+}
+h1 {
+  font-size: 30pt;
+  margin: 0;
+  font-weight: bold;
+}
+.future-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10pt;
+  margin-top: 10pt;
+}
+.future-card {
+  background: #2E4053;
+  padding: 10pt;
+  border-radius: 8pt;
+  border: 1pt solid rgba(94, 168, 167, 0.5);
+}
+.future-number {
+  font-size: 18pt;
+  font-weight: bold;
+  color: #5EA8A7;
+  margin: 0 0 5pt 0;
+}
+.future-title {
+  font-size: 11pt;
+  font-weight: bold;
+  margin: 0 0 5pt 0;
+}
+.future-desc {
+  font-size: 9pt;
+  color: #AAB7B8;
+  margin: 0;
+  line-height: 1.3;
+}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Future Work</h1>
+</div>
+<div class="content">
+  <div class="future-grid">
+    <div class="future-card">
+      <p class="future-number">1</p>
+      <p class="future-title">Longer Backtest</p>
+      <p class="future-desc">Extend to 1-2 years for robust validation</p>
+    </div>
+    <div class="future-card">
+      <p class="future-number">2</p>
+      <p class="future-title">Ensemble Methods</p>
+      <p class="future-desc">Combine FF5 and ML signals</p>
+    </div>
+    <div class="future-card">
+      <p class="future-number">3</p>
+      <p class="future-title">Additional Factors</p>
+      <p class="future-desc">Momentum, quality, low-volatility</p>
+    </div>
+    <div class="future-card">
+      <p class="future-number">4</p>
+      <p class="future-title">Dynamic Filtering</p>
+      <p class="future-desc">Adaptive thresholds by market regime</p>
+    </div>
+    <div class="future-card">
+      <p class="future-number">5</p>
+      <p class="future-title">Alternative Risk</p>
+      <p class="future-desc">Regime-aware covariance estimation</p>
+    </div>
+    <div class="future-card">
+      <p class="future-number">6</p>
+      <p class="future-title">Intraday Trading</p>
+      <p class="future-desc">Higher frequency rebalancing</p>
+    </div>
+  </div>
+</div>
+</body>
+</html>

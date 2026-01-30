@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+html { background: #ffffff; }
+body {
+  width: 720pt; height: 405pt; margin: 0; padding: 0;
+  background: #1C2833;
+  font-family: Arial, sans-serif;
+  color: #FFFFFF;
+}
+.header {
+  padding: 20pt 40pt 15pt 40pt;
+  border-bottom: 3pt solid #5EA8A7;
+}
+.content {
+  padding: 15pt 40pt;
+  display: flex;
+  gap: 25pt;
+}
+.left-col {
+  flex: 1;
+}
+.right-col {
+  flex: 1;
+}
+h1 {
+  font-size: 36pt;
+  margin: 0;
+  font-weight: bold;
+}
+h2 {
+  font-size: 18pt;
+  margin: 0 0 12pt 0;
+  color: #5EA8A7;
+}
+.spec-box {
+  background: #2E4053;
+  padding: 15pt;
+  border-radius: 8pt;
+  margin-bottom: 15pt;
+  border: 1pt solid rgba(94, 168, 167, 0.5);
+}
+.spec-title {
+  font-size: 14pt;
+  font-weight: bold;
+  color: #5EA8A7;
+  margin: 0 0 8pt 0;
+}
+.spec-list {
+  margin: 0;
+  padding-left: 18pt;
+}
+.spec-list li {
+  font-size: 13pt;
+  margin: 5pt 0;
+  line-height: 1.3;
+}
+.metrics-box {
+  background: rgba(94, 168, 167, 0.2);
+  padding: 15pt;
+  border-radius: 8pt;
+  border-left: 3pt solid #5EA8A7;
+}
+.metrics-box p {
+  font-size: 13pt;
+  margin: 0;
+  line-height: 1.5;
+}
+.highlight {
+  color: #5EA8A7;
+  font-weight: bold;
+}
+.number {
+  font-size: 24pt;
+  color: #5EA8A7;
+  font-weight: bold;
+}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Backtesting Framework</h1>
+</div>
+<div class="content">
+  <div class="left-col">
+    <h2>Academic Standards</h2>
+    <div class="spec-box">
+      <p class="spec-title">Reference: Lopez de Prado (2018)</p>
+      <ul class="spec-list">
+        <li><strong>Capital Base:</strong> $1,000,000</li>
+        <li><strong>Period:</strong> 2025-07-01 to 2025-08-15 (32 days)</li>
+        <li><strong>Rebalancing:</strong> Monthly frequency</li>
+        <li><strong>Transaction Costs:</strong> 0.2% per trade</li>
+        <li><strong>Commission:</strong> 0.1%</li>
+        <li><strong>Slippage:</strong> 0.05%</li>
+        <li><strong>Spread:</strong> 0.05%</li>
+      </ul>
+    </div>
+    <div class="spec-box">
+      <p class="spec-title">Cost Models</p>
+      <ul class="spec-list">
+        <li>Frazzini et al. (2012): Market impact</li>
+        <li>Almgren et al. (2005): Direct estimation</li>
+        <li>Perold (1988): Implementation shortfall</li>
+      </ul>
+    </div>
+  </div>
+  <div class="right-col">
+    <h2>55 Academic Metrics</h2>
+    <div class="metrics-box">
+      <p><span class="highlight">Risk-Adjusted Returns (7):</span> Sharpe, Sortino, Treynor, Information Ratio, Jensen's Alpha, Modigliani, Omega</p>
+    </div>
+    <div class="metrics-box">
+      <p><span class="highlight">Drawdown Analysis (8):</span> Max DD, Avg DD, Recovery Time, Duration, Calmar, Sterling, Burke, Pain Index</p>
+    </div>
+    <div class="metrics-box">
+      <p><span class="highlight">Risk Measures (10):</span> VaR (95%, 99%), CVaR, Expected Shortfall, Skewness, Kurtosis, Tail Ratio</p>
+    </div>
+    <div class="metrics-box">
+      <p><span class="highlight">Statistical Tests (12):</span> T-statistic, P-value, Confidence Intervals, Hit Rate, Profit Factor</p>
+    </div>
+    <div class="metrics-box">
+      <p><span class="highlight">Beta Analysis (8):</span> Beta, Beta Stability, Up/Down Capture, Tracking Error, Correlation, R²</p>
+    </div>
+    <div class="metrics-box">
+      <p><span class="highlight">Trading Performance (10):</span> Total Return, CAGR, Volatility, Turnover, Win/Loss Ratio, SQN</p>
+    </div>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+html { background: #ffffff; }
+body {
+  width: 720pt; height: 405pt; margin: 0; padding: 0;
+  background: #1C2833;
+  font-family: Arial, sans-serif;
+  color: #FFFFFF;
+}
+.header {
+  padding: 20pt 40pt 15pt 40pt;
+  border-bottom: 3pt solid #5EA8A7;
+}
+.content {
+  padding: 15pt 40pt;
+}
+h1 {
+  font-size: 30pt;
+  margin: 0;
+  font-weight: bold;
+}
+.subtitle {
+  font-size: 16pt;
+  color: #5EA8A7;
+  margin: 5pt 0 15pt 0;
+}
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8pt;
+  margin-bottom: 10pt;
+}
+.metric-card {
+  background: #2E4053;
+  padding: 10pt;
+  border-radius: 6pt;
+  border: 2pt solid #5EA8A7;
+  text-align: center;
+}
+.metric-label {
+  font-size: 11pt;
+  color: #AAB7B8;
+  margin: 0 0 5pt 0;
+}
+.metric-value {
+  font-size: 22pt;
+  font-weight: bold;
+  color: #5EA8A7;
+  margin: 0;
+}
+.placeholder {
+  background: #CCCCCC;
+  height: 90pt;
+  border-radius: 6pt;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #666666;
+  font-size: 14pt;
+  font-weight: bold;
+  margin-top: 5pt;
+}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Results - Overall Performance</h1>
+  <p class="subtitle">FF5 Strategy with Alpha T-Statistic Filtering</p>
+</div>
+<div class="content">
+  <div class="metrics-grid">
+    <div class="metric-card">
+      <p class="metric-label">Total Return</p>
+      <p class="metric-value">40.42%</p>
+    </div>
+    <div class="metric-card">
+      <p class="metric-label">Annualized Return</p>
+      <p class="metric-value">74.90%</p>
+    </div>
+    <div class="metric-card">
+      <p class="metric-label">Sharpe Ratio</p>
+      <p class="metric-value">1.17</p>
+    </div>
+    <div class="metric-card">
+      <p class="metric-label">Max Drawdown</p>
+      <p class="metric-value">-66.88%</p>
+    </div>
+    <div class="metric-card">
+      <p class="metric-label">Final Equity</p>
+      <p class="metric-value">$1.40M</p>
+    </div>
+    <div class="metric-card">
+      <p class="metric-label">Position Count</p>
+      <p class="metric-value">179 stocks</p>
+    </div>
+  </div>
+  <div class="placeholder">
+    [Equity Curve Chart Placeholder]
+  </div>
+</div>
+</body>
+</html>

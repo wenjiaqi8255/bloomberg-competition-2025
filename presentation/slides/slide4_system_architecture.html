@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+html { background: #ffffff; }
+body {
+  width: 720pt; height: 405pt; margin: 0; padding: 0;
+  background: #1C2833;
+  font-family: Arial, sans-serif;
+  color: #FFFFFF;
+}
+.header {
+  padding: 20pt 40pt 15pt 40pt;
+  border-bottom: 3pt solid #5EA8A7;
+}
+.content {
+  padding: 15pt 40pt;
+}
+h1 {
+  font-size: 36pt;
+  margin: 0;
+  font-weight: bold;
+}
+.flow-diagram {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 30pt 0;
+  padding: 0 20pt;
+}
+.flow-box {
+  background: #2E4053;
+  padding: 15pt 20pt;
+  border-radius: 8pt;
+  text-align: center;
+  border: 2pt solid #5EA8A7;
+  flex: 1;
+  margin: 0 5pt;
+}
+.flow-title {
+  font-size: 14pt;
+  font-weight: bold;
+  color: #5EA8A7;
+  margin: 0 0 8pt 0;
+}
+.flow-desc {
+  font-size: 11pt;
+  margin: 0;
+  line-height: 1.3;
+}
+.arrow {
+  font-size: 24pt;
+  color: #5EA8A7;
+  font-weight: bold;
+}
+.details {
+  display: flex;
+  gap: 20pt;
+  margin-top: 25pt;
+}
+.detail-col {
+  flex: 1;
+}
+.detail-title {
+  font-size: 16pt;
+  font-weight: bold;
+  color: #5EA8A7;
+  margin: 0 0 10pt 0;
+}
+.detail-list {
+  margin: 0;
+  padding-left: 20pt;
+}
+.detail-list li {
+  font-size: 13pt;
+  margin: 6pt 0;
+  line-height: 1.3;
+}
+.innovation {
+  background: rgba(94, 168, 167, 0.2);
+  padding: 15pt;
+  border-radius: 8pt;
+  border-left: 4pt solid #5EA8A7;
+  margin-top: 20pt;
+}
+.innovation-text {
+  font-size: 16pt;
+  margin: 0;
+}
+.innovation-text strong {
+  color: #5EA8A7;
+}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>System Architecture Overview</h1>
+</div>
+<div class="content">
+  <div class="flow-diagram">
+    <div class="flow-box">
+      <p class="flow-title">Data Layer</p>
+      <p class="flow-desc">YFinance Prices<br/>Fama-French 5-Factor</p>
+    </div>
+    <p class="arrow">→</p>
+    <div class="flow-box">
+      <p class="flow-title">Strategy Layer</p>
+      <p class="flow-desc">FF5 Model<br/>XGBoost ML</p>
+    </div>
+    <p class="arrow">→</p>
+    <div class="flow-box">
+      <p class="flow-title">Signal Processing</p>
+      <p class="flow-desc">Alpha T-Statistic<br/>Filtering</p>
+    </div>
+    <p class="arrow">→</p>
+    <div class="flow-box">
+      <p class="flow-title">Risk Management</p>
+      <p class="flow-desc">Position Limits<br/>55 Metrics</p>
+    </div>
+  </div>
+  <div class="details">
+    <div class="detail-col">
+      <p class="detail-title">Core Components</p>
+      <ul class="detail-list">
+        <li>Feature Engineering Pipeline (30+ features)</li>
+        <li>Box-Based Portfolio Construction</li>
+        <li>Mean-Variance Optimization (Ledoit-Wolf)</li>
+        <li>Realistic Transaction Cost Modeling (0.2%)</li>
+      </ul>
+    </div>
+    <div class="detail-col">
+      <p class="detail-title">Academic Standards</p>
+      <ul class="detail-list">
+        <li>Lopez de Prado (2018) backtesting framework</li>
+        <li>No look-ahead bias with strict temporal controls</li>
+        <li>Walk-forward validation for ML models</li>
+        <li>Information Coefficient (IC) validation</li>
+      </ul>
+    </div>
+  </div>
+  <div class="innovation">
+    <p class="innovation-text"><strong>KEY INNOVATION:</strong> Alpha T-Statistic Filtering eliminates statistically insignificant signals, improving Sharpe ratio by 88.7%</p>
+  </div>
+</div>
+</body>
+</html>

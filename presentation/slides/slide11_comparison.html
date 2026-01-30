@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+html { background: #ffffff; }
+body {
+  width: 720pt; height: 405pt; margin: 0; padding: 0;
+  background: #1C2833;
+  font-family: Arial, sans-serif;
+  color: #FFFFFF;
+}
+.header {
+  padding: 20pt 40pt 15pt 40pt;
+  border-bottom: 3pt solid #5EA8A7;
+}
+.content {
+  padding: 15pt 40pt;
+}
+h1 {
+  font-size: 28pt;
+  margin: 0 0 10pt 0;
+  font-weight: bold;
+}
+.subtitle {
+  font-size: 14pt;
+  color: #5EA8A7;
+  margin: 0 0 15pt 0;
+}
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10pt;
+  margin-bottom: 15pt;
+}
+.metric-box {
+  background: #2E4053;
+  padding: 8pt;
+  border-radius: 6pt;
+  text-align: center;
+}
+.metric-name {
+  font-size: 11pt;
+  color: #5EA8A7;
+  margin: 0 0 5pt 0;
+}
+.metric-value {
+  font-size: 20pt;
+  font-weight: bold;
+  margin: 0;
+}
+.value-wf { color: #E07A5F; }
+.value-ff { color: #40695B; }
+.improvement {
+  font-size: 10pt;
+  color: #AAB7B8;
+  margin-top: 3pt;
+}
+.placeholder {
+  background: #CCCCCC;
+  height: 70pt;
+  border-radius: 6pt;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #666666;
+  font-size: 12pt;
+  font-weight: bold;
+}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Alpha Filtering Impact Comparison</h1>
+  <p class="subtitle">Before vs After T-Statistic Filtering</p>
+</div>
+<div class="content">
+  <div class="metrics">
+    <div class="metric-box">
+      <p class="metric-name">Total Return</p>
+      <p class="metric-value value-wf">11.17%</p>
+      <p class="metric-value value-ff">40.42%</p>
+      <p class="improvement">+262%</p>
+    </div>
+    <div class="metric-box">
+      <p class="metric-name">Sharpe Ratio</p>
+      <p class="metric-value value-wf">0.62</p>
+      <p class="metric-value value-ff">1.17</p>
+      <p class="improvement">+89%</p>
+    </div>
+    <div class="metric-box">
+      <p class="metric-name">Max Drawdown</p>
+      <p class="metric-value value-wf">-73.27%</p>
+      <p class="metric-value value-ff">-66.88%</p>
+      <p class="improvement">+8.7%</p>
+    </div>
+  </div>
+  <div class="placeholder">
+    [Performance Comparison Chart Placeholder]
+  </div>
+</div>
+</body>
+</html>

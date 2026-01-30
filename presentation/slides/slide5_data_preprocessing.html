@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+html { background: #ffffff; }
+body {
+  width: 720pt; height: 405pt; margin: 0; padding: 0;
+  background: #1C2833;
+  font-family: Arial, sans-serif;
+  color: #FFFFFF;
+}
+.header {
+  padding: 20pt 40pt 15pt 40pt;
+  border-bottom: 3pt solid #5EA8A7;
+}
+.content {
+  padding: 15pt 40pt;
+  display: flex;
+  gap: 25pt;
+}
+.left-col {
+  flex: 1.2;
+}
+.right-col {
+  flex: 0.8;
+}
+h1 {
+  font-size: 36pt;
+  margin: 0;
+  font-weight: bold;
+}
+h2 {
+  font-size: 20pt;
+  margin: 0 0 12pt 0;
+  color: #5EA8A7;
+}
+.data-box {
+  background: #2E4053;
+  padding: 15pt;
+  border-radius: 8pt;
+  margin-bottom: 15pt;
+}
+.data-label {
+  font-size: 14pt;
+  font-weight: bold;
+  color: #5EA8A7;
+  margin: 0 0 8pt 0;
+}
+.data-list {
+  margin: 0;
+  padding-left: 20pt;
+}
+.data-list li {
+  font-size: 13pt;
+  margin: 5pt 0;
+  line-height: 1.3;
+}
+.highlight {
+  background: rgba(94, 168, 167, 0.3);
+  padding: 12pt;
+  border-radius: 6pt;
+  border-left: 3pt solid #5EA8A7;
+  margin-top: 10pt;
+}
+.highlight p {
+  font-size: 14pt;
+  margin: 0;
+  font-weight: bold;
+}
+.feature-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10pt;
+}
+.feature-item {
+  background: rgba(94, 168, 167, 0.15);
+  padding: 10pt;
+  border-radius: 5pt;
+  font-size: 12pt;
+  text-align: center;
+  border: 1pt solid rgba(94, 168, 167, 0.3);
+}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Data & Preprocessing</h1>
+</div>
+<div class="content">
+  <div class="left-col">
+    <h2>Data Universe</h2>
+    <div class="data-box">
+      <p class="data-label">Stock Selection Criteria</p>
+      <ul class="data-list">
+        <li>178 stocks (FF5 strategy)</li>
+        <li>136 trading + 180 training stocks (ML)</li>
+        <li>Minimum market cap: $1B</li>
+        <li>Developed markets only</li>
+        <li>Liquidity filters applied</li>
+      </ul>
+    </div>
+    <div class="data-box">
+      <p class="data-label">Time Period</p>
+      <ul class="data-list">
+        <li>Training: 2022-01-01 to 2023-12-31 (2 years)</li>
+        <li>Backtest: 2025-07-01 to 2025-08-15 (32 days)</li>
+        <li>Lookback buffer: 252 days</li>
+        <li>Daily rebalancing frequency</li>
+      </ul>
+    </div>
+    <div class="data-box">
+      <p class="data-label">Data Sources</p>
+      <ul class="data-list">
+        <li>YFinance: Price, volume, market data</li>
+        <li>Fama-French: 5-factor data from Kenneth French Library</li>
+        <li>Forward-fill alignment for factors</li>
+        <li>Retry logic with validation</li>
+      </ul>
+    </div>
+  </div>
+  <div class="right-col">
+    <h2>Feature Engineering</h2>
+    <div class="feature-grid">
+      <div class="feature-item">Momentum<br/>(21, 63, 252 days)</div>
+      <div class="feature-item">Volatility<br/>(20, 60 days)</div>
+      <div class="feature-item">Technical<br/>Indicators</div>
+      <div class="feature-item">Volume<br/>Features</div>
+      <div class="feature-item">Cross-Sectional<br/>(Mkt Cap, B/M)</div>
+      <div class="feature-item">Box Features<br/>(Size, Style, Region)</div>
+    </div>
+    <div class="highlight">
+      <p>30+ Features with IC Validation</p>
+    </div>
+    <div class="data-box" style="margin-top: 15pt;">
+      <p class="data-label">Preprocessing Steps</p>
+      <ul class="data-list">
+        <li>Missing data: Forward-fill then drop</li>
+        <li>Outlier treatment: 3-sigma clipping</li>
+        <li>Standardization: Z-score normalization</li>
+        <li>Feature selection: Information Coefficient</li>
+      </ul>
+    </div>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+html { background: #ffffff; }
+body {
+  width: 720pt; height: 405pt; margin: 0; padding: 0;
+  background: #1C2833;
+  font-family: Arial, sans-serif;
+  color: #FFFFFF;
+}
+.header {
+  padding: 20pt 40pt 15pt 40pt;
+  border-bottom: 3pt solid #5EA8A7;
+}
+.content {
+  padding: 15pt 40pt;
+  display: flex;
+  gap: 25pt;
+}
+.left-col {
+  flex: 1.3;
+}
+.right-col {
+  flex: 0.7;
+}
+h1 {
+  font-size: 36pt;
+  margin: 0;
+  font-weight: bold;
+}
+.equation-box {
+  background: #2E4053;
+  padding: 20pt;
+  border-radius: 8pt;
+  margin: 20pt 0;
+  border: 2pt solid #5EA8A7;
+}
+.equation-text {
+  font-size: 14pt;
+  text-align: center;
+  margin: 0;
+  line-height: 1.6;
+  font-family: 'Courier New', monospace;
+}
+h2 {
+  font-size: 18pt;
+  margin: 0 0 10pt 0;
+  color: #5EA8A7;
+}
+.factors-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 10pt;
+  margin: 15pt 0;
+}
+.factor-item {
+  background: rgba(94, 168, 167, 0.2);
+  padding: 12pt;
+  border-radius: 6pt;
+  text-align: center;
+  border: 1pt solid #5EA8A7;
+}
+.factor-code {
+  font-size: 16pt;
+  font-weight: bold;
+  color: #5EA8A7;
+  margin: 0 0 5pt 0;
+}
+.factor-name {
+  font-size: 11pt;
+  margin: 0;
+}
+ul {
+  margin: 10pt 0 0 0;
+  padding-left: 20pt;
+}
+li {
+  font-size: 13pt;
+  margin: 6pt 0;
+  line-height: 1.3;
+}
+.highlight {
+  color: #5EA8A7;
+  font-weight: bold;
+}
+.note {
+  background: rgba(94, 168, 167, 0.2);
+  padding: 12pt;
+  border-radius: 6pt;
+  border-left: 3pt solid #5EA8A7;
+  margin-top: 15pt;
+  font-size: 12pt;
+  line-height: 1.4;
+}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>FF5 Factor Model Methodology</h1>
+</div>
+<div class="content">
+  <div class="left-col">
+    <h2>Fama-French 5-Factor Model (2015)</h2>
+    <div class="equation-box">
+      <p class="equation-text">R_stock - RF = α + β_MKT × (R_MKT - RF)<br/>
++ β_SMB × SMB + β_HML × HML<br/>
++ β_RMW × RMW + β_CMA × CMA + ε</p>
+    </div>
+    <div class="factors-list">
+      <div class="factor-item">
+        <p class="factor-code">MKT</p>
+        <p class="factor-name">Market Excess Return</p>
+      </div>
+      <div class="factor-item">
+        <p class="factor-code">SMB</p>
+        <p class="factor-name">Small Minus Big</p>
+      </div>
+      <div class="factor-item">
+        <p class="factor-code">HML</p>
+        <p class="factor-name">High Minus Low</p>
+      </div>
+      <div class="factor-item">
+        <p class="factor-code">RMW</p>
+        <p class="factor-name">Robust Minus Weak</p>
+      </div>
+      <div class="factor-item">
+        <p class="factor-code">CMA</p>
+        <p class="factor-name">Conservative Minus Aggressive</p>
+      </div>
+      <div class="factor-item">
+        <p class="factor-code">RF</p>
+        <p class="factor-name">Risk-Free Rate</p>
+      </div>
+    </div>
+  </div>
+  <div class="right-col">
+    <h2>Key Design</h2>
+    <ul>
+      <li><strong>Alpha (α):</strong> Residual return after factor exposure</li>
+      <li><strong>Beta (β):</strong> <span class="highlight">Static</span> - calculated once during training</li>
+      <li><strong>Factor Values:</strong> <span class="highlight">Dynamic</span> - updated daily</li>
+      <li><strong>Training:</strong> 2 years (2022-2023 data)</li>
+      <li><strong>Prediction:</strong> Daily alpha forecasts</li>
+    </ul>
+    <div class="note">
+      <strong>Alpha Extraction:</strong> Stock's return not explained by factor exposures = our signal
+    </div>
+    <div class="note" style="margin-top: 10pt;">
+      <strong>T-Statistic Filtering:</strong> α/SE(α) threshold = 2.0 (hard cutoff)
+    </div>
+  </div>
+</div>
+</body>
+</html>

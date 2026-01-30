@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+html { background: #ffffff; }
+body {
+  width: 720pt; height: 405pt; margin: 0; padding: 0;
+  background: #1C2833;
+  font-family: Arial, sans-serif;
+  color: #FFFFFF;
+}
+.header {
+  padding: 15pt 40pt 10pt 40pt;
+  border-bottom: 3pt solid #5EA8A7;
+}
+.content {
+  padding: 10pt 40pt 15pt 40pt;
+}
+h1 {
+  font-size: 30pt;
+  margin: 0;
+  font-weight: bold;
+}
+.subtitle {
+  font-size: 14pt;
+  color: #5EA8A7;
+  margin: 5pt 0 10pt 0;
+}
+.table-wrapper {
+  background: #2E4053;
+  border-radius: 8pt;
+  padding: 10pt;
+  overflow: hidden;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10pt;
+}
+th {
+  background: #1C2833;
+  padding: 6pt;
+  text-align: center;
+  font-weight: bold;
+  color: #5EA8A7;
+  border-bottom: 2pt solid #5EA8A7;
+}
+td {
+  padding: 5pt 6pt;
+  text-align: center;
+  border-bottom: 1pt solid rgba(94, 168, 167, 0.3);
+}
+tr:last-child td {
+  border-bottom: none;
+}
+.metric-col {
+  text-align: left;
+  font-weight: bold;
+}
+.highlight {
+  background: rgba(64, 105, 91, 0.3);
+  font-weight: bold;
+}
+.footer {
+  margin-top: 10pt;
+  text-align: center;
+  font-size: 9pt;
+  color: #AAB7B8;
+}
+.footer p {
+  margin: 0;
+}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Performance Metrics Comparison</h1>
+  <p class="subtitle">FF5 Strategy vs ML Strategy (XGBoost)</p>
+</div>
+<div class="content">
+  <div class="table-wrapper">
+    <table>
+      <thead>
+        <tr>
+          <th>Metric</th>
+          <th>FF5 Strategy</th>
+          <th>ML Strategy</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="metric-col">Total Return</td>
+          <td class="highlight">40.42%</td>
+          <td>-39.61%</td>
+        </tr>
+        <tr>
+          <td class="metric-col">Annualized Return</td>
+          <td class="highlight">74.90%</td>
+          <td>-35.10%</td>
+        </tr>
+        <tr>
+          <td class="metric-col">Sharpe Ratio</td>
+          <td class="highlight">1.17</td>
+          <td>-0.545</td>
+        </tr>
+        <tr>
+          <td class="metric-col">Max Drawdown</td>
+          <td class="highlight">-66.88%</td>
+          <td>-57.75%</td>
+        </tr>
+        <tr>
+          <td class="metric-col">Volatility</td>
+          <td>90.06%</td>
+          <td>52.24%</td>
+        </tr>
+        <tr>
+          <td class="metric-col">Win Rate</td>
+          <td>48.37%</td>
+          <td class="highlight">56.80%</td>
+        </tr>
+        <tr>
+          <td class="metric-col">Avg Holdings</td>
+          <td class="highlight">13 stocks</td>
+          <td>29.4 stocks</td>
+        </tr>
+        <tr>
+          <td class="metric-col">Max Position</td>
+          <td class="highlight">66.70%</td>
+          <td>99.99%</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="footer">
+    <p>55 Academic Metrics Computed | Lopez de Prado (2018) Standards</p>
+  </div>
+</div>
+</body>
+</html>

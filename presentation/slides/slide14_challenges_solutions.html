@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+html { background: #ffffff; }
+body {
+  width: 720pt; height: 405pt; margin: 0; padding: 0;
+  background: #1C2833;
+  font-family: Arial, sans-serif;
+  color: #FFFFFF;
+}
+.header {
+  padding: 15pt 40pt 10pt 40pt;
+  border-bottom: 3pt solid #5EA8A7;
+}
+.content {
+  padding: 10pt 40pt 15pt 40pt;
+}
+h1 {
+  font-size: 30pt;
+  margin: 0;
+  font-weight: bold;
+}
+.challenge-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10pt;
+  margin-top: 10pt;
+}
+.challenge-card {
+  background: #2E4053;
+  padding: 10pt;
+  border-radius: 8pt;
+  border-left: 4pt solid #E07A5F;
+}
+.challenge-title {
+  font-size: 12pt;
+  font-weight: bold;
+  color: #E07A5F;
+  margin: 0 0 5pt 0;
+}
+.challenge-desc {
+  font-size: 10pt;
+  color: #AAB7B8;
+  margin: 0 0 8pt 0;
+}
+.solution-arrow {
+  color: #5EA8A7;
+  font-size: 14pt;
+  margin: 0 0 5pt 0;
+}
+.solution-text {
+  font-size: 10pt;
+  color: #40695B;
+  margin: 0;
+  line-height: 1.3;
+}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Challenges & Solutions</h1>
+</div>
+<div class="content">
+  <div class="challenge-grid">
+    <div class="challenge-card">
+      <p class="challenge-title">Noisy Alpha Signals</p>
+      <p class="challenge-desc">Regression produces low-quality signals</p>
+      <p class="solution-arrow">→ T-statistic Filtering</p>
+      <p class="solution-text">Hard threshold |t-stat| < 2.0 improves Sharpe by 88.7%</p>
+    </div>
+    <div class="challenge-card">
+      <p class="challenge-title">Model Overfitting</p>
+      <p class="challenge-desc">Complex models memorize training data</p>
+      <p class="solution-arrow">→ Walk-Forward Validation</p>
+      <p class="solution-text">Time series cross-validation ensures out-of-sample robustness</p>
+    </div>
+    <div class="challenge-card">
+      <p class="challenge-title">Transaction Costs</p>
+      <p class="challenge-desc">Realistic costs erode returns</p>
+      <p class="solution-arrow">→ Academic Cost Models</p>
+      <p class="solution-text">0.2% total cost following Frazzini et al. (2012)</p>
+    </div>
+    <div class="challenge-card">
+      <p class="challenge-title">Position Concentration</p>
+      <p class="challenge-desc">Single stock dominates portfolio</p>
+      <p class="solution-arrow">→ Position Limits</p>
+      <p class="solution-text">Max 50% weight with box-based diversification</p>
+    </div>
+  </div>
+</div>
+</body>
+</html>

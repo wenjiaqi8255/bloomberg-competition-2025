@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+html { background: #ffffff; }
+body {
+  width: 720pt; height: 405pt; margin: 0; padding: 0;
+  background: #1C2833;
+  font-family: Arial, sans-serif;
+  color: #FFFFFF;
+}
+.header {
+  padding: 15pt 40pt 10pt 40pt;
+  border-bottom: 3pt solid #5EA8A7;
+}
+.content {
+  padding: 10pt 40pt 15pt 40pt;
+}
+h1 {
+  font-size: 30pt;
+  margin: 0;
+  font-weight: bold;
+}
+.subtitle {
+  font-size: 14pt;
+  color: #5EA8A7;
+  margin: 5pt 0 15pt 0;
+}
+.ablation-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10pt;
+  margin-bottom: 15pt;
+}
+.ablation-card {
+  background: #2E4053;
+  padding: 12pt;
+  border-radius: 8pt;
+  border: 2pt solid #40695B;
+  text-align: center;
+}
+.ablation-label {
+  font-size: 11pt;
+  color: #AAB7B8;
+  margin: 0 0 8pt 0;
+}
+.ablation-value {
+  font-size: 24pt;
+  font-weight: bold;
+  color: #40695B;
+  margin: 0 0 3pt 0;
+}
+.ablation-sub {
+  font-size: 10pt;
+  color: #5EA8A7;
+  margin: 0;
+}
+.placeholder {
+  background: #CCCCCC;
+  height: 70pt;
+  border-radius: 8pt;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #666666;
+  font-size: 12pt;
+  font-weight: bold;
+}
+.insight {
+  background: rgba(64, 105, 91, 0.2);
+  padding: 10pt;
+  border-radius: 8pt;
+  border-left: 4pt solid #40695B;
+  text-align: center;
+  margin-top: 10pt;
+}
+.insight p {
+  font-size: 12pt;
+  margin: 0;
+  font-weight: bold;
+}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Ablation Analysis</h1>
+  <p class="subtitle">Impact of Alpha T-Statistic Filtering</p>
+</div>
+<div class="content">
+  <div class="ablation-grid">
+    <div class="ablation-card">
+      <p class="ablation-label">Total Return</p>
+      <p class="ablation-value">+262%</p>
+      <p class="ablation-sub">11.17% → 40.42%</p>
+    </div>
+    <div class="ablation-card">
+      <p class="ablation-label">Sharpe Ratio</p>
+      <p class="ablation-value">+89%</p>
+      <p class="ablation-sub">0.62 → 1.17</p>
+    </div>
+    <div class="ablation-card">
+      <p class="ablation-label">Max Drawdown</p>
+      <p class="ablation-value">+8.7%</p>
+      <p class="ablation-sub">-73.27% → -66.88%</p>
+    </div>
+  </div>
+  <div class="placeholder">
+    [Ablation Study Bar Chart Placeholder]
+  </div>
+  <div class="insight">
+    <p>KEY INSIGHT: Filtering statistically insignificant signals improves ALL performance metrics dramatically</p>
+  </div>
+</div>
+</body>
+</html>
