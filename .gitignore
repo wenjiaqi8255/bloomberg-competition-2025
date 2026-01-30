@@ -280,6 +280,3 @@ repomix-output.xml
 paper_refer.md
 poetry.lock
 *.sh
-
-*.py
-*.ipynb
