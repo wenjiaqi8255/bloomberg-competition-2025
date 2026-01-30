@@ -21,11 +21,12 @@ from typing import Dict, Any, List, Tuple
 from datetime import datetime
 import yaml
 
-# Add src to path
-src_path = Path(__file__).parent / "src"
+# Add src to path (script is now in experiments/pipelines/)
+repo_root = Path(__file__).parent.parent.parent
+src_path = repo_root / "src"
 sys.path.insert(0, str(src_path))
 
-from trading_system.config.feature import FeatureConfig
+from trading_system.feature_engineering.base.feature import FeatureConfig
 from trading_system.feature_engineering.pipeline import FeatureEngineeringPipeline
 from trading_system.models.base.model_factory import ModelFactory
 from trading_system.models.training.training_pipeline import TrainingPipeline

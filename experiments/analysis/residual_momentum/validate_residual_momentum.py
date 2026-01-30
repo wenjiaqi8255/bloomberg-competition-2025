@@ -26,7 +26,7 @@ from sklearn.linear_model import LinearRegression
 import logging
 
 # Add project root to path
-project_root = Path(__file__).parent
+project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.trading_system.utils.alpha_stats import compute_alpha_tstat

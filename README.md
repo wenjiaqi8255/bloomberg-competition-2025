@@ -66,6 +66,18 @@ bloomberg-competition/
 │   ├── active/               # Active configurations
 │   ├── templates/            # Strategy templates
 │   └── schemas/              # JSON schemas for validation
+├── experiments/               # All analysis, experiment, and validation scripts
+│   ├── pipelines/            # Main entry point pipelines
+│   ├── analysis/             # Analysis and validation scripts
+│   ├── momentum_analysis/    # Momentum-specific analysis
+│   ├── presentation/         # Presentation generation
+│   └── use_cases/            # Experiment use case runners
+├── examples/                  # Demonstration scripts
+│   ├── feature_discovery/    # Explore available features
+│   ├── portfolio/            # Portfolio construction examples
+│   ├── prediction/           # Prediction examples
+│   ├── analysis/             # Analysis examples
+│   └── configuration/        # Configuration examples
 ├── docs/                     # Technical documentation
 ├── 过程doc/                  # Chinese documentation (process docs)
 ├── tests/                    # Comprehensive test suite
@@ -84,11 +96,11 @@ All pipelines are runnable from the repository root directory.
 
 **Purpose**: Compute technical indicators and features for ML models
 
-**Entry Point**: `run_feature_comparison.py`
+**Entry Point**: `experiments/pipelines/feature_comparison.py`
 
 **Usage**:
 ```bash
-python run_feature_comparison.py --config configs/active/feature_config.yaml
+python experiments/pipelines/feature_comparison.py --config configs/active/feature_config.yaml
 ```
 
 **Output**: Feature comparison results in `feature_comparison_results/`
@@ -105,11 +117,11 @@ python run_feature_comparison.py --config configs/active/feature_config.yaml
 
 **Purpose**: Train Fama-French 5-factor model with alpha filtering and run backtest
 
-**Entry Point**: `run_ff5_box_experiment.py`
+**Entry Point**: `experiments/pipelines/ff5_experiment.py`
 
 **Usage**:
 ```bash
-python run_ff5_box_experiment.py --config configs/ff5_box_based_experiment.yaml
+python experiments/pipelines/ff5_experiment.py --config configs/ff5_box_based_experiment.yaml
 ```
 
 **Output**:
@@ -131,11 +143,11 @@ python run_ff5_box_experiment.py --config configs/ff5_box_based_experiment.yaml
 
 **Purpose**: Train XGBoost model for stock prediction
 
-**Entry Point**: `src/use_case/single_experiment/run_experiment.py`
+**Entry Point**: `experiments/use_cases/run_single_experiment.py`
 
 **Usage**:
 ```bash
-python src/use_case/single_experiment/run_experiment.py \
+python experiments/use_cases/run_single_experiment.py \
     --config configs/ml_strategy_config_new.yaml
 ```
 
@@ -157,11 +169,11 @@ python src/use_case/single_experiment/run_experiment.py \
 
 **Purpose**: Combine multiple models for improved predictions
 
-**Entry Point**: `src/use_case/multi_model_experiment/run_multi_model_experiment.py`
+**Entry Point**: `experiments/use_cases/run_multi_model_experiment.py`
 
 **Usage**:
 ```bash
-python src/use_case/multi_model_experiment/run_multi_model_experiment.py \
+python experiments/use_cases/run_multi_model_experiment.py \
     --config configs/multi_model_config.yaml
 ```
 
@@ -173,11 +185,11 @@ python src/use_case/multi_model_experiment/run_multi_model_experiment.py \
 
 **Purpose**: Generate predictions using trained models
 
-**Entry Point**: `src/use_case/prediction/run_prediction.py`
+**Entry Point**: `experiments/use_cases/run_prediction.py`
 
 **Usage**:
 ```bash
-python src/use_case/prediction/run_prediction.py \
+python experiments/use_cases/run_prediction.py \
     --model-path models/ff5_regression_20251027_011643 \
     --input-data data/latest.csv \
     --output predictions.csv
